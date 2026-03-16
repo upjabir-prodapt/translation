@@ -10,10 +10,7 @@ from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
-from loaders.constants import DOWNLOAD_MAX_ATTEMPTS
-from loaders.constants import DOWNLOAD_RETRY_MAX_SECONDS
-from loaders.constants import DOWNLOAD_RETRY_MIN_SECONDS
-from loaders.constants import DOWNLOAD_RETRY_MULTIPLIER
+from config.constants import settings
 from loaders.exceptions import AssetDownloadError
 from loaders.exceptions import AssetIntegrityError
 from loaders.repositories.cache_repository import verify_or_delete
@@ -32,11 +29,11 @@ def _get_storage_repo(
 
 
 @retry(
-    stop=stop_after_attempt(DOWNLOAD_MAX_ATTEMPTS),
+    stop=stop_after_attempt(settings.DOWNLOAD_MAX_ATTEMPTS),
     wait=wait_exponential(
-        multiplier=DOWNLOAD_RETRY_MULTIPLIER,
-        min=DOWNLOAD_RETRY_MIN_SECONDS,
-        max=DOWNLOAD_RETRY_MAX_SECONDS,
+        multiplier=settings.DOWNLOAD_RETRY_MULTIPLIER,
+        min=settings.DOWNLOAD_RETRY_MIN_SECONDS,
+        max=settings.DOWNLOAD_RETRY_MAX_SECONDS,
     ),
     retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
     before_sleep=before_sleep_log(logger, logging.WARNING),
@@ -67,7 +64,7 @@ def download_with_retry(
         raise AssetDownloadError(
             f"Download failed: {e}",
             blob_path=blob_path,
-            attempts=DOWNLOAD_MAX_ATTEMPTS,
+            attempts=settings.DOWNLOAD_MAX_ATTEMPTS,
         ) from e
 
 

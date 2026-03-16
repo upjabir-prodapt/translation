@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from fastapi import Request
 
 from config.logging import logger
-from worker.handlers.translation_handler import handle_translation_task
+from worker.handlers.translation_services import handle_translation_task
 from worker.utils.payload import validate_task_payload
 
 router = APIRouter()

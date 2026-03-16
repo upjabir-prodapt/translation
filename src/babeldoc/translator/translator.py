@@ -16,9 +16,14 @@ from tenacity import wait_exponential
 
 from babeldoc.babeldoc_exception.BabelDOCException import ContentFilterError
 from babeldoc.utils.atomic_integer import AtomicInteger
-from repository.cache_repository import TranslationCache
+from config.constants import settings
 
 logger = logging.getLogger(__name__)
+
+try:
+    from google import genai
+except ImportError:  # pragma: no cover - optional dependency
+    genai = None
 
 
 def remove_control_characters(s):
@@ -77,92 +82,41 @@ def set_translate_rate_limiter(max_qps):
 
 
 class BaseTranslator(ABC):
-    # Due to cache limitations, name should be within 20 characters.
-    # cache.py: translate_engine = CharField(max_length=20)
     name = "base"
     lang_map = {}
 
-    def __init__(self, lang_in, lang_out, ignore_cache):
-        self.ignore_cache = True
+    def __init__(self, lang_in, lang_out):
         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
         lang_out = self.lang_map.get(lang_out.lower(), lang_out)
         self.lang_in = lang_in
         self.lang_out = lang_out
-
-        self.cache = TranslationCache(
-            self.name,
-            {
-                "lang_in": lang_in,
-                "lang_out": lang_out,
-            },
-        )
-
         self.translate_call_count = 0
-        self.translate_cache_call_count = 0
 
     def __del__(self):
         with contextlib.suppress(Exception):
             logger.info(
                 f"{self.name} translate call count: {self.translate_call_count}"
             )
-            logger.info(
-                f"{self.name} translate cache call count: {self.translate_cache_call_count}",
-            )
 
-    def add_cache_impact_parameters(self, k: str, v):
-        """
-        Add parameters that affect the translation quality to distinguish the translation effects under different parameters.
-        :param k: key
-        :param v: value
-        """
-        self.cache.add_params(k, v)
-
-    def translate(self, text, ignore_cache=False, rate_limit_params: dict = None):
+    def translate(self, text, rate_limit_params: dict = None):
         """
         Translate the text, and the other part should call this method.
         :param text: text to translate
         :return: translated text
         """
         self.translate_call_count += 1
-        if not (self.ignore_cache or ignore_cache):
-            try:
-                cache = self.cache.get(text)
-                if cache is not None:
-                    self.translate_cache_call_count += 1
-                    return cache
-            except Exception as e:
-                logger.debug(f"try get cache failed, ignore it: {e}")
         _translate_rate_limiter.wait()
-        translation = self.do_translate(text, rate_limit_params)
-        if not (self.ignore_cache or ignore_cache):
-            self.cache.set(text, translation)
-        return translation
+        return self.do_translate(text, rate_limit_params)
 
-    def llm_translate(self, text, ignore_cache=False, rate_limit_params: dict = None):
+    def llm_translate(self, text, rate_limit_params: dict = None):
         """
         Translate the text, and the other part should call this method.
         :param text: text to translate
         :return: translated text
         """
         self.translate_call_count += 1
-        if not (self.ignore_cache or ignore_cache):
-            try:
-                cache = self.cache.get(text)
-                if cache is not None:
-                    self.translate_cache_call_count += 1
-                    return cache
-            except Exception as e:
-                logger.debug(f"try get cache failed, ignore it: {e}")
         _translate_rate_limiter.wait()
-        translation = self.do_llm_translate(text, rate_limit_params)
-        if not (self.ignore_cache or ignore_cache):
-            try:
-                self.cache.set(text, translation)
-            except Exception as e:
-                logger.debug(
-                    f"try set cache failed, ignore it: {e}, text: {text}, translation: {translation}"
-                )
-        return translation
+        return self.do_llm_translate(text, rate_limit_params)
 
     @abstractmethod
     def do_llm_translate(self, text, rate_limit_params: dict = None):
@@ -211,20 +165,14 @@ class OpenAITranslator(BaseTranslator):
         model,
         base_url=None,
         api_key=None,
-        ignore_cache=False,
         enable_json_mode_if_requested=False,
         send_dashscope_header=False,
         send_temperature=True,
         reasoning=None,
     ):
-        super().__init__(lang_in, lang_out, ignore_cache)
+        super().__init__(lang_in, lang_out)
         self.options = {"temperature": 0}  # 随机采样可能会打断公式标记
         self.extra_body = {}
-        # if 'gpt-5' in model and 'gpt-5-chat' not in model:
-        #     self.extra_body['reasoning'] = {
-        #         "effort": "minimal"
-        #     }
-        #     self.add_cache_impact_parameters("reasoning-effort", 'minimal')
         self.reasoning = reasoning
         self.client = openai.OpenAI(
             base_url=base_url,
@@ -236,21 +184,12 @@ class OpenAITranslator(BaseTranslator):
                 timeout=60,  # Set a reasonable timeout
             ),
         )
-        if send_temperature:
-            self.add_cache_impact_parameters("temperature", self.options["temperature"])
         self.model = model
         self.enable_json_mode_if_requested = enable_json_mode_if_requested
         self.send_dashscope_header = send_dashscope_header
         self.send_temperature = send_temperature
-        self.add_cache_impact_parameters("model", self.model)
-        self.add_cache_impact_parameters("prompt", self.prompt(""))
         if self.reasoning:
             self.extra_body["reasoning"] = {"effort": self.reasoning}
-            self.add_cache_impact_parameters("reasoning", self.reasoning)
-        if self.enable_json_mode_if_requested:
-            self.add_cache_impact_parameters(
-                "enable_json_mode_if_requested", self.enable_json_mode_if_requested
-            )
         self.token_count = AtomicInteger()
         self.prompt_token_count = AtomicInteger()
         self.completion_token_count = AtomicInteger()
@@ -369,3 +308,88 @@ class OpenAITranslator(BaseTranslator):
 
     def get_rich_text_right_placeholder(self, placeholder_id: int | str):
         return "</style>", r"<\s*\/\s*style\s*>"
+
+
+class GeminiVertexAITranslator(BaseTranslator):
+    """Translator backed by Google GenAI SDK (Vertex AI with service account)."""
+
+    name = "gemini"
+
+    def __init__(
+        self,
+        lang_in,
+        lang_out,
+        model,
+        temperature=0.0,
+    ):
+        super().__init__(lang_in, lang_out)
+        if genai is None:
+            raise ImportError(
+                "google-genai is required for Gemini translator. "
+                "Install it with `uv add google-genai`."
+            )
+
+        self.model = model
+        self.temperature = temperature
+        self.client = genai.Client(
+            vertexai=True,
+            project=settings.GOOGLE_CLOUD_PROJECT_ID,
+            location=settings.GOOGLE_CLOUD_LOCATION,
+        )
+        self.token_count = AtomicInteger()
+        self.prompt_token_count = AtomicInteger()
+        self.completion_token_count = AtomicInteger()
+        self.cache_hit_prompt_token_count = AtomicInteger()
+
+    def prompt(self, text: str) -> str:
+        return (
+            "You are a professional,authentic machine translation engine.\n"
+            f";; Treat next line as plain text input and translate it into {self.lang_out}, "
+            "output translation ONLY. If translation is unnecessary "
+            "(e.g. proper nouns, codes, {{1}}, etc. ), return the original text. "
+            "NO explanations. NO notes. Input:\n\n"
+            f"{text}"
+        )
+
+    def _extract_text(self, response) -> str:
+        text = getattr(response, "text", None)
+        if text:
+            return text.strip()
+        return ""
+
+    def _update_token_count(self, response) -> None:
+        usage = getattr(response, "usage_metadata", None)
+        if not usage:
+            return
+        prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+        completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        total_tokens = getattr(usage, "total_token_count", 0) or 0
+        cached_tokens = getattr(usage, "cached_content_token_count", 0) or 0
+        if total_tokens:
+            self.token_count.inc(total_tokens)
+        if prompt_tokens:
+            self.prompt_token_count.inc(prompt_tokens)
+        if completion_tokens:
+            self.completion_token_count.inc(completion_tokens)
+        if cached_tokens:
+            self.cache_hit_prompt_token_count.inc(cached_tokens)
+
+    def do_translate(self, text, rate_limit_params: dict = None):
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=self.prompt(text),
+            config={"temperature": self.temperature},
+        )
+        self._update_token_count(response)
+        return self._extract_text(response)
+
+    def do_llm_translate(self, text, rate_limit_params: dict = None):
+        if text is None:
+            return None
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=text,
+            config={"temperature": self.temperature},
+        )
+        self._update_token_count(response)
+        return self._extract_text(response)

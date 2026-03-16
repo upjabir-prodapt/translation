@@ -6,13 +6,13 @@ import threading
 from collections import Counter
 from pathlib import Path
 
-from babeldoc.const import CACHE_FOLDER
 from babeldoc.format.pdf.split_manager import BaseSplitStrategy
 from babeldoc.format.pdf.split_manager import PageCountStrategy
 from babeldoc.glossary import Glossary
 from babeldoc.glossary import GlossaryEntry
 from babeldoc.progress_monitor import ProgressMonitor
 from babeldoc.translator.translator import BaseTranslator
+from config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -269,13 +269,15 @@ class TranslationConfig:
 
         if working_dir is None:
             if debug:
-                working_dir = Path(CACHE_FOLDER) / "working" / Path(input_file).stem
+                working_dir = (
+                    Path(str(settings.CACHE_FOLDER)) / "working" / Path(input_file).stem
+                )
                 self._is_temp_dir = False
             else:
                 working_dir = tempfile.mkdtemp()
                 self._is_temp_dir = True
         else:
-            working_dir = Path(working_dir) / Path(input_file).stem
+            # working_dir is already complete from processor (includes job_id/working)
             self._is_temp_dir = False
 
         self.working_dir = working_dir
@@ -288,10 +290,15 @@ class TranslationConfig:
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+        # NOTE: Auto-load disabled - doc_layout_model must be provided
+        # if not doc_layout_model:
+        #     from babeldoc.docvision.doclayout import DocLayoutModel
+        #     doc_layout_model = DocLayoutModel.load_available()
         if not doc_layout_model:
-            from babeldoc.docvision.doclayout import DocLayoutModel
-
-            doc_layout_model = DocLayoutModel.load_available()
+            raise ValueError(
+                "doc_layout_model is required. "
+                "Load model via loaders.assets and pass to TranslationConfig."
+            )
         self.doc_layout_model = doc_layout_model
 
         self.shared_context_cross_split_part = SharedContextCrossSplitPart()

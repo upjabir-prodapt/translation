@@ -26,7 +26,6 @@ class BigQueryRepository:
         )
         self.dataset = dataset or settings.BIGQUERY_DATASET
         self.jobs_table = f"{self.client.project}.{self.dataset}.translation_jobs"
-        self.report_table = f"{self.client.project}.{self.dataset}.translation_report"
 
     async def write_job_completion(self, job_data: dict[str, Any]) -> None:
         """Write job completion analytics."""
@@ -34,11 +33,12 @@ class BigQueryRepository:
             # Prepare row with required fields
             row = {
                 "job_id": job_data["job_id"],
-                "document_id": job_data.get("document_id", job_data["job_id"]),
                 "status": job_data["status"],
                 "domain": job_data.get("domain"),
                 "lang_in": job_data.get("lang_in"),
                 "lang_out": job_data.get("lang_out"),
+                "user": job_data.get("user"),
+                "department": job_data.get("department"),
                 "file_size_bytes": job_data.get("file_size_bytes"),
                 "processing_seconds": job_data.get("processing_seconds"),
                 "pages_processed": job_data.get("pages_processed"),
@@ -46,6 +46,14 @@ class BigQueryRepository:
                 "completed_at": job_data.get("completed_at", datetime.utcnow()),
                 "updated_at": datetime.utcnow(),
                 "output_gs_uris": json.dumps(job_data.get("output_gs_uris", {})),
+                "quality_report": json.dumps(job_data.get("quality_report", {})),
+                "token_usage": int(job_data.get("token_usage", 0) or 0),
+                "total_cost_usd": float(job_data.get("total_cost_usd", 0.0) or 0.0),
+                "iteration_details": json.dumps(
+                    job_data.get("iteration_details", job_data.get("attempts", []))
+                ),
+                "selected_model": job_data.get("selected_model"),
+                "attempt_count": int(job_data.get("attempt_count", 0) or 0),
                 "error_message": job_data.get("error_message"),
             }
 
@@ -70,142 +78,5 @@ class BigQueryRepository:
             raise StorageError(
                 f"Failed to write job analytics: {e}",
                 operation="insert",
-                path=self.jobs_table,
-            ) from e
-
-    async def write_translation_report(
-        self, job_id: str, translations: list[dict[str, Any]]
-    ) -> None:
-        """Write detailed translation reports."""
-        try:
-            rows = []
-            now = datetime.utcnow()
-
-            for translation in translations:
-                row = {
-                    "document_id": job_id,
-                    "lang_in": translation["lang_in"],
-                    "lang_out": translation["lang_out"],
-                    "translate_engine": translation.get("engine", "openai"),
-                    "translate_engine_params": json.dumps(
-                        translation.get("params", {})
-                    ),
-                    "original_text": translation["original_text"],
-                    "translated_text": translation["translated_text"],
-                    "created_at": now,
-                }
-                rows.append(row)
-
-            if rows:
-                errors = self.client.insert_rows_json(self.report_table, rows)
-                if errors:
-                    raise Exception(f"BigQuery insert errors: {errors}")
-
-                logger.info(f"Wrote {len(rows)} translation reports to BigQuery")
-
-        except GoogleAPIError as e:
-            logger.error(f"BigQuery API error: {e}")
-            raise StorageError(
-                f"Failed to write translation reports: {e}",
-                operation="insert",
-                path=self.report_table,
-            ) from e
-        except Exception as e:
-            logger.error(f"Failed to write translation reports: {e}")
-            raise StorageError(
-                f"Failed to write translation reports: {e}",
-                operation="insert",
-                path=self.report_table,
-            ) from e
-
-    async def get_job_analytics(
-        self,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-        domain: str | None = None,
-    ) -> list[dict[str, Any]]:  # noqa: S608
-        """Get job analytics with optional filtering."""
-        try:
-            query = f"""
-            SELECT
-                status,
-                domain,
-                lang_in,
-                lang_out,
-                COUNT(*) as job_count,
-                AVG(processing_seconds) as avg_processing_time,
-                AVG(pages_processed) as avg_pages,
-                SUM(file_size_bytes) as total_file_size
-            FROM `{self.jobs_table}`
-            WHERE 1=1
-            """
-
-            params = {}
-
-            if start_date:
-                query += " AND created_at >= @start_date"
-                params["start_date"] = start_date
-
-            if end_date:
-                query += " AND created_at <= @end_date"
-                params["end_date"] = end_date
-
-            if domain:
-                query += " AND domain = @domain"
-                params["domain"] = domain
-
-            query += " GROUP BY status, domain, lang_in, lang_out"
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter(k, "STRING", v)
-                    for k, v in params.items()
-                ]
-            )
-
-            query_job = self.client.query(query, job_config=job_config)
-            results = query_job.result()
-
-            return [dict(row) for row in results]
-
-        except GoogleAPIError as e:
-            logger.error(f"BigQuery API error: {e}")
-            raise StorageError(
-                f"Failed to get job analytics: {e}",
-                operation="query",
-                path=self.jobs_table,
-            ) from e
-
-    async def get_daily_stats(self, days: int = 30) -> list[dict[str, Any]]:  # noqa: S608
-        """Get daily statistics for the last N days."""
-        try:
-            query = f"""
-            SELECT
-                DATE(created_at) as date,
-                COUNT(*) as total_jobs,
-                COUNTIF(status = 'completed') as completed_jobs,
-                COUNTIF(status = 'failed') as failed_jobs,
-                AVG(processing_seconds) as avg_processing_time,
-                SUM(file_size_bytes) as total_file_size
-            FROM `{self.jobs_table}`
-            WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
-            GROUP BY DATE(created_at)
-            ORDER BY date DESC
-            """
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[bigquery.ScalarQueryParameter("days", "INT64", days)]
-            )
-
-            query_job = self.client.query(query, job_config=job_config)
-            results = query_job.result()
-
-            return [dict(row) for row in results]
-
-        except GoogleAPIError as e:
-            logger.error(f"BigQuery API error: {e}")
-            raise StorageError(
-                f"Failed to get daily stats: {e}",
-                operation="query",
                 path=self.jobs_table,
             ) from e

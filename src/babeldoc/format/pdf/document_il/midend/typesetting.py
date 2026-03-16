@@ -11,7 +11,6 @@ import pymupdf
 import regex
 from rtree import index
 
-from babeldoc.const import WATERMARK_VERSION
 from babeldoc.format.pdf.document_il import Box
 from babeldoc.format.pdf.document_il import PdfCharacter
 from babeldoc.format.pdf.document_il import PdfCurve
@@ -25,6 +24,7 @@ from babeldoc.format.pdf.document_il.utils.formular_helper import update_formula
 from babeldoc.format.pdf.document_il.utils.layout_helper import box_to_tuple
 from babeldoc.format.pdf.translation_config import TranslationConfig
 from babeldoc.format.pdf.translation_config import WatermarkOutputMode
+from config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -1203,7 +1203,7 @@ class Typesetting:
             font_size=6,
             graphic_state=il_version_1.GraphicState(),
         )
-        text = f"本文档由 funstory.ai 的开源 PDF 翻译库 BabelDOC {WATERMARK_VERSION} (http://yadt.io) 翻译，本仓库正在积极的建设当中，欢迎 star 和关注。"
+        text = f"本文档由 funstory.ai 的开源 PDF 翻译库 BabelDOC {settings.WATERMARK_VERSION} (http://yadt.io) 翻译，本仓库正在积极的建设当中，欢迎 star 和关注。"
         if self.translation_config.debug:
             text += "\n 当前为 DEBUG 模式，将显示更多辅助信息。请注意，部分框的位置对应原文，但在译文中可能不正确。"
         page.pdf_paragraph.append(

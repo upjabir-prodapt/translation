@@ -8,7 +8,6 @@ from google.cloud import storage
 from google.cloud import tasks_v2
 from google.cloud.firestore import AsyncClient
 
-from api.repository.api_storage_repository import APIStorageRepository
 from repository.bigquery_repository import BigQueryRepository
 from repository.firestore_repository import FirestoreRepository
 from repository.repository_exception import StorageError

@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from api.exceptions import BabelDocException
+from api.exceptions import BabelDocError
 from api.exceptions import FileProcessingError
 from api.exceptions import JobAlreadyCompletedError
 from api.exceptions import JobNotFoundError
@@ -62,7 +62,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
             content={"error": {"message": exc.message, "code": "STORAGE_ERROR"}},
         )
 
-    if isinstance(exc, BabelDocException):
+    if isinstance(exc, BabelDocError):
         logger.error(f"BabelDoc error: {exc.message}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

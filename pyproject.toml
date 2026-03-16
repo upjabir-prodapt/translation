@@ -55,6 +55,8 @@ dependencies = [
     "google-cloud-firestore>=2.23.0",
     "google-cloud-error-reporting>=1.14.0",
     "python-multipart>=0.0.22",
+    "google-genai>=1.67.0",
+    "google-adk",
 ]
 
 [project.optional-dependencies]
@@ -124,17 +126,15 @@ convention = "google"
 max-complexity = 10 # 函数圈复杂度阈值
 
 [tool.ruff.lint.per-file-ignores]
-"babeldoc/babeldoc_exception/BabelDOCException.py" = ["N999"]
-"babeldoc/format/pdf/pdfinterp.py" = ["N"] # 忽略命名规范
-"tests/*" = ["S101"]            # 在测试文件中允许 assert
-"**/__init__.py" = ["F401"]     # 允许未使用的导入
-# 忽略 S311 警告，因为这是有意的
-"babeldoc/format/pdf/document_il/midend/paragraph_finder.py" = ["S311"]
+"src/babeldoc/babeldoc_exception/BabelDOCException.py" = ["N999"]
+"src/babeldoc/format/pdf/pdfinterp.py" = ["N"] # 忽略命名规范
+"tests/*" = ["S101"]            
+"**/__init__.py" = ["F401"]     
+"src/babeldoc/format/pdf/document_il/midend/paragraph_finder.py" = ["S311"]
 "docs/*" = ["A001"]
-"babeldoc/pdfminer/*" =["A","F", "I", "N", "S", "B", "C", "COM", "ARG", "PTH", "UP"]
-# 忽略 S608 警告，因为BigQuery查询使用参数化查询，是安全的
-"src/repository/bigquery_repository.py" = ["S608"]
-"src/repository/cache_repository.py" = ["S608"]
+"src/babeldoc/pdfminer/*" =["A","F", "I", "N", "S", "B", "C", "COM", "ARG", "PTH", "UP"]
+
+
 [dependency-groups]
 dev = [
     "bumpver>=2024.1130",

@@ -48,8 +48,7 @@ async def cancel_job(
 @router.get("/jobs/{job_id}/download", response_model=DownloadResponse, tags=["jobs"])
 async def download_output(
     job_id: str,
-    file_type: str = Query(..., pattern="^(mono|dual|no_watermark_mono)$"),
     service: JobService = Depends(get_job_service),  # noqa: B008
 ):
-    """Get a signed URL to download the translated PDF."""
-    return await service.get_download_url(job_id, file_type)
+    """Get a signed URL to download the translated PDF (mono output only)."""
+    return await service.get_download_url(job_id, "mono")

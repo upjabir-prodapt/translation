@@ -93,15 +93,3 @@ class ProgressTracker:
             logger.error(f"Job {self.job_id} marked as failed: {error_message}")
         except Exception as e:
             logger.error(f"Failed to mark job {self.job_id} as failed: {e}")
-
-    async def set_stage(self, stage: str) -> bool:
-        """
-        Update current stage without changing progress.
-
-        Args:
-            stage: Stage description
-
-        Returns:
-            True if update was successful
-        """
-        return await self.update(progress=None, current_stage=stage, force=True)

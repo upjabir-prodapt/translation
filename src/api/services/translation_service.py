@@ -16,30 +16,12 @@ from api.schemas.requests import TranslateRequest
 from api.schemas.responses import TranslateResponse
 from api.utils.pdf_validator import PDFValidator
 from config.constants import settings
+from config.translation_routing import normalize_domain
+from config.translation_routing import normalize_language
+from config.translation_routing import select_model_list
 from repository.firestore_repository import FirestoreRepository
 
 logger = logging.getLogger(__name__)
-
-
-# Domain configurations
-DOMAIN_CONFIGS = {
-    "legal": {
-        "auto_extract_glossary": True,
-        "glossary_domains": ["legal"],
-        "custom_system_prompt": "Translate legal documents with precision and maintain legal terminology.",
-    },
-    "medical": {
-        "auto_extract_glossary": True,
-        "glossary_domains": ["medical"],
-        "custom_system_prompt": "Translate medical documents carefully, preserving medical terminology.",
-    },
-    "technical": {
-        "auto_extract_glossary": True,
-        "glossary_domains": ["technical"],
-        "custom_system_prompt": "Translate technical documentation, maintaining technical accuracy.",
-    },
-    "general": {"auto_extract_glossary": False},
-}
 
 
 class TranslationService:
@@ -83,6 +65,7 @@ class TranslationService:
 
             # Normalize configuration
             config = self._normalize_config(request)
+            config["job_id"] = job_id
 
             # Upload to GCS
             input_gs_uri = await self.storage.upload_input_pdf(
@@ -129,21 +112,21 @@ class TranslationService:
 
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""
-        # Start with domain configuration
-        config = {}
-
-        # Add language settings
-        config.update(
-            {
-                "lang_in": request.lang_in,
-                "lang_out": request.lang_out,
-                "domain": request.domain,
-                "user": request.user,
-                "department": request.department,
-            }
+        domain = normalize_domain(request.domain)
+        lang_in = normalize_language(request.lang_in)
+        lang_out = normalize_language(request.lang_out)
+        model_list = select_model_list(
+            lang_in=lang_in, lang_out=lang_out, domain=domain
         )
 
-        return config
+        return {
+            "lang_in": lang_in,
+            "lang_out": lang_out,
+            "domain": domain,
+            "user": request.user,
+            "department": request.department,
+            "model_list": model_list,
+        }
 
     async def _create_translation_task(
         self, job_id: str, config: dict[str, Any]

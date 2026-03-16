@@ -21,7 +21,7 @@ app_start_time = datetime.now(UTC)
 async def lifespan(_app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    logger.info(f"Starting {settings.api_title} v{settings.api_version}")
+    logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
     logger.info("API startup complete")
 
     yield
@@ -32,8 +32,8 @@ async def lifespan(_app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title=settings.api_title,
-    version=settings.api_version,
+    title=settings.API_TITLE,
+    version=settings.API_VERSION,
     description="PDF Translation API using BabelDOC",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -43,7 +43,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,7 +53,7 @@ app.add_middleware(
 app.add_middleware(BaseHTTPMiddleware, dispatch=exception_handler_middleware)
 
 # Include API routes
-app.include_router(api_router, prefix=settings.api_prefix)
+app.include_router(api_router, prefix=settings.API_PREFIX)
 
 
 # Root endpoint
@@ -61,8 +61,8 @@ app.include_router(api_router, prefix=settings.api_prefix)
 async def root():
     """Root endpoint."""
     return {
-        "service": settings.api_title,
-        "version": settings.api_version,
+        "service": settings.API_TITLE,
+        "version": settings.API_VERSION,
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),
     }

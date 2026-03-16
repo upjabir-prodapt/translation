@@ -1,13 +1,23 @@
 """Job processing service for the worker."""
 
-import asyncio
+import json
+import uuid
 from pathlib import Path
 from typing import Any
 
 from babeldoc import async_translate
+from babeldoc.docvision.doclayout import OnnxModel
 from babeldoc.format.pdf.translation_config import TranslationConfig
+from babeldoc.translator.factory import create_translator
+from babeldoc.translator.factory import create_translator_from_model_list
+from config.constants import settings
 from config.logging import logger
+from loaders.assets import get_doclayout_onnx_model_path
+from worker.models.task_models import BabelDOCTranslationConfig
 from worker.services.progress import ProgressTracker
+from worker.services.quality_judge import GoogleADKJudgeAgent
+from worker.services.quality_judge import QualityJudgeResult
+from worker.services.quality_judge import extract_attempt_text
 
 
 class JobProcessor:
@@ -23,52 +33,295 @@ class JobProcessor:
     def __init__(self, progress_tracker: ProgressTracker):
         """Initialize processor with progress tracker."""
         self.progress_tracker = progress_tracker
-        self._translations: list[dict[str, Any]] = []
+        self._doc_layout_model: OnnxModel | None = None
+
+    def _get_doc_layout_model(self) -> OnnxModel:
+        """Lazy load doc layout model via loaders.assets."""
+        if self._doc_layout_model is None:
+            model_path = get_doclayout_onnx_model_path()
+            self._doc_layout_model = OnnxModel(str(model_path))
+            logger.info(f"Loaded DocLayout model from {model_path}")
+        return self._doc_layout_model
 
     async def translate(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Process a translation job with progress tracking."""
-        output_dir = Path(config["output_dir"])
-        output_dir.mkdir(parents=True, exist_ok=True)
+        """Process a translation job with iterative model fallback."""
+        output_base_dir = Path(config["output_dir"])
+        output_base_dir.mkdir(parents=True, exist_ok=True)
+        model_list = config.get("model_list", [])
+        if not model_list:
+            raise ValueError("model_list is required for translation")
 
-        # Build translation config
-        translation_config = self._build_translation_config(config, output_dir)
-
-        # Reset state
-        self._translations = []
-
-        # Start processing
-        await self.progress_tracker.update(
-            self.PROGRESS_START, "Initializing translation"
+        max_attempts = min(
+            int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
+            len(model_list),
         )
-        logger.info(f"Starting translation: {config['lang_in']} → {config['lang_out']}")
+        judge = GoogleADKJudgeAgent(config.get("judge_model"))
+        best_attempt_result: dict[str, Any] | None = None
+        best_attempt_score = -1.0
+        attempt_reports: list[dict[str, Any]] = []
 
-        # Process translation events
+        for model_index in range(max_attempts):
+            attempt_index = model_index + 1
+            selected_model = model_list[model_index]
+            attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
+            attempt_output_dir.mkdir(parents=True, exist_ok=True)
+            attempt_config = {
+                **config,
+                "selected_model": selected_model,
+                "attempt_index": attempt_index,
+            }
+            translation_config = self._build_translation_config(
+                attempt_config, attempt_output_dir
+            )
+
+            await self.progress_tracker.update(
+                self.PROGRESS_START,
+                f"Attempt {attempt_index}/{max_attempts}: model={selected_model}",
+            )
+            logger.info(
+                "Attempt %s starting with model=%s for %s -> %s",
+                attempt_index,
+                selected_model,
+                config["lang_in"],
+                config["lang_out"],
+            )
+
+            try:
+                attempt_result = await self._run_single_attempt(
+                    translation_config, attempt_config
+                )
+            except Exception:
+                logger.exception(
+                    "Attempt %s failed with model %s", attempt_index, selected_model
+                )
+                if attempt_index == max_attempts:
+                    raise
+                continue
+
+            source_text, translated_text = extract_attempt_text(
+                Path(str(translation_config.working_dir))
+            )
+            quality_result = self._evaluate_attempt_quality(
+                judge=judge,
+                source_text=source_text,
+                translated_text=translated_text,
+            )
+            token_usage = self._collect_token_usage(translation_config, selected_model)
+            attempt_report = {
+                "attempt_index": attempt_index,
+                "model_id": selected_model,
+                "quality": quality_result.to_dict(),
+                "token_usage": token_usage,
+                "working_dir": str(translation_config.working_dir),
+                "output_dir": str(attempt_output_dir),
+            }
+            attempt_reports.append(attempt_report)
+            self._write_quality_report(
+                Path(str(translation_config.working_dir)), attempt_report
+            )
+
+            final_score = quality_result.final_score
+            if final_score > best_attempt_score:
+                best_attempt_score = final_score
+                best_attempt_result = {
+                    **attempt_result,
+                    "attempt_index": attempt_index,
+                    "model_id": selected_model,
+                    "quality_report": quality_result.to_dict(),
+                    "token_usage": token_usage,
+                }
+
+            if quality_result.pass_fail:
+                break
+
+        if best_attempt_result is None:
+            raise RuntimeError("All translation attempts failed")
+        best_attempt_result["attempts"] = attempt_reports
+        return best_attempt_result
+
+    async def _run_single_attempt(
+        self, translation_config: TranslationConfig, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run one translation attempt and return finish payload."""
+        async for event in async_translate(translation_config):
+            result = await self._handle_translation_event(event, config)
+            if result is not None:
+                return result
+        raise RuntimeError("Translation completed without finish event")
+
+    def _evaluate_attempt_quality(
+        self,
+        *,
+        judge: GoogleADKJudgeAgent,
+        source_text: str,
+        translated_text: str,
+    ) -> QualityJudgeResult:
+        """Evaluate one attempt using judge agent."""
+        if not source_text.strip() or not translated_text.strip():
+            return QualityJudgeResult(
+                alignment_score=0.0,
+                omission_score=0.0,
+                hallucination_score=0.0,
+                final_score=0.0,
+                pass_fail=False,
+                reasons=["Missing source/translated text for quality evaluation."],
+                model=judge.model,
+            )
+        return judge.evaluate(source_text=source_text, translated_text=translated_text)
+
+    def _collect_token_usage(
+        self, translation_config: TranslationConfig, selected_model: str
+    ) -> dict[str, Any]:
+        """Collect token usage and cost estimates for one attempt."""
+        translator = translation_config.translator
+        prompt_tokens = self._counter_value(
+            getattr(translator, "prompt_token_count", 0)
+        )
+        completion_tokens = self._counter_value(
+            getattr(translator, "completion_token_count", 0)
+        )
+        total_tokens = self._counter_value(getattr(translator, "token_count", 0))
+        cache_hit_tokens = self._counter_value(
+            getattr(translator, "cache_hit_prompt_token_count", 0)
+        )
+        term_usage = dict(translation_config.term_extraction_token_usage)
+
+        estimated_cost = self._estimate_cost(
+            model_id=selected_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        return {
+            "model_id": selected_model,
+            "total_tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cache_hit_prompt_tokens": cache_hit_tokens,
+            "term_extraction_usage": term_usage,
+            "estimated_cost_usd": estimated_cost,
+        }
+
+    def _estimate_cost(
+        self, *, model_id: str, prompt_tokens: int, completion_tokens: int
+    ) -> float:
+        """Estimate cost using configured per-1k token rates."""
+        normalized = model_id.lower()
+        if normalized.startswith("gemini"):
+            input_rate = settings.GEMINI_INPUT_COST_PER_1K
+            output_rate = settings.GEMINI_OUTPUT_COST_PER_1K
+        else:
+            input_rate = settings.OPENAI_INPUT_COST_PER_1K
+            output_rate = settings.OPENAI_OUTPUT_COST_PER_1K
+
+        return round(
+            (prompt_tokens / 1000.0) * float(input_rate)
+            + (completion_tokens / 1000.0) * float(output_rate),
+            6,
+        )
+
+    def _write_quality_report(
+        self, working_dir: Path, attempt_report: dict[str, Any]
+    ) -> None:
+        """Write per-attempt quality report for auditability."""
         try:
-            async for event in async_translate(translation_config):
-                result = await self._handle_translation_event(event, config)
-                if result is not None:
-                    return result
+            quality_path = working_dir / "quality_report.json"
+            quality_path.write_text(
+                json.dumps(attempt_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.exception("Failed to write quality report in %s", working_dir)
 
-            # No finish event received
-            raise RuntimeError("Translation completed without finish event")
-
-        except Exception as e:
-            logger.exception("Translation processing failed")
-            raise
+    def _counter_value(self, value: Any) -> int:
+        """Extract integer counter value from AtomicInteger or plain int."""
+        if hasattr(value, "value"):
+            return int(value.value)
+        return int(value or 0)
 
     def _build_translation_config(
         self, config: dict[str, Any], output_dir: Path
     ) -> TranslationConfig:
         """Build TranslationConfig from job config."""
-        # Extract known parameters
-        known_params = {"input_file", "output_dir", "lang_in", "lang_out"}
-        extra_params = {k: v for k, v in config.items() if k not in known_params}
+        doc_layout_model = self._get_doc_layout_model()
+
+        # Create working directory: CACHE_FOLDER/job_id/working/iter_N
+        job_id = config.get("job_id", str(uuid.uuid4()))
+        attempt_index = int(config.get("attempt_index", 1))
+        cache_folder = settings.CACHE_FOLDER or Path.cwd()
+        working_dir = cache_folder / job_id / "working" / f"iter_{attempt_index}"
+        working_dir.mkdir(parents=True, exist_ok=True)
+
+        base_config = BabelDOCTranslationConfig.model_validate(
+            {
+                "input_file": Path(config["input_file"]),
+                "output_dir": output_dir,
+                "lang_in": config["lang_in"],
+                "lang_out": config["lang_out"],
+                "model_list": config.get("model_list", []),
+                "working_dir": working_dir,
+            }
+        )
+        merged_input = {**config.get("options", {}), **config}
+        updates: dict[str, Any] = {}
+        for field_name, field in BabelDOCTranslationConfig.model_fields.items():
+            if field_name in {
+                "input_file",
+                "output_dir",
+                "lang_in",
+                "lang_out",
+                "working_dir",
+                "model_list",
+            }:
+                continue
+            if field_name not in merged_input:
+                continue
+            value = merged_input[field_name]
+            if value is None:
+                continue
+            default = field.default
+            if default is not None and value == default:
+                continue
+            updates[field_name] = value
+
+        resolved_config = base_config.model_copy(update=updates)
+        selected_model = str(config.get("selected_model", "")).strip()
+        if selected_model:
+            translator = create_translator(
+                selected_model,
+                lang_in=resolved_config.lang_in,
+                lang_out=resolved_config.lang_out,
+                qps=resolved_config.qps,
+            )
+        else:
+            translator = create_translator_from_model_list(
+                resolved_config.model_list,
+                lang_in=resolved_config.lang_in,
+                lang_out=resolved_config.lang_out,
+                qps=resolved_config.qps,
+            )
+        extra_params = resolved_config.to_babeldoc_kwargs()
+        for key in (
+            "input_file",
+            "output_dir",
+            "lang_in",
+            "lang_out",
+            "working_dir",
+            "model_list",
+            "doc_layout_model_path",
+            "table_model_path",
+        ):
+            extra_params.pop(key, None)
 
         return TranslationConfig(
-            input_file=Path(config["input_file"]),
+            translator=translator,
+            term_extraction_translator=translator,
+            input_file=Path(str(resolved_config.input_file)),
             output_dir=output_dir,
-            lang_in=config["lang_in"],
-            lang_out=config["lang_out"],
+            lang_in=resolved_config.lang_in,
+            lang_out=resolved_config.lang_out,
+            doc_layout_model=doc_layout_model,
+            table_model=None,
+            working_dir=working_dir,
             **extra_params,
         )
 
@@ -84,7 +337,7 @@ class JobProcessor:
             )
 
         elif event_type == "progress_update":
-            await self._handle_progress_update(event)
+            await self._handle_progress_update(event, config)
 
         elif event_type == "progress_end":
             await self.progress_tracker.update(
@@ -101,7 +354,9 @@ class JobProcessor:
 
         return None
 
-    async def _handle_progress_update(self, event: dict[str, Any]) -> None:
+    async def _handle_progress_update(
+        self, event: dict[str, Any], config: dict[str, Any]
+    ) -> None:
         """Handle progress update event."""
         # Map 0-100 progress to our range
         overall_progress = event.get("overall_progress", 0) / 100.0
@@ -114,32 +369,31 @@ class JobProcessor:
             mapped_progress, f"{stage} ({event.get('overall_progress', 0):.0f}%)"
         )
 
-        # Collect translation data for analytics
-        if "translation" in event:
-            self._translations.append(
-                {
-                    "original_text": event["translation"].get("original", ""),
-                    "translated_text": event["translation"].get("translated", ""),
-                    "engine": "openai",
-                }
-            )
-
     async def _handle_finish_event(self, event: dict[str, Any]) -> dict[str, Any]:
         """Handle finish event and return results."""
         await self.progress_tracker.update(
             self.PROGRESS_COMPLETE, "Translation complete"
         )
 
-        result = event.get("translate_result", {})
+        result = event.get("translate_result")
 
         # Extract output file paths
         output_files = {}
         for file_type in ["mono_pdf", "dual_pdf", "no_watermark_mono_pdf"]:
-            file_path = result.get(file_type)
+            attr_name = f"{file_type}_path"
+            if isinstance(result, dict):
+                file_path = result.get(attr_name) or result.get(file_type)
+            else:
+                file_path = (
+                    getattr(result, attr_name, None) if result is not None else None
+                )
             if file_path and Path(file_path).exists():
                 output_files[f"{file_type}_path"] = Path(file_path)
 
-        page_count = result.get("page_count", 0)
+        if isinstance(result, dict):
+            page_count = result.get("page_count", 0)
+        else:
+            page_count = getattr(result, "page_count", 0) or 0
         logger.info(
             f"Translation finished: {page_count} pages, {len(output_files)} output files"
         )
@@ -147,19 +401,4 @@ class JobProcessor:
         return {
             **output_files,
             "page_count": page_count,
-            "translations": self._translations,
         }
-
-    async def translate_with_timeout(
-        self, config: dict[str, Any], timeout_seconds: int = 3600
-    ) -> dict[str, Any]:
-        """Process translation with timeout protection."""
-        try:
-            return await asyncio.wait_for(
-                self.translate(config), timeout=timeout_seconds
-            )
-        except TimeoutError:
-            logger.error(f"Translation timed out after {timeout_seconds}s")
-            raise RuntimeError(
-                f"Translation timed out after {timeout_seconds} seconds"
-            ) from None

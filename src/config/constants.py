@@ -1,108 +1,195 @@
-"""BabelDOC Constants - Centralized configuration using Pydantic Settings."""
+"""
+Application Settings - Centralized configuration using Pydantic Settings.
+"""
 
 from pathlib import Path
 
-from pydantic import Field
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
+
+# --------------------------------------------------
+# Project Root Detection
+# --------------------------------------------------
 
 
 def find_project_root(start_path: Path) -> Path:
-    """Find project root by looking for pyproject.toml or .git."""
+    """Find project root by locating pyproject.toml or .git."""
     for parent in [start_path] + list(start_path.parents):
         if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
             return parent
     raise RuntimeError("Project root not found")
 
 
-# Calculate project root and .env path at module level
-_PROJECT_ROOT = find_project_root(Path(__file__).resolve())
-_ENV_FILE = _PROJECT_ROOT / ".env"
+PROJECT_ROOT = find_project_root(Path(__file__).resolve())
+ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
-    """Centralized application settings."""
+    # -----------------------------
+    # GCP
+    # -----------------------------
 
-    # Google Cloud Configuration
-    GOOGLE_CLOUD_PROJECT_ID: str = Field()
-    GOOGLE_CLOUD_LOCATION: str = Field()
+    GOOGLE_CLOUD_PROJECT_ID: str
+    GOOGLE_CLOUD_LOCATION: str
 
-    # GCS Configuration
-    GCS_BUCKET_NAME: str = Field()
-    GCS_ASSETS_PREFIX: str = Field()
-    GCS_TRANSLATION_PREFIX: str = Field(default="translation")
-    GCS_INPUT_FOLDER: str = Field(default="input")
-    GCS_OUTPUT_FOLDER: str = Field(default="output")
+    # -----------------------------
+    # GCS
+    # -----------------------------
 
-    # Firestore Configuration
-    FIRESTORE_DATABASE: str = Field(default="(default)")
-    FIRESTORE_COLLECTION: str = Field()
+    GCS_BUCKET_NAME: str
+    GCS_ASSETS_PREFIX: str
+    GCS_TRANSLATION_PREFIX: str = "translation"
+    GCS_INPUT_FOLDER: str = "input"
+    GCS_OUTPUT_FOLDER: str = "output"
 
-    # BigQuery Configuration
-    BIGQUERY_DATASET: str = Field()
-    BIGQUERY_LOCATION: str = Field()
+    # -----------------------------
+    # Firestore
+    # -----------------------------
 
-    # Cloud Tasks Configuration
-    CLOUD_TASKS_QUEUE: str = Field()
-    CLOUD_TASKS_LOCATION: str = Field()
-    CLOUD_TASKS_DEADLINE_SECONDS: int = Field()
-    WORKER_URL: str = Field()
+    FIRESTORE_DATABASE: str = "(default)"
+    FIRESTORE_COLLECTION: str
 
-    # OpenAI Configuration
-    OPENAI_API_KEY: str = Field()
-    OPENAI_MODEL: str = Field()
-    OPENAI_QPS: int = Field()
+    # -----------------------------
+    # BigQuery
+    # -----------------------------
 
-    # BabelDOC Asset Configuration
-    WATERMARK_VERSION: str = Field()
-    DOCLAYOUT_MODEL_FILENAME: str = Field()
-    TABLE_DETECTION_MODEL_FILENAME: str = Field()
-    FONT_METADATA_FILENAME: str = Field()
-    CMAP_METADATA_FILENAME: str = Field()
+    BIGQUERY_DATASET: str
+    BIGQUERY_LOCATION: str
 
-    # Job Configuration
-    JOB_TTL_HOURS: int = Field()
+    # -----------------------------
+    # Cloud Tasks
+    # -----------------------------
 
-    # Logging Configuration
-    LOG_LEVEL: str = Field()
+    CLOUD_TASKS_QUEUE: str
+    CLOUD_TASKS_LOCATION: str
+    CLOUD_TASKS_DEADLINE_SECONDS: int
+    WORKER_URL: str
 
-    # API Configuration
-    api_title: str = "BabelDOC Translation API"
-    api_version: str = "1.0.0"
-    api_prefix: str = "/api/v1"
+    # -----------------------------
+    # OpenAI
+    # -----------------------------
 
-    # Security Configuration
-    allowed_hosts: list[str] = ["*"]
-    cors_origins: list[str] = ["*"]
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str
+    OPENAI_QPS: int = 10
+    OPENAI_INPUT_COST_PER_1K: float = 0.0
+    OPENAI_OUTPUT_COST_PER_1K: float = 0.0
 
-    # File Configuration
-    MAX_FILE_SIZE: int = Field(default=100 * 1024 * 1024)  # 100MB
-    allowed_extensions: set[str] = {".pdf"}
+    # -----------------------------
+    # Gemini / Judge
+    # -----------------------------
 
-    # Model Configuration
-    cache_ttl_seconds: int = 3600  # 1 hour
-    max_concurrent_jobs: int = 10
+    GEMINI_INPUT_COST_PER_1K: float = 0.0
+    GEMINI_OUTPUT_COST_PER_1K: float = 0.0
+    JUDGE_MODEL: str = "gemini-2.5-flash"
+    QUALITY_THRESHOLD: float = 0.8
+    MAX_MODEL_ATTEMPTS: int = 2
 
-    # Download Retry Configuration
-    download_max_attempts: int = Field(default=3)
-    download_retry_min_seconds: int = Field(default=2)
-    download_retry_max_seconds: int = Field(default=10)
-    download_retry_multiplier: int = Field(default=1)
+    # -----------------------------
+    # BabelDOC Assets
+    # -----------------------------
+
+    WATERMARK_VERSION: str = "1.0"
+    DOCLAYOUT_MODEL_FILENAME: str = "doclayout_yolo_docstructbench_imgsz1024.onnx"
+    TABLE_DETECTION_MODEL_FILENAME: str = "ch_PP-OCRv4_det_infer.onnx"
+    FONT_METADATA_FILENAME: str = "font_metadata.json"
+    CMAP_METADATA_FILENAME: str = "cmap_metadata.json"
+    FONTS_DIR: str = "fonts"
+    CMAP_DIR: str = "cmap"
+    MODELS_DIR: str = "models"
+    METADATA_DIR: str = "metadata"
+    TIKTOKEN_DIR: str = "tiktoken"
+
+    # -----------------------------
+    # Job Config
+    # -----------------------------
+
+    JOB_TTL_HOURS: int = 24
+    MAX_CONCURRENT_JOBS: int = 10
+
+    # -----------------------------
+    # API Config
+    # -----------------------------
+
+    API_TITLE: str = "BabelDOC Translation API"
+    API_VERSION: str = "1.0.0"
+    API_PREFIX: str = "/api/v1"
+
+    # -----------------------------
+    # Security
+    # -----------------------------
+
+    ALLOWED_HOSTS: list[str] = ["*"]
+    CORS_ORIGINS: list[str] = ["*"]
+
+    # -----------------------------
+    # File Limits
+    # -----------------------------
+
+    MAX_FILE_SIZE: int = 100 * 1024 * 1024
+    ALLOWED_EXTENSIONS: set[str] = {".pdf"}
+
+    # -----------------------------
+    # Logging
+    # -----------------------------
+
+    LOG_LEVEL: str = "INFO"
+
+    # -----------------------------
+    # Retry
+    # -----------------------------
+
+    DOWNLOAD_MAX_ATTEMPTS: int = 3
+    DOWNLOAD_RETRY_MIN_SECONDS: int = 2
+    DOWNLOAD_RETRY_MAX_SECONDS: int = 10
+    DOWNLOAD_RETRY_MULTIPLIER: int = 1
+
+    # -----------------------------
+    # Runtime Paths (initialized later)
+    # -----------------------------
+
+    PROJECT_ROOT: Path = PROJECT_ROOT
+    TEMP_DIR: Path | None = None
+    CACHE_FOLDER: Path | None = None
+
+    # --------------------------------------------------
+    # Post Initialization
+    # --------------------------------------------------
 
     @model_validator(mode="after")
-    def setup_cache_folder(self) -> "Settings":
-        """Setup tiktoken cache directory after settings are loaded."""
+    def setup_directories(self):
+        cache_folder = self.PROJECT_ROOT / "assets"
+        cache_folder.mkdir(parents=True, exist_ok=True)
 
-        CACHE_FOLDER = _PROJECT_ROOT / "assests"
-        CACHE_FOLDER.mkdir(parents=True, exist_ok=True)
+        temp_dir = cache_folder / "tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        self.TEMP_DIR = temp_dir
+        self.CACHE_FOLDER = cache_folder
+
         return self
 
-    class Config:
-        env_file = str(_ENV_FILE)
-        case_sensitive = False
-        populate_by_name = True
-        extra = "ignore"  # Allow extra fields in .env without validation errors
+    # --------------------------------------------------
+    # Helpers
+    # --------------------------------------------------
+
+    def create_temp_dir(self) -> Path:
+        """Create a temporary working directory."""
+        import tempfile
+
+        return Path(tempfile.mkdtemp(dir=self.TEMP_DIR))
+
+    # --------------------------------------------------
+    # Pydantic Config
+    # --------------------------------------------------
+
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
-# Global settings instance (tiktoken cache setup runs automatically in validator)
+# Singleton
 settings = Settings()  # type: ignore[call-arg]

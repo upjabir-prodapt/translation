@@ -8,12 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from loaders.constants import CMAP_DIR
-from loaders.constants import DOCLAYOUT_MODEL_FILENAME
+from config.constants import settings
 from loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
-from loaders.constants import FONTS_DIR
-from loaders.constants import MODELS_DIR
-from loaders.constants import TABLE_DETECTION_MODEL_FILENAME
 from loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
 from loaders.exceptions import AssetIntegrityError
 from loaders.exceptions import MetadataNotFoundError
@@ -22,8 +18,8 @@ from loaders.models.font_families import get_font_family as _get_font_family
 from loaders.repositories.cache_repository import verify_or_delete
 from loaders.repositories.metadata_repository import get_cmap_metadata_by_name
 from loaders.repositories.metadata_repository import get_font_metadata_by_name
-from loaders.services import download_and_verify
-from loaders.services import get_or_download_model
+from loaders.services.download_service import download_and_verify
+from loaders.services.download_service import get_or_download_model
 from loaders.utils.path_helpers import get_cache_file_path
 
 # ============================================================================
@@ -42,15 +38,15 @@ def get_doclayout_onnx_model_path() -> Path:
     """
     try:
         return get_or_download_model(
-            filename=DOCLAYOUT_MODEL_FILENAME,
+            filename=settings.DOCLAYOUT_MODEL_FILENAME,
             expected_hash=DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256,
             model_name="DocLayout",
-            subdir=MODELS_DIR,
+            subdir=settings.MODELS_DIR,
         )
     except Exception as e:
         raise AssetIntegrityError(
             f"Failed to get DocLayout model: {e}",
-            asset_name=DOCLAYOUT_MODEL_FILENAME,
+            asset_name=settings.DOCLAYOUT_MODEL_FILENAME,
         ) from e
 
 
@@ -65,15 +61,15 @@ def get_table_detection_rapidocr_model_path() -> Path:
     """
     try:
         return get_or_download_model(
-            filename=TABLE_DETECTION_MODEL_FILENAME,
+            filename=settings.TABLE_DETECTION_MODEL_FILENAME,
             expected_hash=TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256,
             model_name="Table Detection",
-            subdir=MODELS_DIR,
+            subdir=settings.MODELS_DIR,
         )
     except Exception as e:
         raise AssetIntegrityError(
             f"Failed to get Table Detection model: {e}",
-            asset_name=TABLE_DETECTION_MODEL_FILENAME,
+            asset_name=settings.TABLE_DETECTION_MODEL_FILENAME,
         ) from e
 
 
@@ -102,7 +98,7 @@ def get_font_and_metadata(font_file_name: str) -> tuple[Path, dict[str, Any]]:
             asset_name=font_file_name,
         )
 
-    font_path = get_cache_file_path(font_file_name, FONTS_DIR)
+    font_path = get_cache_file_path(font_file_name, settings.FONTS_DIR)
 
     # Check if already valid
     if verify_or_delete(font_path, metadata.sha3_256):
@@ -116,7 +112,7 @@ def get_font_and_metadata(font_file_name: str) -> tuple[Path, dict[str, Any]]:
 
     # Download and verify
     download_and_verify(
-        blob_path=f"{FONTS_DIR}/{font_file_name}",
+        blob_path=f"{settings.FONTS_DIR}/{font_file_name}",
         local_path=font_path,
         expected_hash=metadata.sha3_256,
         asset_name=font_file_name,
@@ -170,7 +166,7 @@ def get_cmap_file_path(name: str) -> Path:
             asset_name=file_name,
         )
 
-    cmap_path = get_cache_file_path(file_name, CMAP_DIR)
+    cmap_path = get_cache_file_path(file_name, settings.CMAP_DIR)
 
     # Check if already valid
     if verify_or_delete(cmap_path, metadata.sha3_256):
@@ -178,7 +174,7 @@ def get_cmap_file_path(name: str) -> Path:
 
     # Download and verify
     download_and_verify(
-        blob_path=f"{CMAP_DIR}/{file_name}",
+        blob_path=f"{settings.CMAP_DIR}/{file_name}",
         local_path=cmap_path,
         expected_hash=metadata.sha3_256,
         asset_name=file_name,

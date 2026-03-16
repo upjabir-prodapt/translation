@@ -22,8 +22,6 @@ from babeldoc.babeldoc_exception.BabelDOCException import ExtractTextError
 from babeldoc.babeldoc_exception.BabelDOCException import (
     InputFileGeneratedByBabelDOCError,
 )
-from babeldoc.const import CACHE_FOLDER
-from babeldoc.const import WATERMARK_VERSION
 from babeldoc.format.pdf.converter import TranslateConverter
 from babeldoc.format.pdf.document_il import il_version_1
 from babeldoc.format.pdf.document_il.backend.pdf_creater import SAVE_PDF_STAGE_NAME
@@ -62,7 +60,7 @@ from babeldoc.pdfminer.pdfparser import PDFParser
 from babeldoc.progress_monitor import ProgressMonitor
 from babeldoc.utils import memory
 from babeldoc.utils.common import close_process_pool
-from loaders.assets import warmup
+from config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +144,7 @@ def add_metadata(
             else:
                 creator += f", {producer}"
 
-        translated_by = f"BabelDOC{WATERMARK_VERSION}_{time.time()}_Translation_generated_by_AI,please_carefully_discern"
+        translated_by = f"BabelDOC{settings.WATERMARK_VERSION}_{time.time()}_Translation_generated_by_AI,please_carefully_discern"
         if translate_config.metadata_extra_data:
             translated_by += f"_{translate_config.metadata_extra_data}"
         meta["producer"] = translated_by
@@ -1227,23 +1225,3 @@ def merge_watermark_doc(
         clean=not translation_config.skip_clean,
     )
     return new_save_path
-
-
-def download_font_assets():
-    warmup()
-
-
-def create_cache_folder():
-    try:
-        logger.debug(f"create cache folder at {CACHE_FOLDER}")
-        Path(CACHE_FOLDER).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        logger.critical(
-            f"Failed to create cache folder at {CACHE_FOLDER}",
-            exc_info=True,
-        )
-        exit(1)
-
-
-def init():
-    create_cache_folder()

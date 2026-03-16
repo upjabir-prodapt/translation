@@ -22,7 +22,7 @@ from babeldoc.format.pdf.translation_config import TranslateResult
 from babeldoc.format.pdf.translation_config import TranslationConfig
 from babeldoc.format.pdf.translation_config import WatermarkOutputMode
 from babeldoc.utils.common import batched
-from loaders import FONT_NAMES
+from loaders import font_names
 
 logger = logging.getLogger(__name__)
 
@@ -477,7 +477,7 @@ def reproduce_cmap(doc):
         try:
             font_list = page.get_fonts()
             for font in font_list:
-                if font[1] == "ttf" and font[3] in FONT_NAMES and ".ttf" in font[4]:
+                if font[1] == "ttf" and font[3] in font_names() and ".ttf" in font[4]:
                     font_set.add(font)
         except Exception as e:
             logger.error(f"Error in getting page fonts: {e}")

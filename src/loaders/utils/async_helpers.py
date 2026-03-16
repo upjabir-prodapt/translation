@@ -49,10 +49,10 @@ class AsyncBridge:
             # if used correctly, but handle gracefully
             raise RuntimeError(
                 "Cannot get sync result while in async context. Use 'await' instead."
-            )
+            ) from None
 
 
-def sync_to_async(
+def sync_to_async[T](
     func: Callable[..., T],
     *args,
     **kwargs,

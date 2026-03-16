@@ -1,5 +1,7 @@
 """API request schemas."""
 
+from typing import ClassVar
+
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
@@ -8,9 +10,18 @@ from pydantic import field_validator
 class TranslateRequest(BaseModel):
     """Request model for PDF translation."""
 
+    VALID_DOMAINS: ClassVar[set[str]] = {
+        "commercial",
+        "legal",
+        "finance",
+        "hr",
+        "oprations",
+    }
+
     domain: str = Field(
         ...,
-        pattern="^(legal|HR|technical|general)$",
+        min_length=2,
+        max_length=20,
         description="Domain specialization for translation",
     )
     lang_in: str = Field(
@@ -37,6 +48,17 @@ class TranslateRequest(BaseModel):
         if not v.isalpha() or len(v) < 2 or len(v) > 5:
             raise ValueError("Invalid language code")
         return v.lower()
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        """Validate and normalize domain."""
+        normalized = v.strip().lower()
+        if normalized not in cls.VALID_DOMAINS:
+            raise ValueError(
+                "Invalid domain. Allowed: commercial, legal, finance, hr, oprations"
+            )
+        return normalized
 
 
 class JobCancelRequest(BaseModel):

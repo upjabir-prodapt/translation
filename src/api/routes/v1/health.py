@@ -19,5 +19,5 @@ async def health_check():
     uptime = (datetime.now(UTC) - app_start_time).total_seconds()
 
     return HealthResponse(
-        status="healthy", version=settings.api_version, uptime_seconds=uptime
+        status="healthy", version=settings.API_VERSION, uptime_seconds=uptime
     )

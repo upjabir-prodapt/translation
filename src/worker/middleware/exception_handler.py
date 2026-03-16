@@ -11,7 +11,7 @@ from worker.utils.exceptions import JobNotFoundError
 from worker.utils.exceptions import StorageError
 from worker.utils.exceptions import TranslationError
 from worker.utils.exceptions import ValidationError
-from worker.utils.exceptions import WorkerException
+from worker.utils.exceptions import WorkerError
 
 
 async def exception_handler_middleware(request: Request, call_next):
@@ -111,7 +111,7 @@ def handle_exception(exc: Exception, request: Request) -> JSONResponse:
             },
         )
 
-    if isinstance(exc, WorkerException):
+    if isinstance(exc, WorkerError):
         logger.error(f"Worker error in task {request_id}: {exc.message}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

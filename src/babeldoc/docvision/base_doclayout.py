@@ -40,15 +40,24 @@ class YoloBox:
 class DocLayoutModel(abc.ABC):
     @staticmethod
     def load_onnx():
-        logger.info("Loading ONNX model...")
-        from babeldoc.docvision.doclayout import OnnxModel
-
-        model = OnnxModel.from_pretrained()
-        return model
+        # NOTE: Auto-download disabled - model should be loaded via loaders.assets
+        # logger.info("Loading ONNX model...")
+        # from babeldoc.docvision.doclayout import OnnxModel
+        # model = OnnxModel.from_pretrained()
+        # return model
+        raise RuntimeError(
+            "DocLayoutModel.load_onnx() is disabled. "
+            "Load model via loaders.assets and pass to TranslationConfig directly."
+        )
 
     @staticmethod
     def load_available():
-        return DocLayoutModel.load_onnx()
+        # NOTE: Auto-download disabled
+        # return DocLayoutModel.load_onnx()
+        raise RuntimeError(
+            "DocLayoutModel.load_available() is disabled. "
+            "Load model via loaders.assets and pass to TranslationConfig directly."
+        )
 
     @property
     @abc.abstractmethod

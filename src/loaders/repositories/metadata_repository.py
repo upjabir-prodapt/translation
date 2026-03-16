@@ -5,10 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from config.constants import settings
 from config.logging import logger
-from loaders.constants import CMAP_METADATA_FILENAME
-from loaders.constants import FONT_METADATA_FILENAME
-from loaders.constants import METADATA_DIR
 from loaders.exceptions import MetadataNotFoundError
 from loaders.models import CMapMetadata
 from loaders.models import FontMetadata
@@ -39,18 +37,18 @@ def _load_json_file(path: Path) -> dict[str, Any]:
         )
 
     try:
-        with open(path, encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         raise MetadataNotFoundError(
             f"Invalid JSON in metadata file: {e}",
             metadata_file=str(path),
-        )
+        ) from e
     except OSError as e:
         raise MetadataNotFoundError(
             f"Cannot read metadata file: {e}",
             metadata_file=str(path),
-        )
+        ) from e
 
 
 def get_font_metadata() -> dict[str, FontMetadata]:
@@ -67,7 +65,9 @@ def get_font_metadata() -> dict[str, FontMetadata]:
         if _font_cache is not None:
             return _font_cache
 
-        path = get_cache_file_path(FONT_METADATA_FILENAME, METADATA_DIR)
+        path = get_cache_file_path(
+            settings.FONT_METADATA_FILENAME, settings.METADATA_DIR
+        )
 
         try:
             raw_data = _load_json_file(path)
@@ -97,7 +97,9 @@ def get_cmap_metadata() -> dict[str, CMapMetadata]:
         if _cmap_cache is not None:
             return _cmap_cache
 
-        path = get_cache_file_path(CMAP_METADATA_FILENAME, METADATA_DIR)
+        path = get_cache_file_path(
+            settings.CMAP_METADATA_FILENAME, settings.METADATA_DIR
+        )
 
         try:
             raw_data = _load_json_file(path)
@@ -189,7 +191,7 @@ class _FontMetadataProxy:
         return get_font_metadata().keys()
 
     def values(self):
-        for name, meta in get_font_metadata().items():
+        for _name, meta in get_font_metadata().items():
             yield {
                 "sha3_256": meta.sha3_256,
                 "size": meta.size,
@@ -239,7 +241,7 @@ class _CMapMetadataProxy:
         return get_cmap_metadata().keys()
 
     def values(self):
-        for name, meta in get_cmap_metadata().items():
+        for _name, meta in get_cmap_metadata().items():
             yield {
                 "sha3_256": meta.sha3_256,
                 "size": meta.size,

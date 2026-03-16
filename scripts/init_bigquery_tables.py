@@ -30,46 +30,30 @@ def create_dataset(client: bigquery.Client, dataset_id: str, location: str = "US
         print(f"Created dataset {dataset_ref}")
 
 
-def create_translation_report_table(client: bigquery.Client, dataset_id: str):
-    """Create translation_report table."""
-    table_id = f"{client.project}.{dataset_id}.translation_report"
-
-    schema = [
-        bigquery.SchemaField("document_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("lang_in", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("lang_out", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("translate_engine", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("translate_engine_params", "JSON", mode="REQUIRED"),
-        bigquery.SchemaField("original_text", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("translated_text", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("created_at", "TIMESTAMP", mode="REQUIRED"),
-    ]
-
-    table = bigquery.Table(table_id, schema=schema)
-
-    table.time_partitioning = bigquery.TimePartitioning(
-        type_=bigquery.TimePartitioningType.DAY,
-        field="created_at",
-    )
-
-    table.clustering_fields = ["document_id", "translate_engine"]
-
-    try:
-        table = client.create_table(table)
-        print(f"Created table {table_id}")
-    except Exception as e:
-        print(f"Table {table_id} already exists or error: {e}")
-
-
 def create_translation_jobs_table(client: bigquery.Client, dataset_id: str):
     """Create translation_jobs table."""
     table_id = f"{client.project}.{dataset_id}.translation_jobs"
 
     schema = [
-        bigquery.SchemaField("document_id", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("job_id", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("output_file_gcs_path", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("domain", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("lang_in", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("lang_out", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("user", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("department", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("file_size_bytes", "INT64", mode="NULLABLE"),
+        bigquery.SchemaField("processing_seconds", "INT64", mode="NULLABLE"),
+        bigquery.SchemaField("pages_processed", "INT64", mode="NULLABLE"),
+        bigquery.SchemaField("output_gs_uris", "JSON", mode="NULLABLE"),
+        bigquery.SchemaField("quality_report", "JSON", mode="NULLABLE"),
+        bigquery.SchemaField("token_usage", "INT64", mode="NULLABLE"),
+        bigquery.SchemaField("total_cost_usd", "FLOAT64", mode="NULLABLE"),
+        bigquery.SchemaField("iteration_details", "JSON", mode="NULLABLE"),
+        bigquery.SchemaField("selected_model", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("attempt_count", "INT64", mode="NULLABLE"),
+        bigquery.SchemaField("error_message", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("completed_at", "TIMESTAMP", mode="NULLABLE"),
         bigquery.SchemaField("created_at", "TIMESTAMP", mode="REQUIRED"),
         bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
     ]
@@ -81,7 +65,7 @@ def create_translation_jobs_table(client: bigquery.Client, dataset_id: str):
         field="created_at",
     )
 
-    table.clustering_fields = ["document_id", "status"]
+    table.clustering_fields = ["department", "user", "selected_model"]
 
     try:
         table = client.create_table(table)
@@ -113,15 +97,12 @@ def main():
     print(f"Initializing BigQuery tables in project {args.project_id}...")
 
     create_dataset(client, args.dataset, args.location)
-    create_translation_report_table(client, args.dataset)
     create_translation_jobs_table(client, args.dataset)
 
     print("\n✅ BigQuery initialization complete!")
     print(f"\nDataset: {args.project_id}.{args.dataset}")
     print("Tables created:")
-    print(f"  - {args.dataset}.translation_report")
     print(f"  - {args.dataset}.translation_jobs")
-    print(f"  - {args.dataset}.glossaries")
 
 
 if __name__ == "__main__":

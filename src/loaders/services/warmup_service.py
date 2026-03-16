@@ -6,17 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.constants import settings
-from loaders.constants import CMAP_DIR
-from loaders.constants import CMAP_METADATA_FILENAME
-from loaders.constants import DOCLAYOUT_MODEL_FILENAME
 from loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
-from loaders.constants import FONT_METADATA_FILENAME
-from loaders.constants import FONTS_DIR
-from loaders.constants import METADATA_DIR
-from loaders.constants import MODELS_DIR
-from loaders.constants import TABLE_DETECTION_MODEL_FILENAME
 from loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
-from loaders.constants import TIKTOKEN_DIR
 from loaders.exceptions import WarmupError
 from loaders.repositories.cache_repository import get_file_size
 from loaders.repositories.cache_repository import verify_or_delete
@@ -174,8 +165,8 @@ class WarmupService:
     async def _download_metadata_files(self) -> None:
         """Download font and cmap metadata JSON files."""
         metadata_files = [
-            (FONT_METADATA_FILENAME, METADATA_DIR, "font"),
-            (CMAP_METADATA_FILENAME, METADATA_DIR, "cmap"),
+            (settings.FONT_METADATA_FILENAME, settings.METADATA_DIR, "font"),
+            (settings.CMAP_METADATA_FILENAME, settings.METADATA_DIR, "cmap"),
         ]
 
         for filename, subdir, file_type in metadata_files:
@@ -196,16 +187,16 @@ class WarmupService:
 
         tasks = [
             get_or_download_model_async(
-                DOCLAYOUT_MODEL_FILENAME,
+                settings.DOCLAYOUT_MODEL_FILENAME,
                 DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256,
                 "DocLayout",
-                MODELS_DIR,
+                settings.MODELS_DIR,
             ),
             get_or_download_model_async(
-                TABLE_DETECTION_MODEL_FILENAME,
+                settings.TABLE_DETECTION_MODEL_FILENAME,
                 TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256,
                 "Table Detection",
-                MODELS_DIR,
+                settings.MODELS_DIR,
             ),
         ]
 
@@ -226,13 +217,13 @@ class WarmupService:
 
         async def verify_font(font_name: str, meta: Any) -> None:
             try:
-                font_path = get_cache_file_path(font_name, FONTS_DIR)
+                font_path = get_cache_file_path(font_name, settings.FONTS_DIR)
                 if verify_or_delete(font_path, meta.sha3_256):
                     self._download_stats["verified"] += 1
                     return
 
                 await download_async(
-                    f"{FONTS_DIR}/{font_name}",
+                    f"{settings.FONTS_DIR}/{font_name}",
                     font_path,
                     self.storage_repo,
                 )
@@ -256,13 +247,13 @@ class WarmupService:
 
         async def verify_cmap(cmap_name: str, meta: Any) -> None:
             try:
-                cmap_path = get_cache_file_path(cmap_name, CMAP_DIR)
+                cmap_path = get_cache_file_path(cmap_name, settings.CMAP_DIR)
                 if verify_or_delete(cmap_path, meta.sha3_256):
                     self._download_stats["verified"] += 1
                     return
 
                 await download_async(
-                    f"{CMAP_DIR}/{cmap_name}",
+                    f"{settings.CMAP_DIR}/{cmap_name}",
                     cmap_path,
                     self.storage_repo,
                 )
@@ -284,7 +275,7 @@ class WarmupService:
 
         try:
             # Ensure directory exists
-            tiktoken_dir = get_subdir_path(TIKTOKEN_DIR)
+            tiktoken_dir = get_subdir_path(settings.TIKTOKEN_DIR)
 
             # Pre-load common encodings
             await asyncio.to_thread(self._init_tiktoken)

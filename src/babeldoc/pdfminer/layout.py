@@ -673,8 +673,9 @@ class LTTextGroupLRTB(LTTextGroup):
         boxes_flow = laparams.boxes_flow
         # reorder the objects from top-left to bottom-right.
         self._objs.sort(
-            key=lambda obj: (1 - boxes_flow) * obj.x0
-            - (1 + boxes_flow) * (obj.y0 + obj.y1),
+            key=lambda obj: (
+                (1 - boxes_flow) * obj.x0 - (1 + boxes_flow) * (obj.y0 + obj.y1)
+            ),
         )
 
 
@@ -685,8 +686,9 @@ class LTTextGroupTBRL(LTTextGroup):
         boxes_flow = laparams.boxes_flow
         # reorder the objects from top-right to bottom-left.
         self._objs.sort(
-            key=lambda obj: -(1 + boxes_flow) * (obj.x0 + obj.x1)
-            - (1 - boxes_flow) * obj.y1,
+            key=lambda obj: (
+                -(1 + boxes_flow) * (obj.x0 + obj.x1) - (1 - boxes_flow) * obj.y1
+            ),
         )
 
 

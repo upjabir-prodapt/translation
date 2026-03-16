@@ -1,9 +1,8 @@
 """Path helpers for cache file resolution."""
 
-import os
 from pathlib import Path
 
-from config.constants import _PROJECT_ROOT
+from config.constants import settings
 
 
 def get_cache_root() -> Path:
@@ -12,10 +11,7 @@ def get_cache_root() -> Path:
     Respects BABELDOC_CACHE_DIR environment variable,
     otherwise defaults to project_root/assets.
     """
-    cache_dir = os.environ.get("BABELDOC_CACHE_DIR")
-    if cache_dir:
-        return Path(cache_dir).expanduser().resolve()
-    return _PROJECT_ROOT / "assests"
+    return settings.CACHE_FOLDER or settings.PROJECT_ROOT / "assets"
 
 
 def get_cache_file_path(filename: str, subdir: str = "") -> Path:

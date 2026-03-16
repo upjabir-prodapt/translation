@@ -25,7 +25,6 @@ except ImportError as e:
 import pymupdf
 
 import babeldoc.format.pdf.document_il.il_version_1
-from loaders.assets import get_doclayout_onnx_model_path
 
 # from huggingface_hub import hf_hub_download
 
@@ -61,8 +60,14 @@ class OnnxModel(DocLayoutModel):
 
     @staticmethod
     def from_pretrained():
-        pth = get_doclayout_onnx_model_path()
-        return OnnxModel(pth)
+        # NOTE: Auto-download disabled - model should be loaded via loaders.assets
+        # pth = get_doclayout_onnx_model_path()
+        # return OnnxModel(pth)
+        raise RuntimeError(
+            "OnnxModel.from_pretrained() is disabled. "
+            "Load model via loaders.assets.get_doclayout_onnx_model_path() "
+            "and pass path to OnnxModel constructor directly."
+        )
 
     @property
     def stride(self):

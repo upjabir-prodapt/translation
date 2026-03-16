@@ -7,29 +7,42 @@ import orjson
 from rich.console import Console
 from rich.table import Table
 
-from babeldoc.const import CACHE_FOLDER
 from babeldoc.format.pdf.document_il.utils.formular_helper import is_formulas_font
 from babeldoc.format.pdf.translation_config import TranslationConfig
+from config.constants import settings
 
-WORKING_FOLDER = Path(CACHE_FOLDER) / "working"
+WORKING_FOLDER = Path(
+    str(settings.CACHE_FOLDER)
+)  # Base folder, will search job_id subdirs
 
 
-def find_latest_il_json() -> Path | None:
+def find_latest_il_json(job_id: str | None = None) -> Path | None:
     """
-    Find the latest il_translated.json file in ~/.cache/babeldoc/ subdirectories.
+    Find the latest il_translated.json file.
+
+    Args:
+        job_id: If provided, look only in this specific job's working directory.
+                If None, search across all job directories (backward compatibility).
 
     Returns:
         Path to the most recently modified il_translated.json file, or None if not found.
     """
     base_dir = Path(WORKING_FOLDER)
-    json_files = list(base_dir.glob("*/il_translated.json"))
 
-    if not json_files:
+    if job_id:
+        # Look in specific job directory
+        json_path = base_dir / job_id / "working" / "il_translated.json"
+        if json_path.exists():
+            return json_path
         return None
-
-    # Sort by modification time (newest first)
-    json_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return json_files[0]
+    else:
+        # Search across all job directories (backward compatibility)
+        json_files = list(base_dir.glob("*/working/il_translated.json"))
+        if not json_files:
+            return None
+        # Sort by modification time (newest first)
+        json_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return json_files[0]
 
 
 def extract_fonts_from_paragraph(
@@ -176,6 +189,10 @@ def main():
         "--working-folder",
         help="Path to the working folder containing il_translated.json files",
     )
+    parser.add_argument(
+        "--job-id",
+        help="Specific job ID to analyze (instead of searching all jobs)",
+    )
 
     args = parser.parse_args()
 
@@ -194,9 +211,14 @@ def main():
             print(f"Error: File not found: {json_path}")
             return 1
     else:
-        json_path = find_latest_il_json()
+        json_path = find_latest_il_json(job_id=args.job_id)
         if not json_path:
-            print("Error: Could not find any il_translated.json file")
+            if args.job_id:
+                print(
+                    f"Error: Could not find il_translated.json for job_id: {args.job_id}"
+                )
+            else:
+                print("Error: Could not find any il_translated.json file")
             return 1
 
     print(f"Using JSON file: {json_path}")

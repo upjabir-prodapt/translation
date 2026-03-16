@@ -57,7 +57,7 @@ def close_process_pool():
             _process_pool = None
 
 
-def batched(
+def batched[T](
     iterable: Iterable[T], n: int, *, strict: bool = False
 ) -> Iterable[tuple[T, ...]]:
     """Batch an iterable into tuples of length n.

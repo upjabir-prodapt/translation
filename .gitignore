@@ -38,9 +38,6 @@ babeldoc/format/txt
 /profile.svg
 
 
-# uv
-uv.lock
-
 # Claude Code memory file
 CLAUDE.md
 /.claude

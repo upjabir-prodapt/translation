@@ -14,15 +14,12 @@ Example usage:
 """
 
 # Public API exports
-from loaders.assets import async_warmup
-from loaders.assets import get_cache_file_path
 from loaders.assets import get_cmap_data
 from loaders.assets import get_cmap_file_path
 from loaders.assets import get_doclayout_onnx_model_path
 from loaders.assets import get_font_and_metadata
 from loaders.assets import get_font_family
 from loaders.assets import get_table_detection_rapidocr_model_path
-from loaders.assets import warmup
 from loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
 from loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
 from loaders.constants import TIKTOKEN_CACHES
@@ -44,7 +41,10 @@ from loaders.models.font_families import ALL_FONT_FAMILIES as ALL_FONT_FAMILY
 # Backward compatibility - re-export from canonical sources
 from loaders.repositories.metadata_repository import CMAP_METADATA
 from loaders.repositories.metadata_repository import EMBEDDING_FONT_METADATA
-from loaders.repositories.metadata_repository import get_font_names as FONT_NAMES
+from loaders.repositories.metadata_repository import get_font_names as font_names
+from loaders.services.warmup_service import async_warmup
+from loaders.services.warmup_service import warmup
+from loaders.utils.path_helpers import get_cache_file_path
 
 __all__ = [
     # Public API
@@ -71,7 +71,7 @@ __all__ = [
     # Backward compatibility
     "EMBEDDING_FONT_METADATA",
     "CMAP_METADATA",
-    "FONT_NAMES",
+    "font_names",
     "ALL_FONT_FAMILY",
     "DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256",
     "TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256",
