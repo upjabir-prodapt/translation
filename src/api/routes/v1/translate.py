@@ -19,7 +19,7 @@ router = APIRouter()
 async def submit_translation(
     file: UploadFile = File(...),  # noqa: B008
     domain: str = Form(...),
-    lang_in: str = Form(...),
+    lang_in: str = Form("auto"),
     lang_out: str = Form(...),
     user: str = Form(...),
     department: str = Form(...),

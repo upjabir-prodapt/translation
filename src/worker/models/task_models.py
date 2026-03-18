@@ -97,6 +97,9 @@ class BabelDOCTranslationConfig(BaseModel):
         False, description="Disable same text fallback"
     )
     skip_translation: bool = Field(False, description="Skip translation (parse only)")
+    add_cover_page: bool = Field(
+        True, description="Prepend a translation summary cover page"
+    )
 
     # OCR and detection
     skip_scanned_detection: bool = Field(

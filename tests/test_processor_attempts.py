@@ -35,12 +35,51 @@ class DummyTranslationConfig:
         self.working_dir = working_dir
 
 
+class _FakeTextBox:
+    def __init__(self, text: str):
+        self._text = text
+
+    def get_text(self) -> str:
+        return self._text
+
+
+def test_detect_source_language_fails_when_page_has_more_than_two_languages(
+    monkeypatch,
+):
+    processor = JobProcessor(DummyProgressTracker())
+
+    monkeypatch.setattr(
+        "worker.services.processor.extract_pages",
+        lambda _path: [
+            [_FakeTextBox("English"), _FakeTextBox("French"), _FakeTextBox("German")]
+        ],
+    )
+    detected_languages = iter(["en", "fr", "de"])
+    monkeypatch.setattr(
+        processor,
+        "_detect_language_for_text",
+        lambda _text: next(detected_languages),
+    )
+    monkeypatch.setattr(
+        "worker.services.processor.LTTextContainer",
+        _FakeTextBox,
+    )
+
+    try:
+        processor.detect_source_language("input.pdf")
+    except ValueError as exc:
+        assert str(exc) == "Detected more than 2 languages on page 1: de, en, fr"
+    else:
+        raise AssertionError("Expected detect_source_language to fail")
+
+
 def test_translate_retries_until_quality_pass(monkeypatch, tmp_path):
     processor = JobProcessor(DummyProgressTracker())
 
     build_calls = []
+    cover_calls = []
 
-    def fake_build(config, output_dir):
+    def fake_build(config, _output_dir):
         attempt_index = config["attempt_index"]
         working_dir = tmp_path / f"iter_{attempt_index}"
         working_dir.mkdir(parents=True, exist_ok=True)
@@ -65,9 +104,22 @@ def test_translate_retries_until_quality_pass(monkeypatch, tmp_path):
     def fake_eval(**_kwargs):
         return quality_results.pop(0)
 
+    def fake_build_cover_metadata(_translation_config, attempt_config, quality_result):
+        return {
+            "selected_model": attempt_config["selected_model"],
+            "score": quality_result.final_score,
+        }
+
+    def fake_apply_cover_pages(_translation_config, attempt_result, metadata):
+        cover_calls.append((attempt_result["model_id"], metadata))
+
     monkeypatch.setattr(processor, "_build_translation_config", fake_build)
     monkeypatch.setattr(processor, "_run_single_attempt", fake_run)
     monkeypatch.setattr(processor, "_evaluate_attempt_quality", fake_eval)
+    monkeypatch.setattr(
+        processor, "_build_cover_page_metadata", fake_build_cover_metadata
+    )
+    monkeypatch.setattr(processor, "_apply_cover_pages", fake_apply_cover_pages)
 
     result = asyncio.run(
         processor.translate(
@@ -86,3 +138,4 @@ def test_translate_retries_until_quality_pass(monkeypatch, tmp_path):
     assert result["attempt_index"] == 2
     assert result["model_id"] == "model-B"
     assert len(result["attempts"]) == 2
+    assert cover_calls == [("model-B", {"selected_model": "model-B", "score": 0.9})]

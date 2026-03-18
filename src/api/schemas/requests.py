@@ -25,10 +25,10 @@ class TranslateRequest(BaseModel):
         description="Domain specialization for translation",
     )
     lang_in: str = Field(
-        ...,
+        "auto",
         min_length=2,
         max_length=5,
-        description="Source language code (e.g., 'en', 'zh')",
+        description="Source language code or 'auto' for automatic detection",
     )
     lang_out: str = Field(
         ...,
@@ -45,9 +45,12 @@ class TranslateRequest(BaseModel):
     @classmethod
     def validate_language_codes(cls, v: str) -> str:
         """Validate language codes."""
-        if not v.isalpha() or len(v) < 2 or len(v) > 5:
+        normalized = v.strip().lower()
+        if normalized == "auto":
+            return normalized
+        if not normalized.isalpha() or len(normalized) < 2 or len(normalized) > 5:
             raise ValueError("Invalid language code")
-        return v.lower()
+        return normalized
 
     @field_validator("domain")
     @classmethod

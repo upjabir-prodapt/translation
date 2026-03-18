@@ -18,14 +18,13 @@ def test_build_translation_config_filters_unrelated_keys(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "worker.services.processor.create_translator_from_model_list",
-        lambda model_list, **kwargs: "translator",
+        lambda _model_list, **_kwargs: "translator",
     )
     monkeypatch.setattr(
         "worker.services.processor.TranslationConfig",
         DummyTranslationConfig,
     )
     monkeypatch.setattr(processor, "_get_doc_layout_model", lambda: object())
-    monkeypatch.setattr(processor, "_get_table_model", lambda: object())
 
     config = {
         "input_file": str(tmp_path / "input.pdf"),
@@ -45,6 +44,7 @@ def test_build_translation_config_filters_unrelated_keys(monkeypatch, tmp_path):
 
     assert kwargs["translator"] == "translator"
     assert kwargs["term_extraction_translator"] == "translator"
+    assert kwargs["add_cover_page"] is True
     assert kwargs["custom_system_prompt"] == "Keep legal nuance"
     assert "domain" not in kwargs
     assert "user" not in kwargs

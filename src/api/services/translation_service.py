@@ -18,7 +18,6 @@ from api.utils.pdf_validator import PDFValidator
 from config.constants import settings
 from config.translation_routing import normalize_domain
 from config.translation_routing import normalize_language
-from config.translation_routing import select_model_list
 from repository.firestore_repository import FirestoreRepository
 
 logger = logging.getLogger(__name__)
@@ -80,9 +79,9 @@ class TranslationService:
                 "input_gs_uri": input_gs_uri,
                 "original_filename": metadata["filename"],
                 "file_size_bytes": metadata["size_bytes"],
-                "domain": domain,
-                "lang_in": lang_in,
-                "lang_out": lang_out,
+                "domain": config["domain"],
+                "lang_in": config["lang_in"],
+                "lang_out": config["lang_out"],
                 "user": user,
                 "department": department,
                 "config": config,
@@ -113,19 +112,14 @@ class TranslationService:
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""
         domain = normalize_domain(request.domain)
-        lang_in = normalize_language(request.lang_in)
         lang_out = normalize_language(request.lang_out)
-        model_list = select_model_list(
-            lang_in=lang_in, lang_out=lang_out, domain=domain
-        )
 
         return {
-            "lang_in": lang_in,
+            "lang_in": "auto",
             "lang_out": lang_out,
             "domain": domain,
             "user": request.user,
             "department": request.department,
-            "model_list": model_list,
         }
 
     async def _create_translation_task(

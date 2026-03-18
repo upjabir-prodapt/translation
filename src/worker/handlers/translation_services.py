@@ -7,6 +7,7 @@ from typing import Any
 
 from config.constants import settings
 from config.logging import logger
+from config.translation_routing import select_model_list
 from repository import get_bigquery_repository
 from repository import get_firestore_repository
 from worker.repository.worker_storage_repository import get_worker_storage_repository
@@ -71,6 +72,16 @@ async def _process_translation_job(
         await _storage.download_input_pdf(job_id, input_path, filename=input_filename)
         logger.debug(f"Downloaded input PDF for job {job_id}")
 
+        await progress_tracker.update(0.15, "Detecting source language")
+        config = dict(config)
+        detected_lang_in = processor.detect_source_language(input_path)
+        config["lang_in"] = detected_lang_in
+        config["model_list"] = select_model_list(
+            lang_in=detected_lang_in,
+            lang_out=config["lang_out"],
+            domain=config["domain"],
+        )
+
         # Prepare translation configuration
         output_dir = temp_base / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +93,7 @@ async def _process_translation_job(
             "lang_in": config["lang_in"],
             "lang_out": config["lang_out"],
             "model_list": config.get("model_list", []),
+            "add_cover_page": True,
             **config.get("options", {}),
         }
 
