@@ -23,6 +23,8 @@ async def submit_translation(
     lang_out: str = Form(...),
     user: str = Form(...),
     department: str = Form(...),
+    glossary_id: str | None = Form(None),
+    organization: str | None = Form(None),
     service: TranslationService = Depends(get_translation_service),  # noqa: B008
 ):
     """Submit a PDF for translation."""
@@ -33,5 +35,5 @@ async def submit_translation(
 
     # Submit translation - exceptions handled by middleware
     return await service.submit_translation(
-        file, domain, lang_in, lang_out, user, department
+        file, domain, lang_in, lang_out, user, department, glossary_id, organization
     )

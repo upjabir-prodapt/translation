@@ -111,6 +111,45 @@ class Glossary:
             self.hs_dbs = None
 
     @classmethod
+    def from_firestore_doc(cls, doc: dict, lang_out: str) -> "Glossary":
+        """
+        Load a Glossary from a Firestore glossary document.
+
+        Expected document shape:
+          {
+            "glossary_id": "GLO-001",
+            "terms": [
+              {
+                "source_term": "force majeure",
+                "translations": {"Spanish": "fuerza mayor", ...}
+              }
+            ]
+          }
+
+        Only terms that have a translation for `lang_out` are included.
+        """
+        glossary_id = doc.get("glossary_id", "unknown")
+        normalized_lang_out = lang_out.lower().replace("-", "_")
+        entries: list[GlossaryEntry] = []
+
+        for term in doc.get("terms", []):
+            source_term = term.get("source_term", "").strip()
+            if not source_term:
+                continue
+
+            translations: dict = term.get("translations", {})
+            target: str | None = None
+            for lang, translated in translations.items():
+                if lang.lower().replace("-", "_") == normalized_lang_out:
+                    target = str(translated).strip()
+                    break
+
+            if target:
+                entries.append(GlossaryEntry(source_term, target, lang_out))
+
+        return cls(name=glossary_id, entries=entries)
+
+    @classmethod
     def from_csv(cls, file_path: Path, target_lang_out: str) -> "Glossary":
         """
         Loads glossary entries from a CSV file.

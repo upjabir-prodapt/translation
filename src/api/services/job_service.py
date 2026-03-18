@@ -37,13 +37,14 @@ class JobService:
         if not job_data:
             raise JobNotFoundError(job_id)
 
+        cost_attribution = job_data.get("cost_attribution", {})
         return JobStatusResponse(
             job_id=job_data["job_id"],
             status=job_data["status"],
             progress=job_data.get("progress", 0.0),
             current_stage=job_data.get("current_stage"),
-            user=job_data["user"],
-            department=job_data["department"],
+            user=cost_attribution.get("user_id", ""),
+            department=cost_attribution.get("business_unit", ""),
             created_at=job_data["created_at"],
             updated_at=job_data["updated_at"],
             completed_at=job_data.get("completed_at"),
@@ -60,14 +61,15 @@ class JobService:
         # Convert to response format
         job_responses = []
         for job in jobs:
+            cost_attribution = job.get("cost_attribution", {})
             job_responses.append(
                 JobStatusResponse(
                     job_id=job["job_id"],
                     status=job["status"],
                     progress=job.get("progress", 0.0),
                     current_stage=job.get("current_stage"),
-                    user=job["user"],
-                    department=job["department"],
+                    user=cost_attribution.get("user_id", ""),
+                    department=cost_attribution.get("business_unit", ""),
                     created_at=job["created_at"],
                     updated_at=job["updated_at"],
                     completed_at=job.get("completed_at"),

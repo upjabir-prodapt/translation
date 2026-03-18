@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     FIRESTORE_DATABASE: str = "(default)"
     FIRESTORE_COLLECTION: str
+    FIRESTORE_GLOSSARY_COLLECTION: str = "glossaries"
 
     # -----------------------------
     # BigQuery

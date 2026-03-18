@@ -583,6 +583,10 @@ class JobProcessor:
         ):
             extra_params.pop(key, None)
 
+        # glossaries in the config dict are already Glossary objects (loaded by the
+        # handler); pop the raw field so it doesn't conflict with the typed parameter.
+        glossaries = config.get("glossaries") or extra_params.pop("glossaries", None)
+
         return TranslationConfig(
             translator=translator,
             term_extraction_translator=translator,
@@ -593,6 +597,7 @@ class JobProcessor:
             doc_layout_model=doc_layout_model,
             table_model=None,
             working_dir=working_dir,
+            glossaries=glossaries,
             **extra_params,
         )
 

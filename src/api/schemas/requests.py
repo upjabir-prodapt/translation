@@ -40,6 +40,12 @@ class TranslateRequest(BaseModel):
     department: str = Field(
         ..., min_length=1, description="Department requesting the translation"
     )
+    organization: str | None = Field(
+        None, description="Organization / business group for cost attribution"
+    )
+    glossary_id: str | None = Field(
+        None, description="Optional glossary ID from the glossary repository"
+    )
 
     @field_validator("lang_in", "lang_out")
     @classmethod

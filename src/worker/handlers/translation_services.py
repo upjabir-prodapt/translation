@@ -1,10 +1,14 @@
 """Translation task handler for Cloud Tasks."""
 
 import shutil
+from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pymupdf
+
+from babeldoc.glossary import Glossary
 from config.constants import settings
 from config.logging import logger
 from config.translation_routing import select_model_list
@@ -48,7 +52,7 @@ async def _process_translation_job(
     progress_tracker = ProgressTracker(_firestore, job_id)
     processor = JobProcessor(progress_tracker)
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     job_data: dict[str, Any] | None = None
 
     try:
@@ -86,6 +90,24 @@ async def _process_translation_job(
         output_dir = temp_base / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Load glossary from Firestore if a glossary_id was provided
+        glossaries: list[Glossary] = []
+        glossary_id = config.get("glossary_id")
+        if glossary_id:
+            await progress_tracker.update(0.18, "Loading glossary")
+            glossary_doc = await _firestore.get_glossary(glossary_id)
+            if glossary_doc:
+                glossary = Glossary.from_firestore_doc(glossary_doc, config["lang_out"])
+                glossaries = [glossary]
+                logger.info(
+                    f"Loaded glossary {glossary_id} with {len(glossary.entries)} entries "
+                    f"for lang_out={config['lang_out']}"
+                )
+            else:
+                logger.warning(
+                    f"Glossary {glossary_id} not found in Firestore, proceeding without glossary"
+                )
+
         translation_config = {
             "input_file": str(input_path),
             "output_dir": output_dir,
@@ -94,6 +116,7 @@ async def _process_translation_job(
             "lang_out": config["lang_out"],
             "model_list": config.get("model_list", []),
             "add_cover_page": True,
+            "glossaries": glossaries or None,
             **config.get("options", {}),
         }
 
@@ -117,8 +140,28 @@ async def _process_translation_job(
         logger.debug(f"Uploaded {len(output_files)} output files for job {job_id}")
 
         # Calculate processing time and update job as completed
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(UTC)
         processing_time = (completed_at - start_time).total_seconds()
+
+        attempts_list = result.get("attempts", [])
+        quality_report = result.get("quality_report") or {}
+        word_count = _count_pdf_words(input_path)
+        intent = _derive_intent(config["domain"], detected_lang_in, config["lang_out"])
+        page_count = result.get("page_count", 0)
+        total_cost_usd = round(
+            sum(
+                float(a.get("token_usage", {}).get("estimated_cost_usd", 0.0) or 0.0)
+                for a in attempts_list
+            ),
+            6,
+        )
+        total_tokens = sum(
+            int(a.get("token_usage", {}).get("total_tokens", 0) or 0)
+            for a in attempts_list
+        )
+        primary_output_uri = (
+            next(iter(output_uris.values()), None) if output_uris else None
+        )
 
         completion_data = {
             "status": "completed",
@@ -127,11 +170,25 @@ async def _process_translation_job(
             "completed_at": completed_at,
             "updated_at": completed_at,
             "processing_seconds": int(processing_time),
-            "pages_processed": result.get("page_count", 0),
-            "quality_report": result.get("quality_report"),
-            "attempts": result.get("attempts", []),
-            "token_usage": result.get("token_usage", {}),
-            "selected_model": result.get("model_id"),
+            "attempts": attempts_list,
+            "source_document.page_count": page_count,
+            "source_document.word_count": word_count,
+            "source_document.source_language": detected_lang_in,
+            "translation_config.intent": intent,
+            # TODO: track actual chunk count from BabelDOC internals; using page_count as proxy
+            "processing.chunks": page_count,
+            "processing.model_used": result.get("model_id"),
+            "processing.retry_count": max(0, len(attempts_list) - 1),
+            "result": {
+                "output_gcs_uri": primary_output_uri,
+                "confidence_score": quality_report.get("final_score"),
+                "confidence_rating": _confidence_rating(
+                    quality_report.get("final_score")
+                ),
+                "cost_usd": total_cost_usd,
+                "token_count": total_tokens,
+            },
+            "timestamps.completed_at": completed_at,
         }
 
         await _firestore.update_job(job_id, completion_data)
@@ -163,7 +220,7 @@ async def _process_translation_job(
             {
                 "status": "failed",
                 "error_message": str(e),
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(UTC),
             },
         )
 
@@ -181,6 +238,32 @@ async def _process_translation_job(
         await _cleanup_temp_files(job_id)
 
         raise
+
+
+def _count_pdf_words(path: Path) -> int:
+    """Count words in a PDF by extracting page text."""
+    try:
+        with pymupdf.open(str(path)) as doc:
+            return sum(len(page.get_text().split()) for page in doc)
+    except Exception:
+        logger.warning("Failed to count words in %s", path)
+        return 0
+
+
+def _derive_intent(domain: str, lang_in: str, lang_out: str) -> str:
+    """Derive a routing intent label from domain and language pair."""
+    return f"Intent-{domain.capitalize()}-{lang_in.upper()}-{lang_out.upper()}"
+
+
+def _confidence_rating(score: float | None) -> str | None:
+    """Map a 0–1 quality score to a human-readable confidence label."""
+    if score is None:
+        return None
+    if score >= 0.8:
+        return "High Confidence"
+    if score >= 0.6:
+        return "Medium Confidence"
+    return "Low Confidence"
 
 
 async def _write_job_analytics(
@@ -221,7 +304,9 @@ async def _write_job_analytics(
     }
 
     if job_data:
-        analytics_data["file_size_bytes"] = job_data.get("file_size_bytes")
+        analytics_data["file_size_bytes"] = job_data.get("source_document", {}).get(
+            "file_size_bytes"
+        )
         analytics_data["created_at"] = job_data.get("created_at")
 
     if status == "completed" and result:
@@ -239,6 +324,35 @@ async def _write_job_analytics(
         analytics_data["error_message"] = error_message
 
     await _bigquery.write_job_completion(analytics_data)
+
+    if status == "completed" and result:
+        cost_attribution = (job_data or {}).get("cost_attribution", {})
+        total_input_tokens = sum(
+            int(a.get("token_usage", {}).get("prompt_tokens", 0) or 0) for a in attempts
+        )
+        total_output_tokens = sum(
+            int(a.get("token_usage", {}).get("completion_tokens", 0) or 0)
+            for a in attempts
+        )
+        await _bigquery.write_cost_attribution(
+            {
+                "job_id": job_id,
+                "user_id": cost_attribution.get("user_id") or config.get("user"),
+                "business_unit": cost_attribution.get("business_unit")
+                or config.get("department"),
+                "organization": cost_attribution.get("organization"),
+                "model_id": result.get("model_id"),
+                "intent": _derive_intent(
+                    config.get("domain", ""),
+                    config.get("lang_in", ""),
+                    config.get("lang_out", ""),
+                ),
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cost_usd": round(sum(attempt_costs.values()), 6),
+                "timestamp": completed_at,
+            }
+        )
 
 
 async def _cleanup_temp_files(job_id: str) -> None:

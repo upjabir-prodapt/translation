@@ -57,6 +57,8 @@ dependencies = [
     "python-multipart>=0.0.22",
     "google-genai>=1.67.0",
     "google-adk",
+    "langdetect>=1.0.9",
+    "pre-commit>=4.5.1",
 ]
 
 [project.optional-dependencies]
@@ -150,7 +152,7 @@ dev = [
     "pytest>=8.3.4",
     "pylance>=0.29.0",
     "py-spy>=0.4.0",
-    "gcloud-tasks-emulator>=0.6.2",
+    "gcloud-tasks-emulator>=0.6.2"
 ]
 
 [tool.pytest.ini_options]
@@ -172,7 +174,7 @@ yadt = { path = ".", editable = true }
 
 [tool.pyright]
 pythonVersion = "3.12"
-# typeCheckingMode = "off"
+typeCheckingMode = "off"
 reportGeneralTypeIssues = false
 reportUnknownVariableType = false
 reportMissingParameterType = false

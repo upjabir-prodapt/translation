@@ -26,6 +26,9 @@ class BigQueryRepository:
         )
         self.dataset = dataset or settings.BIGQUERY_DATASET
         self.jobs_table = f"{self.client.project}.{self.dataset}.translation_jobs"
+        self.cost_attribution_table = (
+            f"{self.client.project}.{self.dataset}.cost_attribution"
+        )
 
     async def write_job_completion(self, job_data: dict[str, Any]) -> None:
         """Write job completion analytics."""
@@ -79,4 +82,43 @@ class BigQueryRepository:
                 f"Failed to write job analytics: {e}",
                 operation="insert",
                 path=self.jobs_table,
+            ) from e
+
+    async def write_cost_attribution(self, data: dict[str, Any]) -> None:
+        """Write cost attribution record for a completed job."""
+        try:
+            row = {
+                "job_id": data["job_id"],
+                "user_id": data.get("user_id"),
+                "business_unit": data.get("business_unit"),
+                "organization": data.get("organization"),
+                "model_id": data.get("model_id"),
+                "intent": data.get("intent"),
+                "input_tokens": int(data.get("input_tokens", 0) or 0),
+                "output_tokens": int(data.get("output_tokens", 0) or 0),
+                "cost_usd": float(data.get("cost_usd", 0.0) or 0.0),
+                "timestamp": data.get("timestamp", datetime.utcnow()).isoformat(),
+            }
+
+            row = {k: v for k, v in row.items() if v is not None}
+
+            errors = self.client.insert_rows_json(self.cost_attribution_table, [row])
+            if errors:
+                raise Exception(f"BigQuery insert errors: {errors}")
+
+            logger.info(f"Wrote cost attribution to BigQuery: {data['job_id']}")
+
+        except GoogleAPIError as e:
+            logger.error(f"BigQuery API error writing cost attribution: {e}")
+            raise StorageError(
+                f"Failed to write cost attribution: {e}",
+                operation="insert",
+                path=self.cost_attribution_table,
+            ) from e
+        except Exception as e:
+            logger.error(f"Failed to write cost attribution: {e}")
+            raise StorageError(
+                f"Failed to write cost attribution: {e}",
+                operation="insert",
+                path=self.cost_attribution_table,
             ) from e

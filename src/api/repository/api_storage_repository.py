@@ -51,33 +51,6 @@ class APIStorageRepository(StorageRepository):
             metadata={"job_id": job_id, "file_type": "input"},
         )
 
-    async def upload_glossary(
-        self, file_content: bytes, filename: str, job_id: str
-    ) -> str:
-        """
-        Upload glossary CSV to GCS for a translation job.
-
-        Args:
-            file_content: CSV file content as bytes
-            filename: Name of the glossary file
-            job_id: Job identifier
-
-        Returns:
-            GCS URI of uploaded file
-
-        Raises:
-            StorageError: If upload fails
-        """
-        blob_path = self.build_job_path(
-            job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
-        )
-        return await self.upload_file(
-            source=file_content,
-            blob_path=blob_path,
-            file_type=FileType.CSV,
-            metadata={"job_id": job_id, "file_type": "glossary"},
-        )
-
     async def get_job_files(self, job_id: str) -> list[storage.Blob]:
         """
         List all files for a specific job.

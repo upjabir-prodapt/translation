@@ -44,6 +44,8 @@ class TranslationService:
         lang_out: str,
         user: str,
         department: str,
+        glossary_id: str | None = None,
+        organization: str | None = None,
     ) -> TranslateResponse:
         """Submit a PDF for translation."""
         # Generate job ID
@@ -60,6 +62,8 @@ class TranslationService:
                 lang_out=lang_out,
                 user=user,
                 department=department,
+                glossary_id=glossary_id,
+                organization=organization,
             )
 
             # Normalize configuration
@@ -76,16 +80,39 @@ class TranslationService:
                 "job_id": job_id,
                 "status": "queued",
                 "progress": 0.0,
-                "input_gs_uri": input_gs_uri,
-                "original_filename": metadata["filename"],
-                "file_size_bytes": metadata["size_bytes"],
-                "domain": config["domain"],
-                "lang_in": config["lang_in"],
-                "lang_out": config["lang_out"],
-                "user": user,
-                "department": department,
+                "source_document": {
+                    "gcs_uri": input_gs_uri,
+                    "format": "pdf",
+                    "page_count": None,
+                    "source_language": config["lang_in"],
+                    "original_filename": metadata["filename"],
+                    "file_size_bytes": metadata["size_bytes"],
+                    "checksum": metadata["checksum"],
+                },
+                "translation_config": {
+                    "target_language": config["lang_out"],
+                    "domain": config["domain"],
+                },
+                "cost_attribution": {
+                    "user_id": user,
+                    "business_unit": department,
+                    "organization": organization,
+                },
+                "processing": {
+                    "model_used": None,
+                    "chunks": None,
+                    "retry_count": 0,
+                    # TODO: set ab_variant dynamically once A/B testing is implemented
+                    "ab_variant": "A",
+                    # TODO: set to True once DLP pipeline is integrated
+                    "dlp_applied": False,
+                },
+                "result": None,
+                "timestamps": {
+                    "submitted_at": datetime.now(UTC),
+                    "completed_at": None,
+                },
                 "config": config,
-                "checksum": metadata["checksum"],
             }
 
             await self.firestore.create_job(job_id, job_data)
@@ -120,6 +147,8 @@ class TranslationService:
             "domain": domain,
             "user": request.user,
             "department": request.department,
+            "organization": request.organization,
+            "glossary_id": request.glossary_id,
         }
 
     async def _create_translation_task(
