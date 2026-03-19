@@ -17,6 +17,7 @@ from langdetect import detect_langs
 
 from babeldoc import async_translate
 from babeldoc.docvision.doclayout import OnnxModel
+from babeldoc.format.pdf.split_manager import StructureAwareSplitStrategy
 from babeldoc.format.pdf.translation_config import TranslationConfig
 from babeldoc.format.pdf.translation_config import TranslationCoverPageMetadata
 from babeldoc.pdfminer.high_level import extract_pages
@@ -598,6 +599,10 @@ class JobProcessor:
             table_model=None,
             working_dir=working_dir,
             glossaries=glossaries,
+            split_strategy=StructureAwareSplitStrategy(
+                min_pages_to_split=10,
+                overlap_pages=2,
+            ),
             **extra_params,
         )
 

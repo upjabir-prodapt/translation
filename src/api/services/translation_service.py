@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import UploadFile
 from google.cloud import tasks_v2
 
+from api.exceptions import ValidationError
 from api.repository.api_storage_repository import APIStorageRepository
 from api.schemas.requests import TranslateRequest
 from api.schemas.responses import TranslateResponse
@@ -138,8 +139,15 @@ class TranslationService:
 
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""
-        domain = normalize_domain(request.domain)
-        lang_out = normalize_language(request.lang_out)
+        try:
+            domain = normalize_domain(request.domain)
+        except ValueError as e:
+            raise ValidationError(str(e), field="domain") from e
+
+        try:
+            lang_out = normalize_language(request.lang_out)
+        except ValueError as e:
+            raise ValidationError(str(e), field="lang_out") from e
 
         return {
             "lang_in": "auto",

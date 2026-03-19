@@ -4,7 +4,7 @@ version = "0.5.23"
 description = "Yet Another Document Translator"
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",

@@ -69,6 +69,14 @@ class StorageError(BabelDocError):
         super().__init__(message, details)
 
 
+class ConfigurationError(BabelDocError):
+    """Raised when a required configuration file or setting is missing or invalid."""
+
+    def __init__(self, message: str, config_key: str | None = None):
+        details = {"config_key": config_key} if config_key else {}
+        super().__init__(message, details)
+
+
 # HTTP Exception helpers
 def create_http_exception(
     status_code: int,

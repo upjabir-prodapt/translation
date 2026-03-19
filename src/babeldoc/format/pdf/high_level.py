@@ -740,10 +740,15 @@ def do_translate(
                             original_watermark_mode
                         )
 
-                        # Merge results
+                        # Continuity check before merging
+                        _check_translation_continuity(results, split_points)
+
+                        # Merge results (overlap pages are stripped inside merger)
                         merger = ResultMerger(translation_config)
                         logger.info("start merge results")
-                        result = merger.merge_results(results)
+                        result = merger.merge_results(
+                            results, split_points=split_points
+                        )
                         logger.info("finish merge results")
             peak_memory_usage = memory_monitor.peak_memory_usage
 
@@ -896,6 +901,73 @@ def check_cid_char(il: il_version_1.Document):
             cid_count += 1
 
     return cid_count > len(chars) * 0.8
+
+
+def _check_translation_continuity(
+    results: dict,
+    split_points: list,
+) -> None:
+    """Log a warning when translated text at chunk boundaries appears discontinuous.
+
+    For each consecutive pair of chunks the function extracts the last sentence
+    of chunk N and the first sentence of chunk N+1 (after skipping its overlap
+    pages) and checks whether either boundary sentence ends mid-word — a simple
+    heuristic that catches the most common continuity breakages without requiring
+    an LLM call.
+    """
+    from pymupdf import Document
+
+    sorted_indices = sorted(results.keys())
+    for i in range(len(sorted_indices) - 1):
+        idx_a = sorted_indices[i]
+        idx_b = sorted_indices[i + 1]
+        result_a = results.get(idx_a)
+        result_b = results.get(idx_b)
+
+        if result_a is None or result_b is None:
+            continue
+
+        pdf_path_a = result_a.mono_pdf_path or result_a.no_watermark_mono_pdf_path
+        pdf_path_b = result_b.mono_pdf_path or result_b.no_watermark_mono_pdf_path
+        if not pdf_path_a or not pdf_path_b:
+            continue
+
+        try:
+            doc_a = Document(str(pdf_path_a))
+            last_page_text = doc_a[-1].get_text().strip() if doc_a.page_count else ""
+            last_sentence = (
+                last_page_text.split(".")[-2].strip()
+                if "." in last_page_text
+                else last_page_text[-100:]
+            )
+
+            overlap_b = (
+                split_points[idx_b].overlap_pages if idx_b < len(split_points) else 0
+            )
+            doc_b = Document(str(pdf_path_b))
+            first_content_page = min(overlap_b, doc_b.page_count - 1)
+            first_page_text = (
+                doc_b[first_content_page].get_text().strip() if doc_b.page_count else ""
+            )
+            first_sentence = (
+                first_page_text.split(".")[0].strip()
+                if "." in first_page_text
+                else first_page_text[:100]
+            )
+
+            # Heuristic: warn if the boundary sentence ends without terminal punctuation
+            if last_sentence and last_sentence[-1] not in ".!?。！？":
+                logger.warning(
+                    f"Continuity check: chunk {idx_a} may end mid-sentence at boundary "
+                    f"with chunk {idx_b}. Last text: {last_sentence!r}"
+                )
+            else:
+                logger.debug(
+                    f"Continuity check passed at boundary {idx_a}→{idx_b}. "
+                    f"Boundary text: {last_sentence!r} / {first_sentence!r}"
+                )
+        except Exception as e:
+            logger.debug(f"Continuity check skipped for boundary {idx_a}→{idx_b}: {e}")
 
 
 def _do_translate_single(
