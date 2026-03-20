@@ -170,28 +170,6 @@ class FirestoreRepository:
                 collection=self.collection,
             ) from e
 
-    async def get_glossary(self, glossary_id: str) -> dict[str, Any] | None:
-        """Get a glossary document by ID from the glossary collection."""
-        try:
-            glossary_ref = self.client.collection(
-                settings.FIRESTORE_GLOSSARY_COLLECTION
-            ).document(glossary_id)
-            doc = await glossary_ref.get()
-
-            if not doc.exists:
-                return None
-
-            data = doc.to_dict()
-            return data if data is not None else None
-
-        except Exception as e:
-            logger.error(f"Failed to get glossary {glossary_id}: {e}")
-            raise FirestoreError(
-                f"Failed to get glossary: {e}",
-                document_id=glossary_id,
-                collection=settings.FIRESTORE_GLOSSARY_COLLECTION,
-            ) from e
-
     async def get_jobs_by_status(
         self, status: str, limit: int = 10
     ) -> list[dict[str, Any]]:

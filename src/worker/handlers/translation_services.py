@@ -8,7 +8,6 @@ from typing import Any
 
 import pymupdf
 
-from babeldoc.glossary import Glossary
 from config.constants import settings
 from config.logging import logger
 from config.translation_routing import select_model_list
@@ -69,7 +68,10 @@ async def _process_translation_job(
 
         # Download input PDF
         await progress_tracker.update(0.1, "Downloading input PDF")
-        input_filename = Path(str(job_data.get("original_filename", "input.pdf"))).name
+        source_doc = job_data.get("source_document", {}) or {}
+        input_filename = Path(
+            str(source_doc.get("original_filename", "input.pdf"))
+        ).name
         temp_base = Path(str(settings.TEMP_DIR)) / job_id
         input_path = temp_base / "input" / input_filename
         input_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,23 +92,11 @@ async def _process_translation_job(
         output_dir = temp_base / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load glossary from Firestore if a glossary_id was provided
-        glossaries: list[Glossary] = []
-        glossary_id = config.get("glossary_id")
-        if glossary_id:
-            await progress_tracker.update(0.18, "Loading glossary")
-            glossary_doc = await _firestore.get_glossary(glossary_id)
-            if glossary_doc:
-                glossary = Glossary.from_firestore_doc(glossary_doc, config["lang_out"])
-                glossaries = [glossary]
-                logger.info(
-                    f"Loaded glossary {glossary_id} with {len(glossary.entries)} entries "
-                    f"for lang_out={config['lang_out']}"
-                )
-            else:
-                logger.warning(
-                    f"Glossary {glossary_id} not found in Firestore, proceeding without glossary"
-                )
+        # Pass glossary filename (stored on the job document when the job was created)
+        # to the processor, which downloads the CSV from GCS and loads it.
+        glossary_filename = job_data.get("glossary_filename")
+        if glossary_filename:
+            await progress_tracker.update(0.18, "Preparing glossary")
 
         translation_config = {
             "input_file": str(input_path),
@@ -116,7 +106,7 @@ async def _process_translation_job(
             "lang_out": config["lang_out"],
             "model_list": config.get("model_list", []),
             "add_cover_page": True,
-            "glossaries": glossaries or None,
+            "glossary_filename": glossary_filename,
             **config.get("options", {}),
         }
 
@@ -163,6 +153,26 @@ async def _process_translation_job(
             next(iter(output_uris.values()), None) if output_uris else None
         )
 
+        # Determine A/B variant from the winning attempt index (0→A, 1→B, …)
+        winning_model_id = result.get("model_id")
+        ab_variant: str | None = None
+        for attempt in attempts_list:
+            if attempt.get("model_id") == winning_model_id:
+                ab_variant = chr(65 + int(attempt.get("attempt_index", 0)))
+                break
+        if ab_variant is None and attempts_list:
+            # Fallback: last attempt is the winner
+            ab_variant = chr(65 + int(attempts_list[-1].get("attempt_index", 0)))
+
+        # Chunking is applied when page_count meets the split threshold (min_pages_to_split=10)
+        # and the job was submitted with enable_chunking=True
+        min_pages_to_split = 10
+        requested_chunking = (
+            (job_data or {}).get("processing_options", {}).get("enable_chunking", True)
+        )
+        chunking_applied = requested_chunking and page_count >= min_pages_to_split
+        chunks_processed = page_count if chunking_applied else 1
+
         completion_data = {
             "status": "completed",
             "progress": 1.0,
@@ -175,10 +185,12 @@ async def _process_translation_job(
             "source_document.word_count": word_count,
             "source_document.source_language": detected_lang_in,
             "translation_config.intent": intent,
-            # TODO: track actual chunk count from BabelDOC internals; using page_count as proxy
-            "processing.chunks": page_count,
+            "processing.chunks": chunks_processed,
+            "processing.chunking_applied": chunking_applied,
             "processing.model_used": result.get("model_id"),
+            "processing.model_version": result.get("model_version"),
             "processing.retry_count": max(0, len(attempts_list) - 1),
+            "processing.ab_variant": ab_variant,
             "result": {
                 "output_gcs_uri": primary_output_uri,
                 "confidence_score": quality_report.get("final_score"),

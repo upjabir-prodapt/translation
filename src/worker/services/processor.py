@@ -20,6 +20,7 @@ from babeldoc.docvision.doclayout import OnnxModel
 from babeldoc.format.pdf.split_manager import StructureAwareSplitStrategy
 from babeldoc.format.pdf.translation_config import TranslationConfig
 from babeldoc.format.pdf.translation_config import TranslationCoverPageMetadata
+from babeldoc.glossary import Glossary
 from babeldoc.pdfminer.high_level import extract_pages
 from babeldoc.pdfminer.layout import LTTextContainer
 from babeldoc.translator.factory import create_translator
@@ -69,6 +70,34 @@ class JobProcessor:
             logger.info(f"Loaded DocLayout model from {model_path}")
         return self._doc_layout_model
 
+    async def _load_glossary_from_gcs(
+        self, job_id: str, glossary_filename: str, lang_out: str
+    ) -> list[Glossary]:
+        """Download a glossary CSV from GCS and load it as a Glossary object."""
+        from worker.repository.worker_storage_repository import (
+            get_worker_storage_repository,
+        )
+
+        storage = get_worker_storage_repository()
+        cache_folder = settings.CACHE_FOLDER or Path.cwd()
+        glossary_dir = Path(str(cache_folder)) / job_id / "glossary"
+        glossary_dir.mkdir(parents=True, exist_ok=True)
+        local_path = glossary_dir / glossary_filename
+
+        try:
+            await storage.download_glossary(job_id, local_path, glossary_filename)
+            glossary = Glossary.from_csv(local_path, lang_out)
+            logger.info(
+                f"Loaded glossary '{glossary_filename}' with {len(glossary.entries)} entries "
+                f"for lang_out={lang_out}"
+            )
+            return [glossary]
+        except Exception:
+            logger.exception(
+                f"Failed to load glossary '{glossary_filename}' from GCS for job {job_id}"
+            )
+            return []
+
     async def translate(self, config: dict[str, Any]) -> dict[str, Any]:
         """Process a translation job with iterative model fallback."""
         output_base_dir = Path(config["output_dir"])
@@ -76,6 +105,17 @@ class JobProcessor:
         model_list = config.get("model_list", [])
         if not model_list:
             raise ValueError("model_list is required for translation")
+
+        # Load glossary from GCS CSV if a filename was provided and no Glossary
+        # objects have already been injected by the caller.
+        glossary_filename = config.get("glossary_filename")
+        if glossary_filename and not config.get("glossaries"):
+            config = dict(config)
+            config["glossaries"] = await self._load_glossary_from_gcs(
+                job_id=str(config.get("job_id", "")),
+                glossary_filename=glossary_filename,
+                lang_out=str(config.get("lang_out", "")),
+            )
 
         max_attempts = min(
             int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
