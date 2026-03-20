@@ -64,7 +64,7 @@ async def root():
         "service": settings.API_TITLE,
         "version": settings.API_VERSION,
         "status": "running",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 

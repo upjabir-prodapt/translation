@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
+from datetime import UTC
 from datetime import datetime
 from typing import Any
 
@@ -186,7 +187,7 @@ class JobService:
             "error_message": f"Cancelled by user: {request.reason}"
             if request.reason
             else "Cancelled by user",
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(UTC),
         }
 
         await self.firestore.update_job(job_id, updates)

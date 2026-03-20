@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
@@ -30,15 +31,14 @@ class TaskStatus(StrEnum):
 class TranslationTaskConfig(BaseModel):
     """Translation task configuration."""
 
+    model_config = ConfigDict(frozen=True)
+
     lang_in: str = Field(..., description="Source language code")
     lang_out: str = Field(..., description="Target language code")
     domain: str | None = Field(None, description="Domain/industry context")
     options: dict[str, Any] = Field(
         default_factory=dict, description="Additional translation options"
     )
-
-    class Config:
-        frozen = True
 
 
 class BabelDOCTranslationConfig(BaseModel):
@@ -206,15 +206,13 @@ class BabelDOCTranslationConfig(BaseModel):
         """Convert to kwargs for BabelDOC TranslationConfig."""
         return self.model_dump(exclude_none=True)
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class TranslationTask(BaseModel):
     """Translation task data from Cloud Tasks."""
 
+    model_config = ConfigDict(frozen=True)
+
     job_id: str = Field(..., description="Unique job identifier")
     config: TranslationTaskConfig = Field(..., description="Translation configuration")
-
-    class Config:
-        frozen = True

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 
 
@@ -13,9 +14,6 @@ class TranslateResponse(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     status: str = Field(..., description="Initial job status (always 'queued')")
     status_url: str = Field(..., description="URL to poll for job status")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +84,6 @@ class JobDetailResponse(BaseModel):
         None, description="Translation result (populated on completion)"
     )
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 # ---------------------------------------------------------------------------
 # Existing schemas (unchanged)
@@ -108,9 +103,6 @@ class JobStatusResponse(BaseModel):
     updated_at: datetime = Field(..., description="Last update timestamp")
     completed_at: datetime | None = Field(None, description="Job completion timestamp")
     error_message: str | None = Field(None, description="Error message if job failed")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class JobListResponse(BaseModel):
@@ -142,10 +134,8 @@ class HealthResponse(BaseModel):
 class ErrorResponse(BaseModel):
     """Standard error response."""
 
-    error: dict[str, Any] = Field(..., description="Error details")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "error": {
                     "message": "Validation failed",
@@ -154,3 +144,6 @@ class ErrorResponse(BaseModel):
                 }
             }
         }
+    )
+
+    error: dict[str, Any] = Field(..., description="Error details")

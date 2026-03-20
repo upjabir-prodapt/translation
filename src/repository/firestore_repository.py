@@ -73,7 +73,7 @@ class FirestoreRepository:
         """Update a job document."""
         try:
             # Always update the timestamp
-            updates["updated_at"] = datetime.utcnow()
+            updates["updated_at"] = datetime.now(UTC)
 
             doc_ref = self._collection_ref.document(job_id)
             await doc_ref.update(updates)
@@ -152,7 +152,7 @@ class FirestoreRepository:
 
                 # Update status to processing
                 transaction.update(
-                    doc_ref, {"status": "processing", "updated_at": datetime.utcnow()}
+                    doc_ref, {"status": "processing", "updated_at": datetime.now(UTC)}
                 )
                 result = True
             if result:

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 
 
@@ -14,9 +15,6 @@ class BaseJobSchema(BaseModel):
     status: str = Field(..., description="Job status")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class FileInfo(BaseModel):
@@ -35,14 +33,15 @@ class ProgressInfo(BaseModel):
     current_stage: str | None = Field(None, description="Current stage name")
     eta_seconds: int | None = Field(None, description="Estimated time remaining")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "percentage": 0.65,
                 "current_stage": "IL Translator",
                 "eta_seconds": 120,
             }
         }
+    )
 
 
 class OutputFiles(BaseModel):

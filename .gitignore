@@ -30,6 +30,7 @@ examples/
 /make_gif.py
 /dist
 .cache
+.coverage
 .cursor/rules/_*.mdc
 /.cursor
 /xnotes

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC
 from datetime import datetime
 from typing import Any
 
@@ -45,9 +46,9 @@ class BigQueryRepository:
                 "file_size_bytes": job_data.get("file_size_bytes"),
                 "processing_seconds": job_data.get("processing_seconds"),
                 "pages_processed": job_data.get("pages_processed"),
-                "created_at": job_data.get("created_at", datetime.utcnow()),
-                "completed_at": job_data.get("completed_at", datetime.utcnow()),
-                "updated_at": datetime.utcnow(),
+                "created_at": job_data.get("created_at", datetime.now(UTC)),
+                "completed_at": job_data.get("completed_at", datetime.now(UTC)),
+                "updated_at": datetime.now(UTC),
                 "output_gs_uris": json.dumps(job_data.get("output_gs_uris", {})),
                 "quality_report": json.dumps(job_data.get("quality_report", {})),
                 "token_usage": int(job_data.get("token_usage", 0) or 0),
@@ -97,7 +98,7 @@ class BigQueryRepository:
                 "input_tokens": int(data.get("input_tokens", 0) or 0),
                 "output_tokens": int(data.get("output_tokens", 0) or 0),
                 "cost_usd": float(data.get("cost_usd", 0.0) or 0.0),
-                "timestamp": data.get("timestamp", datetime.utcnow()).isoformat(),
+                "timestamp": data.get("timestamp", datetime.now(UTC)).isoformat(),
             }
 
             row = {k: v for k, v in row.items() if v is not None}
