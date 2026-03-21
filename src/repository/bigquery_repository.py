@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,9 @@ class BigQueryRepository:
         )
         self.dataset = dataset or settings.BIGQUERY_DATASET
         self.jobs_table = f"{self.client.project}.{self.dataset}.translation_jobs"
+        self.cost_attribution_table = (
+            f"{self.client.project}.{self.dataset}.cost_attribution"
+        )
 
     async def write_job_completion(self, job_data: dict[str, Any]) -> None:
         """Write job completion analytics."""
@@ -42,9 +46,9 @@ class BigQueryRepository:
                 "file_size_bytes": job_data.get("file_size_bytes"),
                 "processing_seconds": job_data.get("processing_seconds"),
                 "pages_processed": job_data.get("pages_processed"),
-                "created_at": job_data.get("created_at", datetime.utcnow()),
-                "completed_at": job_data.get("completed_at", datetime.utcnow()),
-                "updated_at": datetime.utcnow(),
+                "created_at": job_data.get("created_at", datetime.now(UTC)),
+                "completed_at": job_data.get("completed_at", datetime.now(UTC)),
+                "updated_at": datetime.now(UTC),
                 "output_gs_uris": json.dumps(job_data.get("output_gs_uris", {})),
                 "quality_report": json.dumps(job_data.get("quality_report", {})),
                 "token_usage": int(job_data.get("token_usage", 0) or 0),
@@ -79,4 +83,43 @@ class BigQueryRepository:
                 f"Failed to write job analytics: {e}",
                 operation="insert",
                 path=self.jobs_table,
+            ) from e
+
+    async def write_cost_attribution(self, data: dict[str, Any]) -> None:
+        """Write cost attribution record for a completed job."""
+        try:
+            row = {
+                "job_id": data["job_id"],
+                "user_id": data.get("user_id"),
+                "business_unit": data.get("business_unit"),
+                "organization": data.get("organization"),
+                "model_id": data.get("model_id"),
+                "intent": data.get("intent"),
+                "input_tokens": int(data.get("input_tokens", 0) or 0),
+                "output_tokens": int(data.get("output_tokens", 0) or 0),
+                "cost_usd": float(data.get("cost_usd", 0.0) or 0.0),
+                "timestamp": data.get("timestamp", datetime.now(UTC)).isoformat(),
+            }
+
+            row = {k: v for k, v in row.items() if v is not None}
+
+            errors = self.client.insert_rows_json(self.cost_attribution_table, [row])
+            if errors:
+                raise Exception(f"BigQuery insert errors: {errors}")
+
+            logger.info(f"Wrote cost attribution to BigQuery: {data['job_id']}")
+
+        except GoogleAPIError as e:
+            logger.error(f"BigQuery API error writing cost attribution: {e}")
+            raise StorageError(
+                f"Failed to write cost attribution: {e}",
+                operation="insert",
+                path=self.cost_attribution_table,
+            ) from e
+        except Exception as e:
+            logger.error(f"Failed to write cost attribution: {e}")
+            raise StorageError(
+                f"Failed to write cost attribution: {e}",
+                operation="insert",
+                path=self.cost_attribution_table,
             ) from e

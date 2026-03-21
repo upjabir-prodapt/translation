@@ -30,12 +30,14 @@ examples/
 /make_gif.py
 /dist
 .cache
+.coverage
 .cursor/rules/_*.mdc
 /.cursor
 /xnotes
 /docs/workflow-rules.md
 babeldoc/format/txt
 /profile.svg
+assets/
 
 
 # Claude Code memory file

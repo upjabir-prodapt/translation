@@ -13,6 +13,40 @@ class PDFValidator:
     """Utility class for PDF validation."""
 
     @staticmethod
+    def validate_pdf_bytes(content: bytes, filename: str) -> tuple[bytes, dict]:
+        """Validate raw PDF bytes and return content with metadata."""
+        if len(content) >= settings.MAX_FILE_SIZE:
+            max_mb = settings.MAX_FILE_SIZE / (1024 * 1024)
+            raise ValidationError(f"File size exceeds {max_mb:.0f}MB limit", "size")
+
+        try:
+            pdf_metadata = PDFValidator.extract_pdf_metadata(content)
+
+            if pdf_metadata.get("encrypted", False):
+                raise ValidationError("Encrypted PDFs are not supported", "encrypted")
+
+            checksum = hashlib.sha256(content).hexdigest()
+
+            metadata = {
+                "filename": filename,
+                "size_bytes": len(content),
+                "content_type": "application/pdf",
+                "checksum": checksum,
+                **pdf_metadata,
+            }
+
+        except ValidationError:
+            raise
+        except fitz.FileDataError as e:
+            raise ValidationError(
+                f"Invalid or corrupted PDF file: {str(e)}", "content"
+            ) from e
+        except Exception as e:
+            raise ValidationError(f"Failed to validate PDF: {str(e)}", "content") from e
+
+        return content, metadata
+
+    @staticmethod
     async def validate_pdf_file(file: UploadFile) -> tuple[bytes, dict]:
         """Validate uploaded PDF file and return content with metadata."""
         # Read file content (limit from settings)

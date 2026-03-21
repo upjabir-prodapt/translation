@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import threading
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from babeldoc.format.pdf.split_manager import BaseSplitStrategy
@@ -133,6 +134,37 @@ class SharedContextCrossSplitPart:
                 self.total_valid_text_token_count += token_count
 
 
+@dataclass(slots=True)
+class TranslationCoverPageMetadata:
+    original_language: str
+    target_language: str
+    model_used: str
+    domain: str
+    translation_date: str
+    confidence_score: float | None
+    translated_sections: str
+    judge_model: str | None = None
+
+    def iter_rows(self) -> list[tuple[str, str]]:
+        confidence = "N/A"
+        if self.confidence_score is not None:
+            confidence = (
+                f"{self.confidence_score:.2f} ({self.confidence_score * 100:.1f}%)"
+            )
+        if self.judge_model:
+            confidence = f"{confidence} via {self.judge_model}"
+
+        return [
+            ("Original language", self.original_language or "N/A"),
+            ("Target language", self.target_language or "N/A"),
+            ("Model used", self.model_used or "N/A"),
+            ("Domain", self.domain or "N/A"),
+            ("Translation date", self.translation_date or "N/A"),
+            ("Confidence score", confidence),
+            ("Sections translated", self.translated_sections or "N/A"),
+        ]
+
+
 class TranslationConfig:
     @staticmethod
     def create_max_pages_per_part_split_strategy(max_pages_per_part: int):
@@ -200,6 +232,8 @@ class TranslationConfig:
         metadata_extra_data: str | None = None,
         term_pool_max_workers: int | None = None,
         disable_same_text_fallback: bool = False,
+        add_cover_page: bool = True,
+        cover_page_metadata: TranslationCoverPageMetadata | None = None,
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator
@@ -355,6 +389,8 @@ class TranslationConfig:
         self.skip_formula_offset_calculation = skip_formula_offset_calculation
 
         self.metadata_extra_data = metadata_extra_data
+        self.add_cover_page = add_cover_page
+        self.cover_page_metadata = cover_page_metadata
 
         self.term_extraction_token_usage: dict[str, int] = {
             "total_tokens": 0,
@@ -366,6 +402,29 @@ class TranslationConfig:
 
         if self.ocr_workaround:
             self.remove_non_formula_lines = False
+
+    def get_translated_page_numbers(self, total_pages: int) -> list[int]:
+        if total_pages <= 0:
+            return []
+        if not self.page_ranges:
+            return list(range(1, total_pages + 1))
+
+        translated_pages: set[int] = set()
+        for start, end in self.page_ranges:
+            normalized_start = max(int(start), 1)
+            normalized_end = (
+                total_pages if int(end) == -1 else min(int(end), total_pages)
+            )
+            if normalized_end < normalized_start:
+                continue
+            translated_pages.update(range(normalized_start, normalized_end + 1))
+        return sorted(translated_pages)
+
+    def get_translated_sections_summary(self, total_pages: int) -> str:
+        if total_pages <= 0:
+            return "Unknown"
+        translated_pages = self.get_translated_page_numbers(total_pages)
+        return f"{len(translated_pages)}/{total_pages} pages"
 
     def parse_pages(self, pages_str: str | None) -> list[tuple[int, int]] | None:
         """解析页码字符串，返回页码范围列表

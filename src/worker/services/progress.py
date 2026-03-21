@@ -1,5 +1,6 @@
 """Progress tracking service for worker jobs."""
 
+from datetime import UTC
 from datetime import datetime
 from typing import Any
 
@@ -46,7 +47,7 @@ class ProgressTracker:
         Returns:
             True if update was performed, False if skipped due to rate limiting
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         # Rate limiting check
         if not force and self.last_update:
@@ -87,7 +88,7 @@ class ProgressTracker:
                 {
                     "status": "failed",
                     "error_message": error_message,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(UTC),
                 },
             )
             logger.error(f"Job {self.job_id} marked as failed: {error_message}")

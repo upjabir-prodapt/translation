@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from enum import Enum
@@ -358,7 +359,7 @@ class StorageRepository:
         try:
             blob_path = self._extract_blob_path(blob_path)
             blob = self.bucket.blob(blob_path)
-            expiration = datetime.utcnow() + timedelta(seconds=expires_in)
+            expiration = datetime.now(UTC) + timedelta(seconds=expires_in)
 
             url = await asyncio.to_thread(
                 blob.generate_signed_url,

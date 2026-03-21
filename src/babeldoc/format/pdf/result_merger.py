@@ -4,6 +4,7 @@ from pathlib import Path
 from pymupdf import Document
 
 from babeldoc.format.pdf.document_il.backend.pdf_creater import PDFCreater
+from babeldoc.format.pdf.split_manager import SplitPoint
 from babeldoc.format.pdf.translation_config import TranslateResult
 from babeldoc.format.pdf.translation_config import TranslationConfig
 
@@ -17,7 +18,9 @@ class ResultMerger:
         self.config = translation_config
 
     def merge_results(
-        self, results: dict[int, TranslateResult | None]
+        self,
+        results: dict[int, TranslateResult | None],
+        split_points: list[SplitPoint] | None = None,
     ) -> TranslateResult:
         """Merge multiple translation results into one"""
         if not results:
@@ -40,7 +43,15 @@ class ResultMerger:
         results = {k: v for k, v in results.items() if v is not None}
         # Sort results by part index
         sorted_results = dict(sorted(results.items()))
-        first_result = next(iter(sorted_results.values()))
+
+        # Build per-part overlap counts so the merger can skip context pages
+        # that were only included for translation continuity.
+        overlap_pages_list: list[int] = []
+        for part_idx in sorted_results:
+            if split_points is not None and part_idx < len(split_points):
+                overlap_pages_list.append(split_points[part_idx].overlap_pages)
+            else:
+                overlap_pages_list.append(0)
 
         # Initialize paths for merged files
         merged_mono_path = None
@@ -61,6 +72,7 @@ class ResultMerger:
                     ],
                     mono_file_name,
                     tag="merged_mono",
+                    overlap_pages_list=overlap_pages_list,
                 )
         except Exception as e:
             logger.error(f"Error merging monolingual PDFs: {e}")
@@ -80,6 +92,7 @@ class ResultMerger:
                     ],
                     dual_file_name,
                     tag="merged_dual",
+                    overlap_pages_list=overlap_pages_list,
                 )
         except Exception as e:
             logger.error(f"Error merging dual-language PDFs: {e}")
@@ -104,6 +117,7 @@ class ResultMerger:
                         ],
                         mono_file_name_no_watermark,
                         tag="merged_no_watermark_mono",
+                        overlap_pages_list=overlap_pages_list,
                     )
             except Exception as e:
                 logger.error(f"Error merging no-watermark PDFs: {e}")
@@ -122,6 +136,7 @@ class ResultMerger:
                         ],
                         "merged_no_watermark_dual.pdf",
                         tag="merged_no_watermark_dual",
+                        overlap_pages_list=overlap_pages_list,
                     )
             except Exception as e:
                 logger.error(f"Error merging no-watermark PDFs: {e}")
@@ -171,18 +186,32 @@ class ResultMerger:
         return merged_result
 
     def _merge_pdfs(
-        self, pdf_paths: list[str | Path], output_name: str, tag: str
+        self,
+        pdf_paths: list[str | Path],
+        output_name: str,
+        tag: str,
+        overlap_pages_list: list[int] | None = None,
     ) -> Path:
-        """Merge multiple PDFs into one"""
+        """Merge multiple PDFs into one, skipping overlap context pages per chunk."""
         if not pdf_paths:
             return None
 
         output_path = self.config.get_output_file_path(output_name)
         merged_doc = Document()
 
-        for pdf_path in pdf_paths:
+        for idx, pdf_path in enumerate(pdf_paths):
             doc = Document(str(pdf_path))
-            merged_doc.insert_pdf(doc)
+            from_page = (
+                overlap_pages_list[idx]
+                if overlap_pages_list and idx < len(overlap_pages_list)
+                else 0
+            )
+            if from_page > 0:
+                logger.debug(
+                    f"Skipping {from_page} overlap page(s) from chunk {idx} "
+                    f"during merge."
+                )
+            merged_doc.insert_pdf(doc, from_page=from_page)
 
         merged_doc = PDFCreater.subset_fonts_in_subprocess(
             merged_doc, self.config, tag=tag

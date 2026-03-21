@@ -7,19 +7,30 @@ from typing import Any
 
 from config.constants import settings
 
-SUPPORTED_DOMAINS = {"commercial", "legal", "finance", "hr", "oprations"}
+SUPPORTED_DOMAINS = {"commercial", "legal", "finance", "hr", "operations"}
 
 
 def _load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as file:
-        return json.load(file)
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"Configuration file not found: {path}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in configuration file {path}: {e}") from e
 
 
 @lru_cache(maxsize=1)
 def get_language_mapper() -> dict[str, str]:
     """Load language aliases to canonical language codes."""
     mapper_path = settings.PROJECT_ROOT / "src" / "config" / "language_mapper.json"
-    raw_mapper = _load_json(mapper_path)
+    try:
+        raw_mapper = _load_json(mapper_path)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"language_mapper.json is missing at {mapper_path}. "
+            "Ensure the configuration file exists before starting the service."
+        ) from e
     return {
         str(k).strip().lower(): str(v).strip().lower() for k, v in raw_mapper.items()
     }

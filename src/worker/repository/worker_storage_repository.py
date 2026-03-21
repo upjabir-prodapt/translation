@@ -48,29 +48,6 @@ class WorkerStorageRepository(StorageRepository):
         logger.info(f"Downloading input PDF for job {job_id}")
         return await self.download_file(blob_path, local_path)
 
-    async def download_glossary(
-        self, job_id: str, local_path: Path, filename: str
-    ) -> Path:
-        """
-        Download glossary CSV from GCS for processing.
-
-        Args:
-            job_id: Job identifier
-            local_path: Local destination path
-            filename: Name of the glossary file
-
-        Returns:
-            Path to downloaded file
-
-        Raises:
-            StorageError: If download fails
-        """
-        blob_path = self.build_job_path(
-            job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
-        )
-        logger.info(f"Downloading glossary for job {job_id}")
-        return await self.download_file(blob_path, local_path)
-
     async def upload_output_files(
         self, job_id: str, output_files: dict[str, Path]
     ) -> dict[str, str]:
@@ -169,6 +146,29 @@ class WorkerStorageRepository(StorageRepository):
             StorageError: If listing fails
         """
         return await self.list_files(prefix=settings.GCS_ASSETS_PREFIX)
+
+    async def download_glossary(
+        self, job_id: str, local_path: Path, filename: str
+    ) -> Path:
+        """
+        Download glossary CSV from GCS for processing.
+
+        Args:
+            job_id: Job identifier
+            local_path: Local destination path
+            filename: Name of the glossary file
+
+        Returns:
+            Path to downloaded file
+
+        Raises:
+            StorageError: If download fails
+        """
+        blob_path = self.build_job_path(
+            job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
+        )
+        logger.info(f"Downloading glossary for job {job_id}")
+        return await self.download_file(blob_path, local_path)
 
     async def cleanup_job_files(self, job_id: str, keep_output: bool = True) -> int:
         """

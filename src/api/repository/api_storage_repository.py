@@ -58,15 +58,16 @@ class APIStorageRepository(StorageRepository):
         Upload glossary CSV to GCS for a translation job.
 
         Args:
-            file_content: CSV file content as bytes
-            filename: Name of the glossary file
-            job_id: Job identifier
+        file_content: CSV file content as bytes
+
+        filename: Name of the glossary file
+        job_id: Job identifier
 
         Returns:
-            GCS URI of uploaded file
+        GCS URI of uploaded file
 
         Raises:
-            StorageError: If upload fails
+        StorageError: If upload fails
         """
         blob_path = self.build_job_path(
             job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
