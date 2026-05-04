@@ -251,19 +251,16 @@ class GeminiVertexAITranslator(BaseTranslator):
             f"{self.lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
             "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "
             "do not silently soften or strengthen them.\n\n"
-            "## Example response shape (illustrative)\n"
-            '{"translation":"…entire translated text in this one string…"}\n\n'
             "# INPUT\n"
             f"{text}"
+            "# Output\n"
         )
 
     def _extract_text(self, response) -> str:
-
-        try:
-            parsed = response.parsed.get("translation", "")
-        except Exception:
-            parsed = response.text.strip()
-        return parsed
+        text = getattr(response, "text", "")
+        if text:
+            return text.strip()
+        return  ""
 
     def _update_token_count(self, response) -> None:
         usage = getattr(response, "usage_metadata", None)
@@ -285,8 +282,6 @@ class GeminiVertexAITranslator(BaseTranslator):
     def do_translate(self, text, rate_limit_params: dict = None):
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
-            response_mime_type="application/json",
-            response_json_schema=GeminiTranslationResult.model_json_schema(),
         )
         response = self.client.models.generate_content(
             model=self.model,
@@ -301,8 +296,6 @@ class GeminiVertexAITranslator(BaseTranslator):
             return None
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
-            response_mime_type="application/json",
-            response_json_schema=GeminiTranslationResult.model_json_schema(),
         )
         response = self.client.models.generate_content(
             model=self.model,
