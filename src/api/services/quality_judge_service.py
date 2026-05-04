@@ -182,9 +182,9 @@ class GoogleADKJudgeAgent:
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
         llm_scores = self._judge_with_llm(source_text, translated_text)
-        alignment = max(0.0, min(1.0, llm_scores.alignment_score))
-        omission = max(0.0, min(1.0, llm_scores.omission_score))
-        hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))
+        alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
+        omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
+        hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
         final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
         return QualityJudgeResult(
             alignment_score=alignment,
@@ -192,7 +192,7 @@ class GoogleADKJudgeAgent:
             hallucination_score=hallucination,
             final_score=final,
             pass_fail=final >= settings.QUALITY_THRESHOLD,
-            reasons=list(llm_scores.reasons),
+            reasons=list(llm_scores.get("reasons", [])),
             model=self.model,
         )
 
