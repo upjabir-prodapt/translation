@@ -63,7 +63,7 @@ class APIStorageRepository(StorageRepository):
     async def delete_job_files(self, job_id: str) -> int:
         job_prefix = f"{settings.GCS_TRANSLATION_PREFIX}/{job_id}/"
         deleted_count = await self.delete_files(job_prefix)
-        logger.info("Deleted %s files for job %s", deleted_count, job_id)
+        logger.info(f"Deleted {deleted_count} files for job {job_id}")
         return deleted_count
 
     async def generate_download_url(
