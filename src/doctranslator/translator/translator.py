@@ -14,16 +14,29 @@ from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+
 from src.doctranslator.doctranslator_exception.DocTranslatorException import ContentFilterError
 from src.doctranslator.utils.atomic_integer import AtomicInteger
 from src.config.constants import settings
 
+from google import genai
+from google.genai import types as genai_types
+
+
 logger = logging.getLogger(__name__)
 
-try:
-    from google import genai
-except ImportError:  # pragma: no cover - optional dependency
-    genai = None
+class GeminiTranslationResult(BaseModel):
+    """Structured Gemini translate response (schema-enforced JSON)."""
+    model_config = ConfigDict(extra="ignore")
+    translation: str = Field(
+        description=(
+            "The complete translated text only, following all instructions: "
+            "placeholders preserved, alignment and fidelity rules honored, no preamble or notes."
+        )
+    )
 
 
 def remove_control_characters(s):
@@ -188,19 +201,69 @@ class GeminiVertexAITranslator(BaseTranslator):
 
     def prompt(self, text: str) -> str:
         return (
-            "You are a professional,authentic machine translation engine.\n"
-            f";; Treat next line as plain text input and translate it into {self.lang_out}, "
-            "output translation ONLY. If translation is unnecessary "
-            "(e.g. proper nouns, codes, {{1}}, etc. ), return the original text. "
-            "NO explanations. NO notes. Input:\n\n"
+            "# Role\n"
+            "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
+            "# Task\n"
+            f"Translate the INPUT below from {self.lang_in} into {self.lang_out}. "
+            "The API enforces JSON: respond with one object matching the response schema—"
+            'a single key "translation" whose string value is the full translated text only.\n\n'
+            "# Output format (enforced JSON schema)\n"
+            "- The JSON object must have exactly one property: \"translation\" (string).\n"
+            "- That string is the entire model output: only the translated text—no labels such as "
+            "“Here is the translation”, no markdown fences, no explanations, notes, alternatives, or apologies.\n"
+            "- Preserve line breaks and paragraph boundaries inside \"translation\" as in the INPUT unless "
+            "the target language requires a minimal, justified adjustment.\n\n"
+            "# Alignment, coverage, and fidelity\n"
+            "A strong translation stays structurally aligned with the source, omits nothing important, "
+            "and hallucinates nothing.\n"
+            "- Alignment: keep lists, numbered steps, table rows, and paragraph chunks in clear one-to-one "
+            "correspondence with the INPUT; do not merge unrelated bullets, drop list items, scramble step order "
+            "when order matters, or turn one coherent source sentence into several unrelated sentences (or the reverse) "
+            "unless normal for "
+            f"{self.lang_out} and the logic of the source is preserved.\n"
+            "- Coverage (avoid omission): translate every substantive phrase, fact, obligation, condition, and "
+            "negation; do not skip clauses, soften requirements, or leave meaning behind.\n"
+            "- Fidelity (avoid hallucination): do not add commentary, disclaimers, hedging, examples, or details "
+            "not in the source; do not invent names, dates, numbers, or causal claims.\n\n"
+            "# Register, headings, and capitalization\n"
+            "- Match the source register (e.g. legal, technical, marketing, UI) and keep tone consistent.\n"
+            "- Preserve intentional capitalization: ALL‑CAPS headings, Title Case section titles, "
+            "sentence case, and small caps patterns—mirror them in the target language when natural; "
+            "if the target language uses different heading conventions, choose one clear style and "
+            "apply it consistently across the segment.\n"
+            "- Keep emphasis patterns implied by capitalization (e.g. acronyms vs. ordinary words) correct.\n\n"
+            "# Terminology and consistency\n"
+            "- Use one stable choice per technical term, product name pattern, and key entity within the segment.\n"
+            "- Prefer established target‑language equivalents for domain terms; do not mix synonyms casually.\n\n"
+            "# What not to translate (copy verbatim)\n"
+            "- Placeholders and markup: e.g. {{1}}, {{v2}}, tokens like <b3>…</b3>, URLs, file paths, "
+            "email addresses, hex/color codes, version strings, and pure numeric or alphanumeric codes.\n"
+            "- Widely recognized trademarks and person names when localization would be wrong; "
+            "otherwise follow normal target‑language usage.\n"
+            "- If a substring is already correct and natural in the target language (e.g. a lone symbol, "
+            "a code, or a no‑translate token), return it unchanged.\n\n"
+            "# Numbers, dates, and units\n"
+            "- Keep mathematical or identifier numbers exact unless the source clearly expects localization.\n"
+            "- For dates, currencies, and units, use the conventional form for "
+            f"{self.lang_out} when unambiguous; otherwise preserve the source form.\n\n"
+            "# Quality bar\n"
+            "- Even when you rephrase idiomatically for "
+            f"{self.lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
+            "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "
+            "do not silently soften or strengthen them.\n\n"
+            "## Example response shape (illustrative)\n"
+            '{"translation":"…entire translated text in this one string…"}\n\n'
+            "# INPUT\n"
             f"{text}"
         )
 
     def _extract_text(self, response) -> str:
-        text = getattr(response, "text", None)
-        if text:
-            return text.strip()
-        return ""
+
+        try:
+            parsed = response.parsed
+        except Exception:
+            parsed = response.text.strip()
+        return parsed
 
     def _update_token_count(self, response) -> None:
         usage = getattr(response, "usage_metadata", None)
@@ -220,10 +283,15 @@ class GeminiVertexAITranslator(BaseTranslator):
             self.cache_hit_prompt_token_count.inc(cached_tokens)
 
     def do_translate(self, text, rate_limit_params: dict = None):
+        translate_config = genai_types.GenerateContentConfig(
+            temperature=self.temperature,
+            response_mime_type="application/json",
+            response_json_schema=GeminiTranslationResult.model_json_schema(),
+        )
         response = self.client.models.generate_content(
             model=self.model,
             contents=self.prompt(text),
-            config={"temperature": self.temperature},
+            config=translate_config,
         )
         self._update_token_count(response)
         return self._extract_text(response)

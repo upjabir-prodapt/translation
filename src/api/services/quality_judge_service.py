@@ -9,13 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+
 from src.config.constants import settings
 from src.config.logging import logger
 
-try:
-    from google import genai
-except ImportError:  # pragma: no cover - optional dependency
-    genai = None
+from google import genai
+from google.genai import types as genai_types
 
 
 @dataclass(slots=True)
@@ -46,6 +48,30 @@ def _compute_alignment_score(source: str, translated: str) -> float:
     return max(0.0, min(1.0, ratio))
 
 
+class QualityJudgeLLMScores(BaseModel):
+    """Structured judge output from the model (before composite final_score)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    alignment_score: float = Field(
+        description=(
+            "Structural and segment correspondence between SOURCE and TRANSLATION: "
+            "parallel sentences/bullets, sensible splits/merges, ordering, and length balance; "
+            "0.0 worst, 1.0 best. Not the same as omission (missing meaning) or hallucination (invented content)."
+        )
+    )
+    omission_score: float = Field(
+        description="Coverage of source meaning; 0.0 worst, 1.0 best."
+    )
+    hallucination_score: float = Field(
+        description="Faithfulness without invented content; 0.0 worst, 1.0 best."
+    )
+    reasons: list[str] = Field(
+        default_factory=list,
+        description="3–8 concise English strings citing concrete evidence.",
+    )
+
+
 class GoogleADKJudgeAgent:
     """LLM judge via google-genai (Vertex); omission/hallucination scoring."""
 
@@ -59,58 +85,114 @@ class GoogleADKJudgeAgent:
                 location=settings.GOOGLE_CLOUD_LOCATION,
             )
 
-    def _judge_with_llm(self, source_text: str, translated_text: str) -> dict[str, Any]:
+    def _judge_with_llm(self, source_text: str, translated_text: str) -> QualityJudgeLLMScores:
         if self._client is None:
-            return {
-                "omission_score": _compute_alignment_score(
-                    source_text, translated_text
-                ),
-                "hallucination_score": 0.9,
-                "reasons": ["LLM judge unavailable, heuristic fallback used."],
-            }
+            h = _compute_alignment_score(source_text, translated_text)
+            return QualityJudgeLLMScores(
+                alignment_score=h,
+                omission_score=h,
+                hallucination_score=0.9,
+                reasons=["LLM judge unavailable, heuristic fallback used."],
+            )
 
         prompt = (
-            "You are a strict translation quality judge.\n"
-            "Score the translation quality between 0 and 1 for omission and hallucination.\n"
-            "Return valid JSON only with keys: omission_score, hallucination_score, reasons.\n"
-            "reasons must be a list of concise strings.\n\n"
-            f"Source:\n{source_text}\n\n"
-            f"Translation:\n{translated_text}"
+            "# Role\n"
+            "You are an expert translation quality judge. You compare SOURCE to TRANSLATION and return "
+            "three calibrated numeric scores plus short English rationales for automation and review.\n\n"
+            "# Task\n"
+            "1. Read SOURCE and TRANSLATION (any language pair; judge faithfully).\n"
+            "2. Assign alignment_score, omission_score, and hallucination_score as floats from 0.0 (worst) to 1.0 (best).\n"
+            "3. List 3–8 concise reasons in English only, each citing concrete evidence.\n"
+            "4. Output a single JSON object only—no markdown fences, preamble, or trailing text.\n\n"
+            "# Inputs\n"
+            "- SOURCE: original text.\n"
+            "- TRANSLATION: candidate output scored against SOURCE.\n\n"
+            "# What to ignore when scoring\n"
+            "- Glossary-style product or company names kept in the target language.\n"
+            "- HTML-like or markup tags; do not treat them as errors.\n"
+            "Be conservative: reserve scores near 1.0 only when the case for that dimension is clearly strong.\n\n"
+            "## alignment_score (structure and segment correspondence)\n"
+            "How well TRANSLATION mirrors the shape of SOURCE at the paragraph/list/sentence level—not word-for-word identity.\n"
+            "- 1.0: Paragraph breaks, list items, steps, and major clauses stay in sensible one-to-one correspondence; "
+            "splits or merges are justified by target-language norms and do not scramble order of ideas.\n"
+            "- Lower the score for: collapsed lists, merged unrelated bullets, reordered steps that change procedure logic, "
+            "one sentence in SOURCE ballooning into many unrelated sentences in TRANSLATION (or the reverse), "
+            "or obviously skewed length with no linguistic excuse.\n"
+            "- Do not conflate with omission_score: alignment is about correspondence of segments and flow, "
+            "not whether every fact was translated.\n\n"
+            "## omission_score (coverage of source meaning)\n"
+            "- 1.0: All substantive meaning, facts, and obligations in SOURCE appear in TRANSLATION "
+            "(order and wording may differ).\n"
+            "- Do not penalize unavoidable target-language grammar (e.g. articles, auxiliaries) with no one-to-one source token.\n\n"
+            "## hallucination_score (faithfulness; no invented content)\n"
+            "- 1.0: TRANSLATION does not assert facts, opinions, or details not supported by SOURCE. "
+            "Idiomatic phrasing that preserves meaning is fine.\n"
+            "- Lower the score for: added explanations, disclaimers, or editorial text; invented numbers, dates, or names; "
+            "contradictions of SOURCE; elaboration not implied by SOURCE.\n"
+            "- Acceptable: register shifts, cultural adaptation, splitting or merging sentences when meaning is preserved.\n"
+            "- For clearly spurious short phrases not licensed by SOURCE, reduce hallucination_score proportionally "
+            "(rough guide: about 0.05–0.15 per spurious phrase).\n\n"
+            "## reasons (language requirement)\n"
+            "- Every string in reasons must be English, even if SOURCE and TRANSLATION are not.\n"
+            "- Mention evidence for alignment, omission, and hallucination where relevant; avoid generic praise.\n\n"
+            "# Output format\n"
+            "One JSON object matching the enforced schema (same keys as the example). No markdown, no commentary.\n\n"
+            "## Example response (illustrative only)\n"
+            "{\n"
+            '  "alignment_score": 0.90,\n'
+            '  "omission_score": 0.88,\n'
+            '  "hallucination_score": 0.92,\n'
+            '  "reasons": [\n'
+            '    "List length and ordering match SOURCE; no unrelated merge of bullet points.",\n'
+            '    "All main obligations in SOURCE appear in TRANSLATION.",\n'
+            '    "No facts, dates, or names appear in TRANSLATION that are absent from SOURCE.",\n'
+            '    "Glossary names and tags were not scored as errors."\n'
+            "  ]\n"
+            "}\n\n"
+            f"SOURCE:\n{source_text}\n\n"
+            f"TRANSLATION:\n{translated_text}"
         )
-        response = self._client.models.generate_content(model=self.model, contents=prompt)
-        raw = getattr(response, "text", "") or ""
         try:
-            parsed = json.loads(raw)
-            return {
-                "omission_score": float(parsed.get("omission_score", 0.0)),
-                "hallucination_score": float(parsed.get("hallucination_score", 0.0)),
-                "reasons": parsed.get("reasons", []),
-            }
+            judge_config = genai_types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+                response_json_schema=QualityJudgeLLMScores.model_json_schema(),
+            )
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=judge_config,
+            )
+            parsed = response.parsed
+            return parsed
         except Exception as exc:
             logger.warning(f"Judge response parse failed; fallback heuristic will be used. Error: {exc}")
-            return {
-                "omission_score": _compute_alignment_score(
-                    source_text, translated_text
-                ),
-                "hallucination_score": 0.8,
-                "reasons": ["Judge parse failed, fallback heuristic used."],
-            }
+            parsed = response.text.strip()
+            try:
+                parsed = json.loads(parsed.replace("```json", "").replace("```", "").strip())
+                return parsed
+            except Exception:
+                return {
+                    "alignment_score":0.0,
+                    "omission_score":0.0,
+                    "hallucination_score":0.8,
+                    "reasons":["Judge parse failed, fallback heuristic used."],
+                }
+
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
-        alignment = _compute_alignment_score(source_text, translated_text)
         llm_scores = self._judge_with_llm(source_text, translated_text)
-        omission = max(0.0, min(1.0, float(llm_scores.get("omission_score", 0.0))))
-        hallucination = max(
-            0.0, min(1.0, float(llm_scores.get("hallucination_score", 0.0)))
-        )
-        final = (0.4 * alignment) + (0.35 * omission) + (0.25 * hallucination)
+        alignment = max(0.0, min(1.0, llm_scores.alignment_score))
+        omission = max(0.0, min(1.0, llm_scores.omission_score))
+        hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))
+        final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
         return QualityJudgeResult(
             alignment_score=alignment,
             omission_score=omission,
             hallucination_score=hallucination,
             final_score=final,
             pass_fail=final >= settings.QUALITY_THRESHOLD,
-            reasons=list(llm_scores.get("reasons", [])),
+            reasons=list(llm_scores.reasons),
             model=self.model,
         )
 

@@ -130,6 +130,7 @@ class JobProcessor:
                 "selected_model": selected_model,
                 "attempt_index": attempt_index,
             }
+            logger.info(f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}")
             translation_config = self._build_translation_config(
                 attempt_config, attempt_output_dir
             )
