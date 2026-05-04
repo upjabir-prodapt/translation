@@ -23,9 +23,11 @@ class BigQueryRepository:
     ):
         self.client = client or bigquery.Client(project=settings.GOOGLE_CLOUD_PROJECT_ID)
         self.dataset = dataset or settings.BIGQUERY_DATASET
-        self.jobs_table = f"{self.client.project}.{self.dataset}.translation_jobs"
-        self.cost_attribution_table = f"{self.client.project}.{self.dataset}.cost_attribution"
-        self.dlp_tokens_table = f"{self.client.project}.{self.dataset}.dlp_tokens"
+        self.jobs_table = f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_TABLE}"
+        self.cost_attribution_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_COST_TABLE}"
+        )
+        self.dlp_tokens_table = f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
 
     def _to_json_string(self, value: Any) -> str | None:
         if value is None:
@@ -54,7 +56,7 @@ class BigQueryRepository:
         """Insert or update a translation job row."""
         if "job_id" not in job_data:
             raise StorageError(
-                "job_id is required for translation_jobs upsert",
+                f"job_id is required for {settings.BIGQUERY_TABLE} upsert",
                 operation="upsert",
                 path=self.jobs_table,
             )

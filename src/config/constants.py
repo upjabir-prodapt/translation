@@ -134,6 +134,9 @@ class Settings(BaseSettings):
 
     BIGQUERY_DATASET: str
     BIGQUERY_LOCATION: str = "US"
+    BIGQUERY_TABLE: str = "translation_jobs"
+    BIGQUERY_COST_TABLE: str = "cost_attribution"
+    BIGQUERY_DLP_TABLE: str = "dlp_tokens"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
