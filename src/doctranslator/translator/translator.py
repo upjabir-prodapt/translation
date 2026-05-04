@@ -299,10 +299,15 @@ class GeminiVertexAITranslator(BaseTranslator):
     def do_llm_translate(self, text, rate_limit_params: dict = None):
         if text is None:
             return None
+        translate_config = genai_types.GenerateContentConfig(
+            temperature=self.temperature,
+            response_mime_type="application/json",
+            response_json_schema=GeminiTranslationResult.model_json_schema(),
+        )
         response = self.client.models.generate_content(
             model=self.model,
-            contents=text,
-            config={"temperature": self.temperature},
+            contents=self.prompt(text),
+            config=translate_config,
         )
         self._update_token_count(response)
         return self._extract_text(response)
