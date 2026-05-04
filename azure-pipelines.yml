@@ -223,4 +223,4 @@ stages:
                   --memory=4Gi \
                   --cpu=2 \
                   --cpu-boost \
-                  --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=5"
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=5,IS_LOCAL=false"
