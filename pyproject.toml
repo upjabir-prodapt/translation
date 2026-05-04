@@ -50,7 +50,6 @@ dependencies = [
     "google-cloud-secret-manager>=2.25.0",
     "python-multipart>=0.0.22",
     "google-genai>=1.67.0",
-    "google-adk>=1.10.0",
     "langdetect>=1.0.9",
 ]
 

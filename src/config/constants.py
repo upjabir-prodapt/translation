@@ -82,9 +82,9 @@ class SecretManagerSettingsSource(PydanticBaseSettingsSource):
                     secret_name,
                     version,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception(
-                    "Failed to load config from Secret Manager secret '%s'", secret_name
+                    f"Failed to load config from Secret Manager secret {secret_name} with exception {exc}"
                 )
 
     def get_field_value(self, field: object, field_name: str) -> tuple:  # type: ignore[override]

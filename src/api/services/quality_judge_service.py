@@ -17,11 +17,6 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     genai = None
 
-try:
-    from google.adk.agents import Agent
-except ImportError:  # pragma: no cover - optional dependency
-    Agent = None
-
 
 @dataclass(slots=True)
 class QualityJudgeResult:
@@ -52,20 +47,11 @@ def _compute_alignment_score(source: str, translated: str) -> float:
 
 
 class GoogleADKJudgeAgent:
-    """LLM judge facade for omission/hallucination checks."""
+    """LLM judge via google-genai (Vertex); omission/hallucination scoring."""
 
     def __init__(self, model: str | None = None):
         self.model = model or settings.JUDGE_MODEL
         self._client = None
-        self._agent = None
-        if Agent is not None:
-            self._agent = Agent(
-                name="quality_judge_agent",
-                model=self.model,
-                description=(
-                    "Judges translation quality with omission and hallucination scoring."
-                ),
-            )
         if genai is not None:
             self._client = genai.Client(
                 vertexai=True,

@@ -403,7 +403,6 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "freetype-py" },
-    { name = "google-adk" },
     { name = "google-cloud-bigquery" },
     { name = "google-cloud-error-reporting" },
     { name = "google-cloud-secret-manager" },
@@ -486,7 +485,6 @@ requires-dist = [
     { name = "cryptography", specifier = ">=36.0.0" },
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "freetype-py", specifier = ">=2.5.1" },
-    { name = "google-adk" },
     { name = "google-cloud-bigquery", specifier = ">=3.40.1" },
     { name = "google-cloud-error-reporting", specifier = ">=1.14.0" },
     { name = "google-cloud-secret-manager", specifier = ">=2.25.0" },
@@ -643,46 +641,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/df/b5/59d16470a1f0dfe8c793f9ef56fd3826093fc52b3bd96d6b9d6c26c7e27b/gitpython-3.1.46.tar.gz", hash = "sha256:400124c7d0ef4ea03f7310ac2fbf7151e09ff97f2a3288d64a440c584a29c37f", size = 215371, upload-time = "2026-01-01T15:37:32.073Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/09/e21df6aef1e1ffc0c816f0522ddc3f6dcded766c3261813131c78a704470/gitpython-3.1.46-py3-none-any.whl", hash = "sha256:79812ed143d9d25b6d176a10bb511de0f9c67b1fa641d82097b0ab90398a2058", size = 208620, upload-time = "2026-01-01T15:37:30.574Z" },
-]
-
-[[package]]
-name = "google-adk"
-version = "1.10.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absolufy-imports" },
-    { name = "anyio" },
-    { name = "authlib" },
-    { name = "click" },
-    { name = "fastapi" },
-    { name = "google-api-python-client" },
-    { name = "google-cloud-aiplatform", extra = ["agent-engines"] },
-    { name = "google-cloud-secret-manager" },
-    { name = "google-cloud-speech" },
-    { name = "google-cloud-storage" },
-    { name = "google-genai" },
-    { name = "graphviz" },
-    { name = "mcp" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-gcp-trace" },
-    { name = "opentelemetry-sdk" },
-    { name = "pydantic" },
-    { name = "python-dateutil" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "sqlalchemy" },
-    { name = "starlette" },
-    { name = "tenacity" },
-    { name = "typing-extensions" },
-    { name = "tzlocal" },
-    { name = "uvicorn" },
-    { name = "watchdog" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/1b/1f61a4e6f076d91e9354687d1ea71f61a950512c65eef4382434f7bd948d/google_adk-1.10.0.tar.gz", hash = "sha256:9a35fa6099c1a91c8b970ca98efb80640faad51d93520aa5d7c63ac08ebde8ba", size = 1620716, upload-time = "2025-08-07T16:56:12.856Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/a6/93819a03ace1457fcb8a811fcc7f3d3ee5546c69bf02078b10ea68d74fa3/google_adk-1.10.0-py3-none-any.whl", hash = "sha256:8f7a41be6cd1cc1d47319335fa799b260a683b2c56644d0a747112c5e0d017ba", size = 1841748, upload-time = "2025-08-07T16:56:11.14Z" },
 ]
 
 [[package]]
