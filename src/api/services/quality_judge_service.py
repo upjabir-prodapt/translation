@@ -86,8 +86,8 @@ class GoogleADKJudgeAgent:
                 "hallucination_score": float(parsed.get("hallucination_score", 0.0)),
                 "reasons": parsed.get("reasons", []),
             }
-        except Exception:
-            logger.warning("Judge response parse failed; fallback heuristic will be used.")
+        except Exception as exc:
+            logger.warning(f"Judge response parse failed; fallback heuristic will be used. Error: {exc}")
             return {
                 "omission_score": _compute_alignment_score(
                     source_text, translated_text
