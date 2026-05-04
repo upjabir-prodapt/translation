@@ -260,7 +260,7 @@ class GeminiVertexAITranslator(BaseTranslator):
     def _extract_text(self, response) -> str:
 
         try:
-            parsed = response.parsed
+            parsed = response.parsed.get("translation", "")
         except Exception:
             parsed = response.text.strip()
         return parsed
