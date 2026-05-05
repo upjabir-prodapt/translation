@@ -433,7 +433,7 @@ class ILCreater:
             "W",
             "W*",
         ):
-            logger.error("Unknown passthrough_per_char operation: %s", operator)
+            logger.error(f"Unknown passthrough_per_char operation: {operator}")
             return
         # logger.debug("xobj_id: %d, on_passthrough_per_char: %s ( %s )", self.xobj_id, operator, args)
         args = [self.parse_arg(arg) for arg in args]
@@ -467,8 +467,7 @@ class ILCreater:
         else:
             self.passthrough_per_char_instruction = []
             logging.error(
-                "pop_passthrough_per_char_instruction error on page: %s",
-                self.current_page.page_number,
+                f"pop_passthrough_per_char_instruction error on page: {self.current_page.page_number}"
             )
 
         if self.clip_paths_stack:
@@ -577,13 +576,13 @@ class ILCreater:
                         self.tokenizer.encode(page_text, disallowed_special=())
                     )
                 except Exception as e:
-                    logger.warning("Failed to compute token count for page: %s", e)
+                    logger.warning(f"Failed to compute token count for page: {e}")
                     token_count = 0
                 self.translation_config.shared_context_cross_split_part.add_valid_counts(
                     char_count, token_count
                 )
         except Exception as e:
-            logger.warning("Failed to accumulate page valid stats: %s", e)
+            logger.warning(f"Failed to accumulate page valid stats: {e}")
         finally:
             self._page_valid_chars_buffer = []
         self.progress.advance(1)
@@ -690,7 +689,7 @@ class ILCreater:
         )
         try:
             if xref_id is None:
-                logger.warning("xref_id is None for font %s", font_name)
+                logger.warning(f"xref_id is None for font {font_name}")
                 raise ValueError("xref_id is None for font %s", font_name)
             bbox_list, cmap = self.parse_font_xobj_id(xref_id)
             font_char_bounding_box_map = {}
@@ -737,9 +736,9 @@ class ILCreater:
                 )
         except Exception as e:
             if xref_id is None:
-                logger.error("failed to parse font xobj id None: %s", e)
+                logger.error(f"failed to parse font xobj id None: {e}")
             else:
-                logger.error("failed to parse font xobj id %d: %s", xref_id, e)
+                logger.error(f"failed to parse font xobj id {xref_id}: {e}")
         self.current_page_font_name_id_map[xref_id] = font_id
         self.current_available_fonts[font_id] = il_font_metadata
 
@@ -837,7 +836,7 @@ class ILCreater:
                         )
 
                 except Exception as e:
-                    logger.warning("Error transforming clip path: %s", e)
+                    logger.warning(f"Error transforming clip path: {e}")
 
         passthrough_per_char_instruction = " ".join(
             passthrough_per_char_instruction_parts
@@ -872,7 +871,7 @@ class ILCreater:
         try:
             self._collect_valid_char(char.get_text())
         except Exception as e:
-            logger.warning("Error collecting valid char: %s", e)
+            logger.warning(f"Error collecting valid char: {e}")
         gs = self.create_graphic_state(char.graphicstate)
         # Get font from current page or xobject
         font = None
@@ -1220,7 +1219,7 @@ class ILCreater:
         try:
             self.current_clip_paths.append((clip_path.copy(), ctm, evenodd))
         except Exception as e:
-            logger.warning("Error in on_pdf_clip_path: %s", e)
+            logger.warning(f"Error in on_pdf_clip_path: {e}")
 
     def create_il(self):
         pages = [

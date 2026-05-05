@@ -56,7 +56,7 @@ def normalize_domain(value: str) -> str:
 @lru_cache(maxsize=1)
 def get_model_selection_entries() -> list[dict[str, Any]]:
     """Load model routing entries from assets/model_selection.json."""
-    model_selection_path = Path(str(settings.CACHE_FOLDER)) / settings.MODEL_SELECTION_FILENAME
+    model_selection_path = settings.assets_root_path / settings.MODEL_SELECTION_FILENAME
     raw_data = _load_json(model_selection_path)
     raw_entries: list[dict[str, Any]]
     if isinstance(raw_data, dict):

@@ -37,7 +37,7 @@ DetectorFactory.seed = 0
 
 def _job_runtime_root(job_id: str) -> Path:
     """Per-job directory under TEMP_DIR/jobs (matches TempWorkspaceService layout)."""
-    base = settings.TEMP_DIR or Path.cwd()
+    base = settings.temp_root_path
     return base / settings.TEMP_JOBS_ROOT / str(job_id)
 
 

@@ -113,8 +113,10 @@ class JobService:
                     download_url = await self.storage.generate_signed_url(
                         blob_path=output_gcs_uri, expires_in=3600
                     )
-                except Exception:
-                    logger.warning(f"Could not generate download URL for job {job_id}")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not generate download URL for job {job_id}: {e}"
+                    )
 
             # Determine output filename
             output_filename = (

@@ -95,7 +95,7 @@ class WarmupService:
             logger.info(f"  Downloaded: {self._download_stats['downloaded']}")
             logger.info(f"  Verified: {self._download_stats['verified']}")
             if self._phase_stats:
-                logger.info("  Sync phases: %s", self._phase_stats)
+                logger.info(f"  Sync phases: {self._phase_stats}")
             logger.info("=" * 60)
 
             return WarmupResult(
@@ -133,7 +133,7 @@ class WarmupService:
                 await repo.download_asset(rel_path, local_path)
                 return True
             except Exception as e:
-                logger.warning("Failed to sync asset '%s': %s", rel_path, e)
+                logger.warning(f"Failed to sync asset '{rel_path}': {e}")
                 self._download_stats["failed"].append(rel_path)
                 return False
 
@@ -180,7 +180,7 @@ class WarmupService:
 
         await flush_pending()
         self._phase_stats[group_name] = downloaded
-        logger.info("Bulk sync phase '%s' downloaded %s file(s)", group_name, downloaded)
+        logger.info(f"Bulk sync phase '{group_name}' downloaded {downloaded} file(s)")
         return downloaded
 
     async def _bulk_sync_phased(self) -> int:
@@ -235,12 +235,11 @@ class WarmupService:
             if remaining:
                 self._phase_stats["unmatched_skipped"] = len(remaining)
                 logger.info(
-                    "Bulk sync skipped %s unmatched file(s) outside phase prefixes",
-                    len(remaining),
+                    f"Bulk sync skipped {len(remaining)} unmatched file(s) outside phase prefixes"
                 )
 
             self._download_stats["downloaded"] += total_downloaded
-            logger.info("Bulk sync complete (%s files downloaded)", total_downloaded)
+            logger.info(f"Bulk sync complete ({total_downloaded} files downloaded)")
             return total_downloaded
 
         except Exception as e:

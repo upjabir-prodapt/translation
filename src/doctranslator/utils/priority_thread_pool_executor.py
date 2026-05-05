@@ -227,13 +227,11 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
             _threads_queues[t] = self._work_queue
 
     def shutdown(self, wait=True, *, cancel_futures=False):
-        logger.debug("Shutting down executor %s", self._thread_name_prefix or self)
+        logger.debug(f"Shutting down executor {self._thread_name_prefix or self}")
         if wait:
-            logger.debug(
-                "Waiting for all tasks done %s", self._thread_name_prefix or self
-            )
+            logger.debug(f"Waiting for all tasks done {self._thread_name_prefix or self}")
             self._work_queue.join()
-            logger.debug("All tasks done %s", self._thread_name_prefix or self)
+            logger.debug(f"All tasks done {self._thread_name_prefix or self}")
 
         with self._shutdown_lock:
             self._shutdown = True
@@ -253,12 +251,12 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
             self._work_queue.put(None)
         if wait:
             logger.debug(
-                "Waiting for all thread done %s", self._thread_name_prefix or self
+                f"Waiting for all thread done {self._thread_name_prefix or self}"
             )
             for t in self._threads:
                 self._work_queue.put(None)
                 t.join()
-        logger.debug("shutdown finish %s", self._thread_name_prefix or self)
+        logger.debug(f"shutdown finish {self._thread_name_prefix or self}")
 
     def __del__(self):
         for f in self._all_future:
@@ -266,4 +264,4 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
                 try:
                     f.result()
                 except Exception as e:
-                    logger.warning("Exception in future %s: %s", f, e, exc_info=True)
+                    logger.warning(f"Exception in future {f}: {e}", exc_info=True)

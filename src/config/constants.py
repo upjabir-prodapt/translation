@@ -234,7 +234,20 @@ class Settings(BaseSettings):
     PROJECT_ROOT: Path = find_project_root(Path(__file__).resolve())
     ASSETS_ROOT: str | None = None
     TEMP_DIR: Path | None = None
-    CACHE_FOLDER: Path | None = None
+
+    @property
+    def assets_root_path(self) -> Path:
+        """Canonical root for persisted asset cache files."""
+        return Path(self.ASSETS_ROOT) if self.ASSETS_ROOT else self.PROJECT_ROOT / "assets"
+
+    @property
+    def temp_root_path(self) -> Path:
+        """Canonical root for runtime temporary/job execution files."""
+        if self.TEMP_DIR:
+            return Path(self.TEMP_DIR)
+        if self.IS_LOCAL:
+            return self.PROJECT_ROOT / "tmp"
+        return Path("/tmp")
 
     # --------------------------------------------------
     # Post Initialization
@@ -242,12 +255,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def setup_directories(self) -> "Settings":
-        cache_folder = (
-            Path(self.ASSETS_ROOT) if self.ASSETS_ROOT else self.PROJECT_ROOT / "assets"
-        )
+        cache_folder = self.assets_root_path
         cache_folder.mkdir(parents=True, exist_ok=True)
 
-        temp_dir = cache_folder / "tmp"
+        temp_dir = self.temp_root_path
         temp_dir.mkdir(parents=True, exist_ok=True)
         for subdir in (
             self.MODELS_DIR,
@@ -260,8 +271,6 @@ class Settings(BaseSettings):
             (cache_folder / subdir).mkdir(parents=True, exist_ok=True)
 
         self.TEMP_DIR = temp_dir
-        self.CACHE_FOLDER = cache_folder
-        self.ASSETS_ROOT = str(cache_folder)
 
         self._log_config_sources()
         return self
@@ -274,7 +283,7 @@ class Settings(BaseSettings):
         """Create a temporary working directory."""
         import tempfile
 
-        return Path(tempfile.mkdtemp(dir=self.TEMP_DIR))
+        return Path(tempfile.mkdtemp(dir=self.temp_root_path))
 
     def _log_config_sources(self) -> None:
         """Log a startup summary of where configuration was loaded from."""
@@ -290,13 +299,9 @@ class Settings(BaseSettings):
                 else " (no secret name provided)"
             )
         logger.info(
-            "Settings loaded | IS_LOCAL=%s | source=%s%s"
-            " | project=%s | location=%s",
-            self.IS_LOCAL,
-            source,
-            secret_info,
-            self.GOOGLE_CLOUD_PROJECT_ID,
-            self.GOOGLE_CLOUD_LOCATION,
+            f"Settings loaded | IS_LOCAL={self.IS_LOCAL} | source={source}{secret_info}"
+            f" | project={self.GOOGLE_CLOUD_PROJECT_ID} | location={self.GOOGLE_CLOUD_LOCATION}"
+            f" | assets_root={self.assets_root_path} | temp_root={self.temp_root_path}"
         )
 
     # --------------------------------------------------

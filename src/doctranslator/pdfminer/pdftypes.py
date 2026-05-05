@@ -203,7 +203,7 @@ def dict_value(x: object) -> dict[Any, Any]:
     x = resolve1(x)
     if not isinstance(x, dict):
         if settings.STRICT:
-            logger.error("PDFTypeError : Dict required: %r", x)
+            logger.error(f"PDFTypeError : Dict required: {x!r}")
             raise PDFTypeError("Dict required: %r" % x)
         return {}
     return x

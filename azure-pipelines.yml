@@ -45,6 +45,14 @@ variables:
     value: '$(Build.SourcesDirectory)'
   - name: APP_CONFIG_SECRET_NAME
     value: 'translation-service-env'
+  - name: APP_CONFIG_SECRET_VERSION
+    value: 'latest'
+  - name: GCS_BUCKET_NAME
+    value: 'aicoesandox-vxai-translation-app-001'
+  - name: GCS_ASSETS_DIR
+    value: 'assets'
+  - name: ASSETS_MOUNT_PATH
+    value: '/mnt/assets-cache'
 
   - name: PYTHON_VERSION
     value: '3.12'
@@ -212,15 +220,17 @@ stages:
                 gcloud auth login --cred-file="$(GOOGLE_APPLICATION_CREDENTIALS)"
                 gcloud config set project "$(PROJECT_ID)"
 
-                gcloud run deploy "$(SERVICE_NAME)" \
+                gcloud beta run deploy "$(SERVICE_NAME)" \
                   --quiet \
                   --image "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" \
                   --platform=managed \
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
+                  --min-instances=1 \
                   --port=8000 \
                   --timeout=600 \
-                  --memory=4Gi \
+                  --memory=8Gi \
                   --cpu=2 \
                   --cpu-boost \
-                  --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=5,IS_LOCAL=false"
+                  --add-volume mount-path=$(ASSETS_MOUNT_PATH),type=cloud-storage,bucket=$(GCS_BUCKET_NAME),readonly=false,mount-options="only-dir=$(GCS_ASSETS_DIR)" \
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=$(APP_CONFIG_SECRET_VERSION),IS_LOCAL=false,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp"

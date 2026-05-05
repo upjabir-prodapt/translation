@@ -171,7 +171,8 @@ class GoogleADKJudgeAgent:
             try:
                 parsed = json.loads(parsed.replace("```json", "").replace("```", "").strip())
                 return parsed
-            except Exception:
+            except Exception as parse_error:
+                logger.warning(f"Judge fallback JSON parse failed: {parse_error}")
                 return {
                     "alignment_score":0.0,
                     "omission_score":0.0,
@@ -206,7 +207,7 @@ def extract_attempt_text(working_dir: Path) -> tuple[str, str]:
     try:
         data = json.loads(tracking_path.read_text(encoding="utf-8"))
     except Exception:
-        logger.warning(f"Failed to parse tracking file at {tracking_path}")
+        logger.exception(f"Failed to parse tracking file at {tracking_path}")
         return "", ""
 
     source: list[str] = []

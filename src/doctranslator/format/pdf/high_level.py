@@ -204,7 +204,7 @@ def translator_supports_llm(translator) -> bool:
     except NotImplementedError:
         return False
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.debug("translator %s failed llm detection: %s", translator, exc)
+        logger.debug(f"translator {translator} failed llm detection: {exc}")
         return False
 
 
@@ -402,16 +402,14 @@ def _apply_dlp_if_enabled(
     )
     translation_config.dlp_provider = dlp_result.dlp_provider
     if not dlp_result.applied:
-        logger.debug("DLP found no eligible IL text during stage '%s'", stage_label)
+        logger.debug(f"DLP found no eligible IL text during stage '{stage_label}'")
         return
     if allow_repeat:
         if dlp_result.token_rows:
             translation_config.dlp_token_rows.extend(dlp_result.token_rows)
             translation_config.dlp_token_counter += len(dlp_result.token_rows)
         logger.info(
-            "Applied optional post-translation DLP during stage '%s' on %s chunks",
-            stage_label,
-            dlp_result.chunk_count,
+            f"Applied optional post-translation DLP during stage '{stage_label}' on {dlp_result.chunk_count} chunks"
         )
         return
 
@@ -421,10 +419,7 @@ def _apply_dlp_if_enabled(
     translation_config.dlp_chunk_count = dlp_result.chunk_count
     translation_config.dlp_token_counter += len(dlp_result.token_rows)
     logger.info(
-        "Applied IL DLP during stage '%s' on %s chunks with %s tokens",
-        stage_label,
-        dlp_result.chunk_count,
-        len(dlp_result.token_rows),
+        f"Applied IL DLP during stage '{stage_label}' on {dlp_result.chunk_count} chunks with {len(dlp_result.token_rows)} tokens"
     )
 
 
@@ -442,7 +437,7 @@ def _unmask_before_pdf_if_enabled(
         docs=docs,
         token_rows=translation_config.dlp_token_rows,
     )
-    logger.info("Restored %s masked values before PDF generation", replaced_count)
+    logger.info(f"Restored {replaced_count} masked values before PDF generation")
 
 
 async def async_translate(translation_config: TranslationConfig):
@@ -874,7 +869,7 @@ def do_translate(
                 token_total if isinstance(token_total, int) else 0
             )
         except Exception as e:
-            logger.warning("Failed to populate valid text statistics: %s", e)
+            logger.warning(f"Failed to populate valid text statistics: {e}")
             try:
                 result.total_valid_character_count = 0
                 result.total_valid_text_token_count = 0

@@ -10,6 +10,7 @@ from src.doctranslator.format.pdf.document_il import PdfFont
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.loaders import assets
+from src.loaders.exceptions import MetadataNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,11 @@ class FontMapper:
         for font_file_name in self.font_file_names:
             if font_file_name in self.fontid2fontpath:
                 continue
-            font_path, font_metadata = assets.get_font_and_metadata(font_file_name)
+            try:
+                font_path, font_metadata = assets.get_font_and_metadata(font_file_name)
+            except MetadataNotFoundError as exc:
+                logger.warning(f"Skipping unavailable font metadata for {font_file_name}: {exc}")
+                continue
             pymupdf_font = pymupdf.Font(fontfile=str(font_path))
             pymupdf_font.has_glyph = functools.lru_cache(maxsize=10240, typed=True)(
                 pymupdf_font.has_glyph,
@@ -88,11 +93,24 @@ class FontMapper:
             self.fonts[font_file_name].descent_fontmap = descent
             self.fonts[font_file_name].encoding_length = encoding_length
 
-        self.normal_font_ids: list[str] = font_family.normal
-        self.script_font_ids: list[str] = font_family.script
-        self.fallback_font_ids: list[str] = font_family.fallback
-        self.base_font_ids: list[str] = font_family.base
-        self.fontid2fontpath["base"] = self.fontid2fontpath[font_family.base[0]]
+        if not self.fonts:
+            raise RuntimeError("No usable fonts loaded from metadata/cache")
+
+        loaded_font_ids = set(self.fontid2fontpath.keys())
+        self.normal_font_ids = [font_id for font_id in font_family.normal if font_id in loaded_font_ids]
+        self.script_font_ids = [font_id for font_id in font_family.script if font_id in loaded_font_ids]
+        self.fallback_font_ids = [font_id for font_id in font_family.fallback if font_id in loaded_font_ids]
+        self.base_font_ids = [font_id for font_id in font_family.base if font_id in loaded_font_ids]
+
+        if not self.normal_font_ids:
+            self.normal_font_ids = list(loaded_font_ids)
+        if not self.fallback_font_ids:
+            self.fallback_font_ids = list(loaded_font_ids)
+        if not self.base_font_ids:
+            # Use first loaded font as base when configured base font is unavailable.
+            self.base_font_ids = [next(iter(loaded_font_ids))]
+
+        self.fontid2fontpath["base"] = self.fontid2fontpath[self.base_font_ids[0]]
 
         self.fontid2font: dict[str, pymupdf.Font] = {
             f.font_id: f for f in self.fonts.values()

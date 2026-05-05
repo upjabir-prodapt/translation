@@ -8,10 +8,9 @@ from src.config.constants import settings
 def get_cache_root() -> Path:
     """Get the root cache directory.
 
-    Respects BABELDOC_CACHE_DIR environment variable,
-    otherwise defaults to project_root/assets.
+    Returns the canonical asset cache root from settings.
     """
-    return settings.CACHE_FOLDER or settings.PROJECT_ROOT / "assets"
+    return settings.assets_root_path
 
 
 def _assert_under_cache_root(path: Path) -> None:

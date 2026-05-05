@@ -11,9 +11,8 @@ from src.doctranslator.format.pdf.document_il.utils.formular_helper import is_fo
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.config.constants import settings
 
-WORKING_FOLDER = Path(
-    str(settings.CACHE_FOLDER)
-)  # Base folder, will search job_id subdirs
+# Base folder containing per-job working directories.
+WORKING_FOLDER = settings.temp_root_path / settings.TEMP_JOBS_ROOT
 
 
 def find_latest_il_json(job_id: str | None = None) -> Path | None:

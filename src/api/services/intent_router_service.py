@@ -88,7 +88,8 @@ class IntentRouterService:
             return self._config
         try:
             self._config = self.sync_model_selection_cache()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to refresh model selection cache in memory: {e}")
             self._config = self._load_from_local_fallback()
         self._last_loaded = now
         return self._config or {}

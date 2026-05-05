@@ -25,7 +25,7 @@ class TranslationStorageRepository(StorageRepository):
         blob_path = self.build_job_path(
             job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
         )
-        logger.info("Downloading input PDF for job %s", job_id)
+        logger.info(f"Downloading input PDF for job {job_id}")
         return await self.download_file(blob_path, local_path)
 
     async def upload_output_files(
@@ -34,7 +34,7 @@ class TranslationStorageRepository(StorageRepository):
         output_uris = {}
         for file_type, file_path in output_files.items():
             if not file_path.exists():
-                logger.warning("Output file %s does not exist", file_path)
+                logger.warning(f"Output file {file_path} does not exist")
                 continue
 
             blob_path = self.build_job_path(
@@ -51,23 +51,23 @@ class TranslationStorageRepository(StorageRepository):
                     metadata={"job_id": job_id, "output_type": file_type},
                 )
                 output_uris[file_type] = gcs_uri
-                logger.info("Uploaded %s PDF for job %s", file_type, job_id)
+                logger.info(f"Uploaded {file_type} PDF for job {job_id}")
             except StorageError:
-                logger.exception("Failed to upload %s for job %s", file_type, job_id)
+                logger.exception(f"Failed to upload {file_type} for job {job_id}")
                 raise
 
         return output_uris
 
     async def download_asset(self, blob_path: str, local_path: Path) -> Path:
         full_blob_path = f"{settings.GCS_ASSETS_PREFIX}/{blob_path}"
-        logger.info("Downloading asset: %s", blob_path)
+        logger.info(f"Downloading asset: {blob_path}")
         return await self.download_file(full_blob_path, local_path)
 
     def download_asset_sync(self, blob_path: str, local_path: Path) -> Path:
         from src.repository.storage_repository import download_blob_sync
 
         full_blob_path = f"{settings.GCS_ASSETS_PREFIX}/{blob_path}"
-        logger.info("Downloading asset (sync): %s", blob_path)
+        logger.info(f"Downloading asset (sync): {blob_path}")
         return download_blob_sync(
             blob_path=full_blob_path,
             local_path=local_path,
@@ -84,7 +84,7 @@ class TranslationStorageRepository(StorageRepository):
         blob_path = self.build_job_path(
             job_id=job_id, folder=settings.GCS_INPUT_FOLDER, filename=filename
         )
-        logger.info("Downloading glossary for job %s", job_id)
+        logger.info(f"Downloading glossary for job {job_id}")
         return await self.download_file(blob_path, local_path)
 
     async def cleanup_job_files(self, job_id: str, keep_output: bool = True) -> int:
@@ -94,11 +94,11 @@ class TranslationStorageRepository(StorageRepository):
                 + "/"
             )
             deleted_count = await self.delete_files(input_prefix)
-            logger.info("Cleaned up %s input files for job %s", deleted_count, job_id)
+            logger.info(f"Cleaned up {deleted_count} input files for job {job_id}")
         else:
             job_prefix = f"{settings.GCS_TRANSLATION_PREFIX}/{job_id}/"
             deleted_count = await self.delete_files(job_prefix)
-            logger.info("Cleaned up all %s files for job %s", deleted_count, job_id)
+            logger.info(f"Cleaned up all {deleted_count} files for job {job_id}")
 
         return deleted_count
 

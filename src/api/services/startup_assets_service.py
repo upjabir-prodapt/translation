@@ -42,7 +42,6 @@ class StartupAssetsService:
             settings.CMAP_DIR,
             settings.TIKTOKEN_DIR,
             settings.GLOSSARIES_DIR,
-            "tmp",
         ):
             get_subdir_path(subdir)
 

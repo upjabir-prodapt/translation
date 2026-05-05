@@ -78,7 +78,10 @@ class GlossaryService:
     ) -> list[Glossary]:
         try:
             data = self._download_glossary_json(domain, refresh=False)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Failed to load glossary for domain '{domain}' and target '{target_language_name}': {e}"
+            )
             return []
 
         entries: list[GlossaryEntry] = []

@@ -307,9 +307,8 @@ class TranslationConfig:
 
         if working_dir is None:
             if debug:
-                working_dir = (
-                    Path(str(settings.CACHE_FOLDER)) / "working" / Path(input_file).stem
-                )
+                base_temp_dir = settings.temp_root_path
+                working_dir = base_temp_dir / "working" / Path(input_file).stem
                 self._is_temp_dir = False
             else:
                 working_dir = tempfile.mkdtemp()

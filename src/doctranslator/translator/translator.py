@@ -28,17 +28,6 @@ from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
-class GeminiTranslationResult(BaseModel):
-    """Structured Gemini translate response (schema-enforced JSON)."""
-    model_config = ConfigDict(extra="ignore")
-    translation: str = Field(
-        description=(
-            "The complete translated text only, following all instructions: "
-            "placeholders preserved, alignment and fidelity rules honored, no preamble or notes."
-        )
-    )
-
-
 def remove_control_characters(s):
     return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
 

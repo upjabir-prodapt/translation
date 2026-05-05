@@ -31,7 +31,7 @@ class TempWorkspaceService:
     """Manage isolated temporary directories per job."""
 
     def __init__(self, base_dir: Path | None = None):
-        root = base_dir or (settings.TEMP_DIR / settings.TEMP_JOBS_ROOT)
+        root = base_dir or (settings.temp_root_path / settings.TEMP_JOBS_ROOT)
         root.mkdir(parents=True, exist_ok=True)
         self._root = root
 
