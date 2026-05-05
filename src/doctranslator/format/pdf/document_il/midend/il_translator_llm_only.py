@@ -720,12 +720,40 @@ class ILTranslatorLLMOnly:
             parsed_output = json.loads(llm_output)
 
             if isinstance(parsed_output, dict):
-                if parsed_output.get("output", parsed_output.get("input", False)):
+                # Accept common wrapped response shapes from LLM providers.
+                list_candidates = (
+                    "translations",
+                    "results",
+                    "items",
+                    "data",
+                    "outputs",
+                )
+                list_value = None
+                for key in list_candidates:
+                    value = parsed_output.get(key)
+                    if isinstance(value, list):
+                        list_value = value
+                        break
+
+                if list_value is not None:
+                    parsed_output = list_value
+                elif parsed_output.get("output", parsed_output.get("input", False)):
                     parsed_output = [parsed_output]
                 else:
-                    raise ValueError(
-                        "LLM output JSON object is missing expected translation fields"
-                    )
+                    # Handle single-item wrappers where output is nested.
+                    for key in ("translation", "translated_text", "text"):
+                        value = parsed_output.get(key)
+                        if isinstance(value, str):
+                            if len(inputs) == 1:
+                                parsed_output = [{"id": 0, "output": value}]
+                                break
+                            raise ValueError(
+                                "LLM output contains a single translation string while multiple inputs were provided"
+                            )
+                    else:
+                        raise ValueError(
+                            "LLM output JSON object is missing expected translation fields"
+                        )
             elif isinstance(parsed_output, str):
                 # Some providers may return a quoted string for single-item batches.
                 if len(inputs) == 1:

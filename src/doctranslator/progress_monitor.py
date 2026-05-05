@@ -53,6 +53,19 @@ class ProgressMonitor:
         self.cancel_event = cancel_event
         self.loop = loop
         self.disable = False
+        if (
+            not self.disable
+            and not (self.parent_monitor and self.parent_monitor.disable)
+            and self.parent_monitor is None
+        ):
+            names = [n for n, _ in stages]
+            summary = ", ".join(names)
+            max_len = 600
+            if len(summary) > max_len:
+                summary = summary[:max_len] + "..."
+            logger.info(
+                f"Translation pipeline stages ({len(stages)}): {summary}",
+            )
         if finish_event and not loop:
             raise ValueError("finish_event requires a loop")
         if self.progress_change_callback:
@@ -109,6 +122,9 @@ class ProgressMonitor:
 
     def stage_start(self, stage_name: str, total: int):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
+            logger.debug(
+                f"Pipeline stage skipped (monitor disabled): stage={stage_name} units={total}",
+            )
             return DummyTranslationStage(stage_name, total, self, 0)
         stage = self.stage[stage_name]
         stage.run_time += 1
@@ -116,6 +132,11 @@ class ProgressMonitor:
         stage.display_name = f"{stage_name}" if stage.run_time > 1 else stage_name
         stage.current = 0
         stage.total = total
+        logger.info(
+            f"Pipeline stage start: stage={stage.display_name} units={total} "
+            f"part={self.part_index + 1}/{self.total_parts} run={stage.run_time} "
+            f"weight={stage.weight:.4f}",
+        )
         if self.progress_change_callback:
             self.progress_change_callback(
                 type="progress_start",
@@ -134,7 +155,7 @@ class ProgressMonitor:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        logger.debug("ProgressMonitor __exit__")
+        logger.debug(f"ProgressMonitor __exit__")
 
     def on_finish(self):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
@@ -232,6 +253,12 @@ class ProgressMonitor:
                 part_index=self.part_index + 1,
                 total_parts=self.total_parts,
             )
+            _overall = self.calculate_current_progress(stage)
+            logger.debug(
+                f"Pipeline stage progress: stage={stage.display_name} "
+                f"current={stage.current}/{stage.total} overall={_overall:.2f}% "
+                f"part={self.part_index + 1}/{self.total_parts}",
+            )
             self.last_report_time = time.time()
 
     def translate_done(self, translate_result):
@@ -255,7 +282,7 @@ class ProgressMonitor:
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             return
         if self.cancel_event:
-            logger.info("Translation canceled")
+            logger.info(f"Translation canceled")
             self.cancel_event.set()
 
 
@@ -276,20 +303,43 @@ class TranslationStage:
         self.run_time = 0
         self.weight = weight
         self.lock = lock
+        self._entered_at: float | None = None
 
     def __enter__(self):
+        self._entered_at = time.monotonic()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed_s = 0.0
+        if self._entered_at is not None:
+            elapsed_s = time.monotonic() - self._entered_at
+        part_i = self.pm.part_index + 1
+        part_n = self.pm.total_parts
+        short_completion = False
         with self.lock:
             diff = self.total - self.current
-            if diff > 0:
-                logger.info(
-                    f"Stage {self.name} completed with {self.current}/{self.total} items"
-                )
+            short_completion = diff > 0
             self.pm.stage_update(self, diff)
             self.current = self.total
             self.pm.stage_done(self)
+
+        if exc_type is not None:
+            logger.warning(
+                f"Pipeline stage finished with exception: stage={self.display_name} "
+                f"part={part_i}/{part_n} duration_s={elapsed_s:.3f} units={self.total} "
+                f"exc_type={exc_type.__name__} detail={exc_val}",
+            )
+        elif short_completion:
+            logger.warning(
+                f"Pipeline stage finished: stage={self.display_name} part={part_i}/{part_n} "
+                f"outcome=short_advance duration_s={elapsed_s:.3f} units={self.total} "
+                f"(progress backfilled to 100% for monitor)",
+            )
+        else:
+            logger.info(
+                f"Pipeline stage finished: stage={self.display_name} part={part_i}/{part_n} "
+                f"outcome=complete duration_s={elapsed_s:.3f} units={self.total}",
+            )
 
     def advance(self, n: int = 1):
         with self.lock:

@@ -25,6 +25,23 @@ from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
+_MAX_CHARS_LOG_PREVIEW = 120
+
+
+def _usage_metadata_summary(response) -> str:
+    usage = getattr(response, "usage_metadata", None)
+    if not usage:
+        return "usage=unavailable"
+    pt = getattr(usage, "prompt_token_count", None)
+    ct = getattr(usage, "candidates_token_count", None)
+    tt = getattr(usage, "total_token_count", None)
+    ch = getattr(usage, "cached_content_token_count", None)
+    return (
+        f"prompt_tokens={pt} completion_tokens={ct} total_tokens={tt} "
+        f"cached_tokens={ch}"
+    )
+
+
 def remove_control_characters(s):
     return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
 
@@ -114,10 +131,21 @@ class BaseTranslator(ABC):
         :return: translated text
         """
         self.translate_call_count += 1
+        in_len = len(text) if isinstance(text, str) else 0
+        rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
+        logger.debug(
+            f"llm_translate: translator={self.name} call={self.translate_call_count} "
+            f"chars_in={in_len} rate_limit_param_keys={rl_keys}",
+        )
         _translate_rate_limiter.wait()
         return self.do_llm_translate(text, rate_limit_params)
 
     async def llm_translate_async(self, text, rate_limit_params: dict = None):
+        in_len = len(text) if isinstance(text, str) else 0
+        logger.debug(
+            f"llm_translate_async: translator={self.name} scheduling thread "
+            f"chars_in={in_len}",
+        )
         return await asyncio.to_thread(self.llm_translate, text, rate_limit_params)
 
     @abstractmethod
@@ -193,15 +221,12 @@ class GeminiVertexAITranslator(BaseTranslator):
             "# Role\n"
             "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
             "# Task\n"
-            f"Translate the INPUT below from {self.lang_in} into {self.lang_out}. "
-            "The API enforces JSON: respond with one object matching the response schema—"
-            'a single key "translation" whose string value is the full translated text only.\n\n'
-            "# Output format (enforced JSON schema)\n"
-            "- The JSON object must have exactly one property: \"translation\" (string).\n"
-            "- That string is the entire model output: only the translated text—no labels such as "
-            "“Here is the translation”, no markdown fences, no explanations, notes, alternatives, or apologies.\n"
-            "- Preserve line breaks and paragraph boundaries inside \"translation\" as in the INPUT unless "
-            "the target language requires a minimal, justified adjustment.\n\n"
+            f"Translate the INPUT below from {self.lang_in} into {self.lang_out}.\n\n"
+            "# Output format (plain text only)\n"
+            "- Reply with nothing except the translated text itself.\n"
+            "- Do not add explanations, notes, alternatives, or apologies—only the translation.\n"
+            "- Preserve line breaks and paragraph boundaries as in the INPUT unless the target language "
+            "requires a minimal, justified adjustment.\n\n"
             "# Alignment, coverage, and fidelity\n"
             "A strong translation stays structurally aligned with the source, omits nothing important, "
             "and hallucinates nothing.\n"
@@ -272,36 +297,103 @@ class GeminiVertexAITranslator(BaseTranslator):
     def _generate_content_with_retry(
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
-        return self.client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
+        logger.debug(
+            f"Gemini generate_content: model={model} contents_chars={len(contents)} "
+            f"max_output_tokens={getattr(config, 'max_output_tokens', None)} "
+            f"temperature={getattr(config, 'temperature', None)}",
         )
+        t0 = time.monotonic()
+        try:
+            response = self.client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+        finally:
+            elapsed = time.monotonic() - t0
+            logger.debug(
+                f"Gemini generate_content finished: model={model} latency_s={elapsed:.3f}",
+            )
+        return response
 
     def do_translate(self, text, rate_limit_params: dict = None):
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         )
+        contents = self.prompt(text)
+        c_len = len(contents)
+        logger.debug(
+            f"do_translate: model={self.model} {self.lang_in}->{self.lang_out} "
+            f"prompt_chars={c_len}",
+        )
+        t0 = time.monotonic()
         response = self._generate_content_with_retry(
             model=self.model,
-            contents=self.prompt(text),
+            contents=contents,
             config=translate_config,
         )
         self._update_token_count(response)
-        return self._extract_text(response)
+        out = self._extract_text(response)
+        elapsed = time.monotonic() - t0
+        o_len = len(out)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_translate empty model output: model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_translate done: model={self.model} {self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} prompt_chars={c_len} out_chars={o_len} "
+            f"{_usage_metadata_summary(response)}",
+        )
+        logger.debug(
+            f"do_translate totals: translator prompt_tokens="
+            f"{self.prompt_token_count.value} completion_tokens="
+            f"{self.completion_token_count.value}",
+        )
+        return out
 
     def do_llm_translate(self, text, rate_limit_params: dict = None):
         if text is None:
+            logger.debug(f"do_llm_translate skipped: text is None")
             return None
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         )
+        contents = self.prompt(text)
+        c_len = len(contents)
+        rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
+        logger.debug(
+            f"do_llm_translate begin: model={self.model} {self.lang_in}->{self.lang_out} "
+            f"prompt_chars={c_len} rate_limit_param_keys={rl_keys}",
+        )
+        t0 = time.monotonic()
         response = self._generate_content_with_retry(
             model=self.model,
-            contents=self.prompt(text),
+            contents=contents,
             config=translate_config,
         )
         self._update_token_count(response)
-        return self._extract_text(response)
+        out = self._extract_text(response)
+        elapsed = time.monotonic() - t0
+        o_len = len(out)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_llm_translate empty model output: model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_llm_translate done: model={self.model} {self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} prompt_chars={c_len} out_chars={o_len} "
+            f"{_usage_metadata_summary(response)}",
+        )
+        logger.debug(
+            f"do_llm_translate totals: translator prompt_tokens="
+            f"{self.prompt_token_count.value} completion_tokens="
+            f"{self.completion_token_count.value}",
+        )
+        return out

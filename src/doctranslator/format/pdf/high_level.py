@@ -382,7 +382,9 @@ def _apply_dlp_if_enabled(
 
     job_id = (translation_config.dlp_job_id or "").strip()
     if not job_id:
-        logger.warning("DLP enabled but no dlp_job_id configured, skipping DLP masking")
+        logger.warning(
+            f"DLP enabled but no dlp_job_id configured, skipping DLP masking"
+        )
         return
 
     source_language = (
@@ -390,7 +392,7 @@ def _apply_dlp_if_enabled(
     ).strip()
     if not source_language:
         logger.warning(
-            "DLP enabled but no source language configured, skipping DLP masking"
+            f"DLP enabled but no source language configured, skipping DLP masking",
         )
         return
 
@@ -513,11 +515,13 @@ async def async_translate(translation_config: TranslationConfig):
         except CancelledError:
             cancel_event.set()
         except KeyboardInterrupt:
-            logger.info("Translation cancelled by user through keyboard interrupt")
+            logger.info(
+                f"Translation cancelled by user through keyboard interrupt",
+            )
             cancel_event.set()
     if cancel_event.is_set():
         future.cancel()
-    logger.info("Waiting for translation to finish...")
+    logger.info(f"Waiting for translation to finish...")
     await finish_event.wait()
 
 
@@ -543,7 +547,7 @@ class MemoryMonitor:
             target=self._monitor_memory_usage, daemon=True
         )
         self.monitor_thread.start()
-        logger.debug("Memory monitoring started")
+        logger.debug(f"Memory monitoring started")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -691,6 +695,9 @@ def do_translate(
         with MemoryMonitor() as memory_monitor:
             # Check if split translation is enabled
             if not translation_config.split_strategy:
+                logger.info(
+                    f"[pdf_translate] Single-pass translation (no split): {original_pdf_path}",
+                )
                 result = _do_translate_single(pm, translation_config)
             else:
                 # Initialize split manager and determine split points
@@ -699,17 +706,27 @@ def do_translate(
 
                 if not split_points:
                     logger.warning(
-                        "No split points determined, falling back to single translation"
+                        f"No split points determined, falling back to single translation",
                     )
                     result = _do_translate_single(pm, translation_config)
                 else:
-                    logger.info(f"Split points determined: {len(split_points)} parts")
+                    logger.info(
+                        f"[pdf_translate] Split translation: {len(split_points)} "
+                        f"parts for {original_pdf_path}",
+                    )
 
                     if len(split_points) == 1:
-                        logger.info("Only one part, use single translation")
+                        logger.info(
+                            f"[pdf_translate] Single logical part after split — using one pass",
+                        )
                         result = _do_translate_single(pm, translation_config)
                     else:
                         pm.total_parts = len(split_points)
+                        _mw = max(1, int(settings.SPLIT_PART_MAX_CONCURRENT))
+                        logger.info(
+                            f"[pdf_translate] Parallel part workers: {_mw} "
+                            f"(SPLIT_PART_MAX_CONCURRENT)",
+                        )
                         results: dict[int, TranslateResult | None] = {}
                         original_watermark_mode = (
                             translation_config.watermark_output_mode
@@ -795,6 +812,12 @@ def do_translate(
                                 try:
                                     result = future.result()
                                     results[i] = result
+                                    _wd = getattr(part_config, "working_dir", "")
+                                    logger.info(
+                                        f"[pdf_translate] Split part done: "
+                                        f"idx={i + 1}/{len(split_points)} "
+                                        f"working_dir={_wd}",
+                                    )
                                     if (
                                         part_config.enable_dlp
                                         and part_config.dlp_token_rows
@@ -838,11 +861,11 @@ def do_translate(
 
                         # Merge results (overlap pages are stripped inside merger)
                         merger = ResultMerger(translation_config)
-                        logger.info("start merge results")
+                        logger.info(f"start merge results")
                         result = merger.merge_results(
                             results, split_points=split_points
                         )
-                        logger.info("finish merge results")
+                        logger.info(f"finish merge results")
             peak_memory_usage = memory_monitor.peak_memory_usage
 
         finish_time = time.time()
@@ -884,14 +907,14 @@ def do_translate(
 
     except Exception as e:
         if translation_config.debug:
-            logger.exception("translate error:")
+            logger.exception(f"translate error:")
         else:
             logger.error(f"translate error: {e}")
         pm.disable = False
         pm.translate_error(e)
         raise
     finally:
-        logger.debug("do_translate finally")
+        logger.debug(f"do_translate finally")
         pm.on_finish()
         translation_config.cleanup_temp_files()
 
@@ -900,7 +923,9 @@ def migrate_toc(
     translation_config: TranslationConfig, translate_result: TranslateResult
 ):
     if translation_config.use_alternating_pages_dual:
-        logger.info('skipping TOC migration for "use_alternating_pages_dual" mode')
+        logger.info(
+            f'skipping TOC migration for "use_alternating_pages_dual" mode',
+        )
         return
     old_doc = Document(translation_config.input_file)
     if not old_doc:
@@ -909,12 +934,12 @@ def migrate_toc(
         fix_filter(old_doc)
         fix_null_xref(old_doc)
     except Exception:
-        logger.exception("auto fix failed, please check the pdf file")
+        logger.exception(f"auto fix failed, please check the pdf file")
 
     toc_data = old_doc.get_toc()
 
     if not toc_data:
-        logger.info("No TOC found in the original PDF, skipping migration.")
+        logger.info(f"No TOC found in the original PDF, skipping migration.")
         return
 
     if translation_config.only_include_translated_page:
@@ -971,7 +996,8 @@ def fix_media_box(doc: Document) -> None:
                     box_set["MediaBox"] = mediabox[1]
                 except Exception:
                     logger.warning(
-                        "Attempt to fix media box failed; some pages may not have been processed correctly."
+                        f"Attempt to fix media box failed; "
+                        f"some pages may not have been processed correctly.",
                     )
             for k in ["CropBox", "BleedBox", "TrimBox", "ArtBox"]:
                 box = doc.xref_get_key(x, k)
@@ -1077,7 +1103,7 @@ def _do_translate_single(
     original_pdf_path = translation_config.input_file
     if translation_config.debug:
         doc_input = Document(original_pdf_path)
-        logger.debug("debug mode, save decompressed input pdf")
+        logger.debug(f"debug mode, save decompressed input pdf")
         output_path = translation_config.get_working_file_path(
             "input.decompressed.pdf",
         )
@@ -1087,7 +1113,7 @@ def _do_translate_single(
             fix_filter(doc_input)
             fix_null_xref(doc_input)
         except Exception:
-            logger.exception("auto fix failed, please check the pdf file")
+            logger.exception(f"auto fix failed, please check the pdf file")
         safe_save(doc_input, output_path, expand=True, pretty=True)
         del doc_input
 
@@ -1103,7 +1129,7 @@ def _do_translate_single(
         fix_filter(doc_pdf2zh)
         fix_null_xref(doc_pdf2zh)
     except Exception:
-        logger.exception("auto fix failed, please check the pdf file")
+        logger.exception(f"auto fix failed, please check the pdf file")
 
     mediabox_data = fix_media_box(doc_pdf2zh)
 
@@ -1132,7 +1158,7 @@ def _do_translate_single(
     il_creater = ILCreater(translation_config)
     il_creater.mupdf = doc_pdf2zh
     xml_converter = XMLConverter()
-    logger.debug(f"start parse il from {temp_pdf_path}")
+    logger.info(f"[pdf_translate] Phase: parse PDF stream → IR (PDF interpreter)")
     with Path(temp_pdf_path).open("rb") as f:
         start_parse_il(
             f,
@@ -1141,9 +1167,12 @@ def _do_translate_single(
             il_creater=il_creater,
             translation_config=translation_config,
         )
-    logger.debug(f"finish parse il from {temp_pdf_path}")
+    logger.info(f"[pdf_translate] Phase: PDF interpreter finished; building IR document")
     docs = il_creater.create_il()
-    logger.debug(f"finish create il from {temp_pdf_path}")
+    _page_count = len(docs.page) if getattr(docs, "page", None) else 0
+    logger.info(
+        f"[pdf_translate] Phase: IR document ready (pages={_page_count})",
+    )
     del il_creater
     _apply_dlp_if_enabled(
         docs,
@@ -1164,7 +1193,9 @@ def _do_translate_single(
 
     # Skip all translation processing if only_parse_generate_pdf is enabled
     if translation_config.only_parse_generate_pdf:
-        logger.debug("only_parse_generate_pdf enabled, skipping translation processing")
+        logger.info(
+            f"[pdf_translate] Mode: parse-only / generate PDF — skipping translation phases",
+        )
         # Skip directly to PDF generation
         pdf_creater = PDFCreater(temp_pdf_path, docs, translation_config, mediabox_data)
         result = pdf_creater.write(translation_config)
@@ -1176,13 +1207,13 @@ def _do_translate_single(
 
     # 检测是否为扫描文件
     if translation_config.skip_scanned_detection:
-        logger.debug("skipping scanned file detection")
+        logger.info(f"[pdf_translate] Phase: skipped scanned-file detection")
     else:
-        logger.debug("start detect scanned file")
+        logger.info(f"[pdf_translate] Phase: scanned-file detection")
         DetectScannedFile(translation_config).process(
             docs, temp_pdf_path, mediabox_data
         )
-        logger.debug("finish detect scanned file")
+        logger.info(f"[pdf_translate] Phase: scanned-file detection finished")
         if translation_config.debug:
             xml_converter.write_json(
                 docs,
@@ -1190,9 +1221,9 @@ def _do_translate_single(
             )
 
     # Generate layouts for all pages
-    logger.debug("start generating layouts")
+    logger.info(f"[pdf_translate] Phase: layout parsing ( ONNX / DocLayout )")
     docs = LayoutParser(translation_config).process(docs, doc_pdf2zh)
-    logger.debug("finish generating layouts")
+    logger.info(f"[pdf_translate] Phase: layout parsing finished")
     close_process_pool()
     if translation_config.debug:
         xml_converter.write_json(
@@ -1201,22 +1232,25 @@ def _do_translate_single(
         )
 
     if translation_config.table_model:
+        logger.info(f"[pdf_translate] Phase: table parsing")
         docs = TableParser(translation_config).process(docs, doc_pdf2zh)
-        logger.debug("finish table parser")
+        logger.info(f"[pdf_translate] Phase: table parsing finished")
         if translation_config.debug:
             xml_converter.write_json(
                 docs,
                 translation_config.get_working_file_path("table_parser.json"),
             )
+    logger.info(f"[pdf_translate] Phase: paragraph finding")
     ParagraphFinder(translation_config).process(docs)
-    logger.debug(f"finish paragraph finder from {temp_pdf_path}")
+    logger.info(f"[pdf_translate] Phase: paragraph finding finished")
     if translation_config.debug:
         xml_converter.write_json(
             docs,
             translation_config.get_working_file_path("paragraph_finder.json"),
         )
+    logger.info(f"[pdf_translate] Phase: formulas and styles")
     StylesAndFormulas(translation_config).process(docs)
-    logger.debug(f"finish styles and formulas from {temp_pdf_path}")
+    logger.info(f"[pdf_translate] Phase: formulas and styles finished")
     if translation_config.debug:
         xml_converter.write_json(
             docs,
@@ -1236,11 +1270,21 @@ def _do_translate_single(
     support_llm_term_extraction = translator_supports_llm(term_extraction_engine)
 
     if support_llm_term_extraction and translation_config.auto_extract_glossary:
+        logger.info(f"[pdf_translate] Phase: automatic term / glossary extraction (LLM)")
         AutomaticTermExtractor(term_extraction_engine, translation_config).procress(
             docs
         )
+        logger.info(f"[pdf_translate] Phase: glossary extraction finished")
 
     if not translation_config.skip_translation:
+        translator_kind = (
+            "ILTranslatorLLMOnly"
+            if support_llm_translate
+            else "ILTranslator"
+        )
+        logger.info(
+            f"[pdf_translate] Phase: paragraph translation ({translator_kind})",
+        )
         if support_llm_translate:
             il_translator = ILTranslatorLLMOnly(translate_engine, translation_config)
         else:
@@ -1248,9 +1292,9 @@ def _do_translate_single(
 
         il_translator.translate(docs)
         del il_translator
-        logger.debug(f"finish ILTranslator from {temp_pdf_path}")
+        logger.info(f"[pdf_translate] Phase: paragraph translation finished")
     else:
-        logger.info("skip ILTranslator")
+        logger.info(f"[pdf_translate] Phase: skipped paragraph translation")
 
     if translation_config.enable_dlp and translation_config.dlp_post_translation:
         _apply_dlp_if_enabled(
@@ -1284,14 +1328,15 @@ def _do_translate_single(
             )
     except Exception:
         logger.warning(
-            "Failed to generate watermark for first page, using no watermark"
+            f"Failed to generate watermark for first page, using no watermark",
         )
         translation_config.watermark_output_mode = WatermarkOutputMode.NoWatermark
         mono_watermark_first_page_doc_bytes = None
         dual_watermark_first_page_doc_bytes = None
 
+    logger.info(f"[pdf_translate] Phase: typesetting")
     Typesetting(translation_config).typesetting_document(docs)
-    logger.debug(f"finish typsetting from {temp_pdf_path}")
+    logger.info(f"[pdf_translate] Phase: typesetting finished")
     if translation_config.debug:
         xml_converter.write_json(
             docs,
@@ -1299,7 +1344,11 @@ def _do_translate_single(
         )
 
     pdf_creater = PDFCreater(temp_pdf_path, docs, translation_config, mediabox_data)
+    logger.info(
+        f"[pdf_translate] Phase: PDF generation (draw ops, fonts, subset, save)",
+    )
     result = pdf_creater.write(translation_config)
+    logger.info(f"[pdf_translate] Phase: PDF generation finished")
     try:
         if mono_watermark_first_page_doc_bytes:
             mono_watermark_pdf = merge_watermark_doc(

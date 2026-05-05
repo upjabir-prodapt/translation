@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import asdict
@@ -195,6 +196,12 @@ class GoogleADKJudgeAgent:
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
         llm_scores = self._judge_with_llm(source_text, translated_text)
+        if not isinstance(llm_scores, dict):
+            llm_scores = (
+                llm_scores.model_dump()
+                if isinstance(llm_scores, QualityJudgeLLMScores)
+                else dict(llm_scores)
+            )
         alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
         omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
         hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
@@ -207,6 +214,16 @@ class GoogleADKJudgeAgent:
             pass_fail=final >= settings.QUALITY_THRESHOLD,
             reasons=list(llm_scores.get("reasons", [])),
             model=self.model,
+        )
+
+    async def evaluate_async(
+        self, *, source_text: str, translated_text: str
+    ) -> QualityJudgeResult:
+        """Run synchronous judge + LLM in a worker thread (non-blocking for asyncio)."""
+        return await asyncio.to_thread(
+            self.evaluate,
+            source_text=source_text,
+            translated_text=translated_text,
         )
 
 
