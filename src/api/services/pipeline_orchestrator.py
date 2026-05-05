@@ -184,8 +184,7 @@ class PipelineOrchestrator:
                 "quality_report": attempt_result.get("quality_report"),
                 
                 "dlp_provider": attempt_result.get("dlp_provider"),
-                "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode"),
-                "attempts": attempt_result,
+                "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode")
             }
 
             completed_at = datetime.now(UTC)
