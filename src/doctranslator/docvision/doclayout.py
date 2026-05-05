@@ -25,6 +25,7 @@ except ImportError as e:
 import pymupdf
 
 import src.doctranslator.format.pdf.document_il.il_version_1
+from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,13 @@ class OnnxModel(DocLayoutModel):
             if re.match(r"cpu", provider, re.IGNORECASE):
                 logger.info(f"Available Provider: {provider}")
                 providers.append(provider)
+        session_options = onnxruntime.SessionOptions()
+        session_options.intra_op_num_threads = int(settings.ONNX_INTRA_OP_NUM_THREADS)
+        session_options.inter_op_num_threads = int(settings.ONNX_INTER_OP_NUM_THREADS)
         self.model = onnxruntime.InferenceSession(
             model.SerializeToString(),
             providers=providers,
+            sess_options=session_options,
         )
         self.lock = threading.Lock()
 
@@ -164,7 +169,7 @@ class OnnxModel(DocLayoutModel):
 
         total_images = len(image)
         results = []
-        batch_size = 1
+        batch_size = max(1, int(settings.ONNX_LAYOUT_BATCH_SIZE))
 
         # Process images in batches
         for i in range(0, total_images, batch_size):

@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 
 class Args:
@@ -22,8 +21,6 @@ class AsyncCallback:
         # https://stackoverflow.com/a/49912853/2148718
         self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
 
-        # Add a small delay to release the GIL, ensuring the event loop has time to process messages
-        time.sleep(0.01)
 
     def finished_callback(self, *args, **kwargs):
         # Whenever a finished is called, add to the queue as with step, but also set finished to True, so __anext__

@@ -148,8 +148,43 @@ class Settings(BaseSettings):
     GEMINI_OUTPUT_COST_PER_1K: float = 0.0
     JUDGE_MODEL: str = "gemini-2.5-flash"
     QUALITY_THRESHOLD: float = 0.6
+    QUALITY_EARLY_ACCEPT_THRESHOLD: float = 0.92
     MAX_MODEL_ATTEMPTS: int = 3
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # -----------------------------
+    # LLM / Translation Performance
+    # -----------------------------
+
+    # Concurrency
+    TRANSLATION_POOL_MAX_WORKERS: int = 12
+    TRANSLATION_MAX_QPS: int = 16
+    TERM_EXTRACTION_POOL_MAX_WORKERS: int = 12
+    SPLIT_PART_MAX_CONCURRENT: int = 2
+    TYPESETTING_MAX_WORKERS: int = 4
+
+    # LLM Context Budget (tokens)
+    LLM_TRANSLATION_BATCH_MAX_TOKENS: int = 4000
+    LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS: int = 40
+    LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS: int = 6000
+    LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS: int = 60
+
+    # Language-specific token multipliers
+    LLM_TOKEN_MULTIPLIER_CJK: float = 0.5
+    LLM_TOKEN_MULTIPLIER_DEFAULT: float = 1.0
+
+    # LLM provider/runtime configuration
+    LLM_PROVIDER: str = "gemini_vertexai"
+    LLM_MAX_CONTEXT_LENGTH: int = 1000000
+    LLM_MAX_OUTPUT_TOKENS: int = 8192
+    LLM_TEMPERATURE: float = 0.0
+    LLM_TRANSLATION_MIN_TEXT_LENGTH: int = 5
+    LLM_DISABLE_SAME_TEXT_FALLBACK: bool = False
+
+    # ONNX runtime
+    ONNX_LAYOUT_BATCH_SIZE: int = 4
+    ONNX_INTRA_OP_NUM_THREADS: int = 4
+    ONNX_INTER_OP_NUM_THREADS: int = 1
 
     # -----------------------------
     # DocTranslator Assets
@@ -224,6 +259,10 @@ class Settings(BaseSettings):
     DOWNLOAD_RETRY_MIN_SECONDS: int = 2
     DOWNLOAD_RETRY_MAX_SECONDS: int = 10
     DOWNLOAD_RETRY_MULTIPLIER: int = 1
+    LLM_RETRY_MAX_ATTEMPTS: int = 3
+    LLM_RETRY_MIN_SECONDS: int = 1
+    LLM_RETRY_MAX_SECONDS: int = 8
+    LLM_RETRY_MULTIPLIER: int = 1
     LANGUAGE_DETECTION_MAX_CHARS: int = 10000
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int = 300000
 

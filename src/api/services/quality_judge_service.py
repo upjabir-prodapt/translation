@@ -15,6 +15,7 @@ from pydantic import Field
 
 from src.config.constants import settings
 from src.config.logging import logger
+from src.config.retry import llm_retry
 
 from google import genai
 from google.genai import types as genai_types
@@ -85,6 +86,16 @@ class GoogleADKJudgeAgent:
                 location=settings.GOOGLE_CLOUD_LOCATION,
             )
 
+    @llm_retry(logger=logger)
+    def _generate_judge_content_with_retry(
+        self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
+    ):
+        return self._client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+
     def _judge_with_llm(self, source_text: str, translated_text: str) -> QualityJudgeLLMScores:
         if self._client is None:
             h = _compute_alignment_score(source_text, translated_text)
@@ -152,13 +163,14 @@ class GoogleADKJudgeAgent:
             f"SOURCE:\n{source_text}\n\n"
             f"TRANSLATION:\n{translated_text}"
         )
+        response = None
         try:
             judge_config = genai_types.GenerateContentConfig(
                 temperature=0.1,
                 response_mime_type="application/json",
                 response_json_schema=QualityJudgeLLMScores.model_json_schema(),
             )
-            response = self._client.models.generate_content(
+            response = self._generate_judge_content_with_retry(
                 model=self.model,
                 contents=prompt,
                 config=judge_config,
@@ -167,7 +179,7 @@ class GoogleADKJudgeAgent:
             return parsed
         except Exception as exc:
             logger.warning(f"Judge response parse failed; fallback heuristic will be used. Error: {exc}")
-            parsed = response.text.strip()
+            parsed = (getattr(response, "text", "") or "").strip()
             try:
                 parsed = json.loads(parsed.replace("```json", "").replace("```", "").strip())
                 return parsed

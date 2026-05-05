@@ -23,6 +23,7 @@ def create_translator(
     qps: int,  # noqa: ARG001 (reserved for rate limiter; not all translators use it)
 ) -> BaseTranslator:
     """Create one translator for the given model name."""
+    set_translate_rate_limiter(max(int(qps), 1))
     provider = _infer_provider(model_name)
 
     if provider == "gemini_vertexai":
@@ -30,12 +31,14 @@ def create_translator(
             lang_in=lang_in,
             lang_out=lang_out,
             model=settings.GEMINI_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
         )
     
     return GeminiVertexAITranslator(
             lang_in=lang_in,
             lang_out=lang_out,
             model=settings.GEMINI_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
         )
 
 

@@ -18,6 +18,19 @@ from src.config.constants import settings
 logger = logging.getLogger(__name__)
 
 
+def _is_cjk_language_code(lang: str | None) -> bool:
+    if not lang:
+        return False
+    normalized = str(lang).strip().lower()
+    return normalized.startswith(("zh", "ja", "ko"))
+
+
+def get_token_multiplier(lang_in: str, lang_out: str) -> float:
+    if _is_cjk_language_code(lang_in) or _is_cjk_language_code(lang_out):
+        return float(settings.LLM_TOKEN_MULTIPLIER_CJK)
+    return float(settings.LLM_TOKEN_MULTIPLIER_DEFAULT)
+
+
 class WatermarkOutputMode(enum.Enum):
     Watermarked = "watermarked"
     NoWatermark = "no_watermark"
@@ -189,7 +202,7 @@ class TranslationConfig:
         no_mono: bool = False,
         formular_font_pattern: str | None = None,
         formular_char_pattern: str | None = None,
-        qps: int = 1,
+        qps: int = settings.TRANSLATION_MAX_QPS,
         split_short_lines: bool = False,
         short_line_split_factor: float = 0.8,
         use_rich_pbar: bool = True,
@@ -199,7 +212,7 @@ class TranslationConfig:
         disable_rich_text_translate: bool = False,
         enhance_compatibility: bool = False,
         report_interval: float = 0.1,
-        min_text_length: int = 5,
+        min_text_length: int = settings.LLM_TRANSLATION_MIN_TEXT_LENGTH,
         use_side_by_side_dual: bool = True,  # Deprecated: 是否使用拼版式双语 PDF（并排显示原文和译文）向下兼容选项，已停用。
         use_alternating_pages_dual: bool = False,
         watermark_output_mode: WatermarkOutputMode = WatermarkOutputMode.Watermarked,
@@ -231,7 +244,7 @@ class TranslationConfig:
         term_extraction_translator: BaseTranslator | None = None,
         metadata_extra_data: str | None = None,
         term_pool_max_workers: int | None = None,
-        disable_same_text_fallback: bool = False,
+        disable_same_text_fallback: bool = settings.LLM_DISABLE_SAME_TEXT_FALLBACK,
         add_cover_page: bool = True,
         cover_page_metadata: TranslationCoverPageMetadata | None = None,
         enable_dlp: bool = False,
@@ -264,14 +277,16 @@ class TranslationConfig:
         self.qps = qps
         # Set pool_max_workers with default value from qps
         self.pool_max_workers = (
-            pool_max_workers if pool_max_workers is not None else qps
+            pool_max_workers
+            if pool_max_workers is not None
+            else int(settings.TRANSLATION_POOL_MAX_WORKERS)
         )
         # Set term_pool_max_workers for automatic term extraction.
         # If not provided, default to pool_max_workers.
         self.term_pool_max_workers = (
             term_pool_max_workers
             if term_pool_max_workers is not None
-            else self.pool_max_workers
+            else int(settings.TERM_EXTRACTION_POOL_MAX_WORKERS)
         )
         self.split_short_lines = split_short_lines
 
@@ -413,6 +428,21 @@ class TranslationConfig:
             "cache_hit_prompt_tokens": 0,
         }
         self.disable_same_text_fallback = disable_same_text_fallback
+        token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
+        self.llm_translation_batch_max_tokens = int(
+            settings.LLM_TRANSLATION_BATCH_MAX_TOKENS
+        )
+        self.llm_translation_batch_max_paragraphs = max(
+            int(settings.LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS * token_multiplier),
+            1,
+        )
+        self.llm_term_extraction_batch_max_tokens = int(
+            settings.LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS
+        )
+        self.llm_term_extraction_batch_max_paragraphs = max(
+            int(settings.LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS * token_multiplier),
+            1,
+        )
 
         if self.ocr_workaround:
             self.remove_non_formula_lines = False

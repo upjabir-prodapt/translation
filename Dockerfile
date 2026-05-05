@@ -7,7 +7,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    OMP_NUM_THREADS=4 \
+    ONNXRUNTIME_INTRA_OP_NUM_THREADS=4 \
+    ONNXRUNTIME_INTER_OP_NUM_THREADS=1
 
 # Native wheels (OpenCV/ONNXRuntime/OCR) need these runtime shared libraries on slim.
 RUN apt-get update && apt-get install -y --no-install-recommends \

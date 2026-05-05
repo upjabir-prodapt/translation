@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import copy
 import hashlib
 import io
@@ -709,131 +710,123 @@ def do_translate(
                         result = _do_translate_single(pm, translation_config)
                     else:
                         pm.total_parts = len(split_points)
-
-                        # Process parts serially
                         results: dict[int, TranslateResult | None] = {}
                         original_watermark_mode = (
                             translation_config.watermark_output_mode
                         )
                         original_doc = Document(original_pdf_path)
+                        part_configs: dict[int, TranslationConfig] = {}
+                        dlp_merge_lock = threading.Lock()
                         for i, split_point in enumerate(split_points):
-                            try:
-                                # Create a copy of config for this part
-                                part_config = copy.copy(translation_config)
-                                part_config.skip_clean = True
-                                should_translate_pages = []
-                                for page in range(
-                                    split_point.start_page, split_point.end_page + 1
-                                ):
-                                    if translation_config.should_translate_page(
-                                        page + 1
-                                    ):
-                                        should_translate_pages.append(
-                                            page - split_point.start_page + 1
-                                        )
-                                part_config.pages = None
-                                part_config.page_ranges = [
-                                    (x, x) for x in should_translate_pages
-                                ]
-                                if (
-                                    translation_config.only_include_translated_page
-                                    and not should_translate_pages
-                                ):
-                                    results[i] = None
-                                    continue
-
-                                # Only first part should do scanned detection if enabled
-                                if i > 0:
-                                    part_config.skip_scanned_detection = True
-
-                                part_config.working_dir = (
-                                    translation_config.get_part_working_dir(i)
-                                )
-                                part_config.output_dir = (
-                                    translation_config.get_part_output_dir(i)
-                                )
-
-                                assert id(
-                                    part_config.shared_context_cross_split_part
-                                ) == id(
-                                    translation_config.shared_context_cross_split_part
-                                ), "shared_context_cross_split_part must be the same"
-
-                                part_temp_input_path = (
-                                    part_config.get_working_file_path(
-                                        f"input.part{i}.pdf"
+                            # Create a copy of config for this part
+                            part_config = copy.copy(translation_config)
+                            part_config.skip_clean = True
+                            should_translate_pages = []
+                            for page in range(
+                                split_point.start_page, split_point.end_page + 1
+                            ):
+                                if translation_config.should_translate_page(page + 1):
+                                    should_translate_pages.append(
+                                        page - split_point.start_page + 1
                                     )
-                                )
-                                part_config.input_file = part_temp_input_path
+                            part_config.pages = None
+                            part_config.page_ranges = [(x, x) for x in should_translate_pages]
+                            if (
+                                translation_config.only_include_translated_page
+                                and not should_translate_pages
+                            ):
+                                results[i] = None
+                                continue
 
-                                temp_doc = Document()
-                                for x in range(
-                                    split_point.start_page, split_point.end_page + 1
-                                ):
-                                    xref = original_doc[x].xref
+                            # Only first part should do scanned detection if enabled
+                            if i > 0:
+                                part_config.skip_scanned_detection = True
+
+                            part_config.working_dir = translation_config.get_part_working_dir(i)
+                            part_config.output_dir = translation_config.get_part_output_dir(i)
+
+                            assert id(part_config.shared_context_cross_split_part) == id(
+                                translation_config.shared_context_cross_split_part
+                            ), "shared_context_cross_split_part must be the same"
+
+                            part_temp_input_path = part_config.get_working_file_path(
+                                f"input.part{i}.pdf"
+                            )
+                            part_config.input_file = part_temp_input_path
+
+                            temp_doc = Document()
+                            for x in range(split_point.start_page, split_point.end_page + 1):
+                                xref = original_doc[x].xref
+                                if original_doc.xref_get_key(xref, "Annots")[0] != "null":
+                                    original_doc.xref_set_key(xref, "Annots", "null")
+                            temp_doc.insert_pdf(
+                                original_doc,
+                                from_page=split_point.start_page,
+                                to_page=split_point.end_page,
+                            )
+                            safe_save(temp_doc, part_temp_input_path)
+                            assert (
+                                temp_doc.page_count
+                                == split_point.end_page - split_point.start_page + 1
+                            )
+
+                            # Only first part should have watermark
+                            if i > 0:
+                                part_config.watermark_output_mode = (
+                                    WatermarkOutputMode.NoWatermark
+                                )
+                            part_configs[i] = part_config
+
+                        def run_part(part_idx: int, part_cfg: TranslationConfig):
+                            part_monitor = pm.create_part_monitor(part_idx, len(split_points))
+                            return _do_translate_single(part_monitor, part_cfg)
+
+                        max_part_workers = max(1, int(settings.SPLIT_PART_MAX_CONCURRENT))
+                        with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=max_part_workers
+                        ) as part_executor:
+                            futures = {
+                                part_executor.submit(run_part, idx, cfg): idx
+                                for idx, cfg in part_configs.items()
+                            }
+                            for future in concurrent.futures.as_completed(futures):
+                                i = futures[future]
+                                part_config = part_configs[i]
+                                try:
+                                    result = future.result()
+                                    results[i] = result
                                     if (
-                                        original_doc.xref_get_key(xref, "Annots")[0]
-                                        != "null"
+                                        part_config.enable_dlp
+                                        and part_config.dlp_token_rows
                                     ):
-                                        original_doc.xref_set_key(
-                                            xref, "Annots", "null"
-                                        )
-                                temp_doc.insert_pdf(
-                                    original_doc,
-                                    from_page=split_point.start_page,
-                                    to_page=split_point.end_page,
-                                )
-                                safe_save(temp_doc, part_temp_input_path)
-                                assert (
-                                    temp_doc.page_count
-                                    == split_point.end_page - split_point.start_page + 1
-                                )
-
-                                # Only first part should have watermark
-                                if i > 0:
-                                    part_config.watermark_output_mode = (
-                                        WatermarkOutputMode.NoWatermark
-                                    )
-
-                                # Create progress monitor for this part
-                                part_monitor = pm.create_part_monitor(
-                                    i, len(split_points)
-                                )
-
-                                # Process this part
-                                result = _do_translate_single(
-                                    part_monitor,
-                                    part_config,
-                                )
-                                results[i] = result
-                                if part_config.enable_dlp and part_config.dlp_token_rows:
-                                    chunk_offset = translation_config.dlp_chunk_count
-                                    for row in part_config.dlp_token_rows:
-                                        merged_row = dict(row)
-                                        merged_row["chunk_index"] = int(
-                                            merged_row.get("chunk_index", 0)
-                                        ) + int(chunk_offset)
-                                        translation_config.dlp_token_rows.append(merged_row)
-                                    translation_config.dlp_chunk_count += int(
-                                        part_config.dlp_chunk_count
-                                    )
-                                    translation_config.dlp_token_counter = max(
-                                        int(translation_config.dlp_token_counter),
-                                        int(part_config.dlp_token_counter),
-                                    )
-                                    translation_config.dlp_provider = (
-                                        part_config.dlp_provider
-                                        or translation_config.dlp_provider
-                                    )
-                                    translation_config.dlp_chunk_mode = "il_paragraph"
-
-                            except Exception as e:
-                                logger.error(f"Error in part {i}: {e}")
-                                pm.translate_error(e)
-                                raise
-                            finally:
-                                # Clean up part working directory
-                                translation_config.cleanup_part_working_dir(i)
+                                        with dlp_merge_lock:
+                                            chunk_offset = translation_config.dlp_chunk_count
+                                            for row in part_config.dlp_token_rows:
+                                                merged_row = dict(row)
+                                                merged_row["chunk_index"] = int(
+                                                    merged_row.get("chunk_index", 0)
+                                                ) + int(chunk_offset)
+                                                translation_config.dlp_token_rows.append(
+                                                    merged_row
+                                                )
+                                            translation_config.dlp_chunk_count += int(
+                                                part_config.dlp_chunk_count
+                                            )
+                                            translation_config.dlp_token_counter = max(
+                                                int(translation_config.dlp_token_counter),
+                                                int(part_config.dlp_token_counter),
+                                            )
+                                            translation_config.dlp_provider = (
+                                                part_config.dlp_provider
+                                                or translation_config.dlp_provider
+                                            )
+                                            translation_config.dlp_chunk_mode = "il_paragraph"
+                                except Exception as e:
+                                    logger.error(f"Error in part {i}: {e}")
+                                    pm.translate_error(e)
+                                    raise
+                                finally:
+                                    translation_config.cleanup_part_working_dir(i)
 
                         # Restore original watermark mode
                         translation_config.watermark_output_mode = (

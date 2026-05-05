@@ -585,7 +585,9 @@ class ILTranslatorLLMOnly:
                     copy.deepcopy(paragraph)
                 )
 
-            if total_token_count > 200 or len(paragraphs) > 5:
+            max_tokens = self.translation_config.llm_translation_batch_max_tokens
+            max_paragraphs = self.translation_config.llm_translation_batch_max_paragraphs
+            if total_token_count > max_tokens or len(paragraphs) > max_paragraphs:
                 self.mid += 1
                 executor.submit(
                     self.translate_paragraph,
@@ -717,15 +719,35 @@ class ILTranslatorLLMOnly:
 
             parsed_output = json.loads(llm_output)
 
-            if isinstance(parsed_output, dict) and parsed_output.get(
-                "output", parsed_output.get("input", False)
-            ):
-                parsed_output = [parsed_output]
+            if isinstance(parsed_output, dict):
+                if parsed_output.get("output", parsed_output.get("input", False)):
+                    parsed_output = [parsed_output]
+                else:
+                    raise ValueError(
+                        "LLM output JSON object is missing expected translation fields"
+                    )
+            elif isinstance(parsed_output, str):
+                # Some providers may return a quoted string for single-item batches.
+                if len(inputs) == 1:
+                    parsed_output = [{"id": 0, "output": parsed_output}]
+                else:
+                    raise ValueError(
+                        "LLM output JSON is a string while multiple inputs were provided"
+                    )
+            elif not isinstance(parsed_output, list):
+                raise ValueError(
+                    f"Unexpected LLM output JSON type: {type(parsed_output).__name__}"
+                )
 
-            translation_results = {
-                item["id"]: item.get("output", item.get("input"))
-                for item in parsed_output
-            }
+            translation_results = {}
+            for item in parsed_output:
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        f"Invalid translation item type: {type(item).__name__}"
+                    )
+                if "id" not in item:
+                    raise ValueError("Translation item missing id field")
+                translation_results[item["id"]] = item.get("output", item.get("input"))
 
             if len(translation_results) != len(inputs):
                 raise Exception(
@@ -853,8 +875,8 @@ class ILTranslatorLLMOnly:
                 llm_translate_tracker.set_fallback_to_translate()
             self.total_count += len(llm_translate_trackers)
             self.fallback_count += len(llm_translate_trackers)
-            for input_ in inputs:
-                input_[2].unicode = input_[5]
+            for i, input_ in enumerate(inputs):
+                input_[2].unicode = input_[5][i]
             if not should_translate_paragraph:
                 should_translate_paragraph = list(
                     range(len(batch_paragraph.paragraphs))

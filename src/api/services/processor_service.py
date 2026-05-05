@@ -154,7 +154,7 @@ class JobProcessor:
             source_text, translated_text = extract_attempt_text(
                 Path(str(translation_config.working_dir))
             )
-            quality_result = self._evaluate_attempt_quality(
+            quality_result = await self._evaluate_attempt_quality(
                 judge=judge,
                 source_text=source_text,
                 translated_text=translated_text,
@@ -223,7 +223,7 @@ class JobProcessor:
                 return result
         raise RuntimeError("Translation completed without finish event")
 
-    def _evaluate_attempt_quality(
+    async def _evaluate_attempt_quality(
         self,
         *,
         judge: GoogleADKJudgeAgent,
@@ -240,7 +240,9 @@ class JobProcessor:
                 reasons=["Missing source/translated text for quality evaluation."],
                 model=judge.model,
             )
-        return judge.evaluate(source_text=source_text, translated_text=translated_text)
+        return await judge.evaluate_async(
+            source_text=source_text, translated_text=translated_text
+        )
 
     def _collect_token_usage(
         self, translation_config: TranslationConfig, selected_model: str
@@ -554,6 +556,11 @@ class JobProcessor:
                 min_pages_to_split=10,
                 overlap_pages=2,
             ),
+            qps=base_config.qps,
+            pool_max_workers=settings.TRANSLATION_POOL_MAX_WORKERS,
+            term_pool_max_workers=settings.TERM_EXTRACTION_POOL_MAX_WORKERS,
+            min_text_length=settings.LLM_TRANSLATION_MIN_TEXT_LENGTH,
+            disable_same_text_fallback=settings.LLM_DISABLE_SAME_TEXT_FALLBACK,
             no_dual=base_config.no_dual,
             no_mono=base_config.no_mono,
             add_cover_page=base_config.add_cover_page,

@@ -1,4 +1,5 @@
 import contextlib
+import asyncio
 import logging
 import threading
 import time
@@ -8,11 +9,6 @@ from abc import abstractmethod
 
 import httpx
 import openai
-from tenacity import before_sleep_log
-from tenacity import retry
-from tenacity import retry_if_exception_type
-from tenacity import stop_after_attempt
-from tenacity import wait_exponential
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -21,6 +17,7 @@ from pydantic import Field
 from src.doctranslator.doctranslator_exception.DocTranslatorException import ContentFilterError
 from src.doctranslator.utils.atomic_integer import AtomicInteger
 from src.config.constants import settings
+from src.config.retry import llm_retry
 
 from google import genai
 from google.genai import types as genai_types
@@ -76,7 +73,7 @@ class RateLimiter:
             self.min_interval = 1.0 / max_qps
 
 
-_translate_rate_limiter = RateLimiter(5)
+_translate_rate_limiter = RateLimiter(max(int(settings.TRANSLATION_MAX_QPS), 1))
 
 
 def set_translate_rate_limiter(max_qps):
@@ -119,6 +116,9 @@ class BaseTranslator(ABC):
         self.translate_call_count += 1
         _translate_rate_limiter.wait()
         return self.do_llm_translate(text, rate_limit_params)
+
+    async def llm_translate_async(self, text, rate_limit_params: dict = None):
+        return await asyncio.to_thread(self.llm_translate, text, rate_limit_params)
 
     @abstractmethod
     def do_llm_translate(self, text, rate_limit_params: dict = None):
@@ -268,11 +268,22 @@ class GeminiVertexAITranslator(BaseTranslator):
         if cached_tokens:
             self.cache_hit_prompt_token_count.inc(cached_tokens)
 
+    @llm_retry(logger=logger)
+    def _generate_content_with_retry(
+        self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
+    ):
+        return self.client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+
     def do_translate(self, text, rate_limit_params: dict = None):
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
+            max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         )
-        response = self.client.models.generate_content(
+        response = self._generate_content_with_retry(
             model=self.model,
             contents=self.prompt(text),
             config=translate_config,
@@ -285,8 +296,9 @@ class GeminiVertexAITranslator(BaseTranslator):
             return None
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
+            max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         )
-        response = self.client.models.generate_content(
+        response = self._generate_content_with_retry(
             model=self.model,
             contents=self.prompt(text),
             config=translate_config,

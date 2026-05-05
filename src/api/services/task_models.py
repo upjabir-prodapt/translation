@@ -8,6 +8,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from src.config.constants import settings
+
 
 class DocTranslatorTranslationConfig(BaseModel):
     """Subset of DocTranslator TranslationConfig parameters used by API pipeline."""
@@ -18,7 +20,7 @@ class DocTranslatorTranslationConfig(BaseModel):
     model_list: list[str] = Field(default_factory=list, min_length=1)
     output_dir: str | Path | None = None
     working_dir: str | Path | None = None
-    qps: int = 4
+    qps: int = Field(default_factory=lambda: settings.TRANSLATION_MAX_QPS)
     no_dual: bool = True
     no_mono: bool = False
     add_cover_page: bool = True

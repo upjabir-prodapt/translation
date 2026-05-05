@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import concurrent.futures
 import logging
 import re
 import statistics
+import threading
 import unicodedata
 from functools import cache
 
@@ -844,10 +846,12 @@ class Typesetting:
         """预处理文档，获取每个段落的最优缩放因子，不执行实际排版"""
         all_scales: list[float] = []
         all_paragraphs: list[il_version_1.PdfParagraph] = []
+        scale_lock = threading.Lock()
+        pbar_lock = threading.Lock()
 
-        for page in document.page:
-            pbar.advance()
-            # 准备字体信息（复制自 render_page 的逻辑）
+        def process_page(page: il_version_1.Page) -> tuple[list[float], list[il_version_1.PdfParagraph]]:
+            page_scales: list[float] = []
+            page_paragraphs: list[il_version_1.PdfParagraph] = []
             fonts: dict[
                 str | int,
                 il_version_1.PdfFont | dict[str, il_version_1.PdfFont],
@@ -866,9 +870,8 @@ class Typesetting:
                         ):
                             fonts[xobj.xobj_id][font.font_id] = font
 
-            # 处理每个段落
             for paragraph in page.pdf_paragraph:
-                all_paragraphs.append(paragraph)
+                page_paragraphs.append(paragraph)
                 unit_count = 0
                 try:
                     typesetting_units = self.create_typesetting_units(paragraph, fonts)
@@ -876,23 +879,30 @@ class Typesetting:
                     for unit in typesetting_units:
                         if unit.formular:
                             unit_count += len(unit.formular.pdf_character) - 1
-
-                    # 如果所有单元都可以直接传递，则 scale = 1.0
                     if all(unit.can_passthrough for unit in typesetting_units):
                         paragraph.optimal_scale = 1.0
                     else:
-                        # 获取最优缩放因子
-                        optimal_scale = self._get_optimal_scale(
+                        paragraph.optimal_scale = self._get_optimal_scale(
                             paragraph, page, typesetting_units
                         )
-                        paragraph.optimal_scale = optimal_scale
                 except Exception as e:
-                    # 如果预处理出错，默认使用 1.0 缩放因子
                     logger.warning(f"预处理段落时出错：{e}")
                     paragraph.optimal_scale = 1.0
 
                 if paragraph.optimal_scale is not None:
-                    all_scales.extend([paragraph.optimal_scale] * unit_count)
+                    page_scales.extend([paragraph.optimal_scale] * unit_count)
+            with pbar_lock:
+                pbar.advance()
+            return page_scales, page_paragraphs
+
+        max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(process_page, page) for page in document.page]
+            for future in concurrent.futures.as_completed(futures):
+                page_scales, page_paragraphs = future.result()
+                with scale_lock:
+                    all_scales.extend(page_scales)
+                    all_paragraphs.extend(page_paragraphs)
 
         # 获取缩放因子的众数
         if all_scales:
@@ -1102,15 +1112,24 @@ class Typesetting:
             ) as pbar:
                 # 预处理：获取所有段落的最优缩放因子
                 self.preprocess_document(document, pbar)
-
-                for page in document.page:
-                    self.translation_config.raise_if_cancelled()
-                    self.render_page(page)
-                    pbar.advance()
+                pbar_lock = threading.Lock()
+                max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_workers
+                ) as executor:
+                    futures = [executor.submit(self.render_page, page) for page in document.page]
+                    for future in concurrent.futures.as_completed(futures):
+                        self.translation_config.raise_if_cancelled()
+                        future.result()
+                        with pbar_lock:
+                            pbar.advance()
         else:
-            for page in document.page:
-                self.translation_config.raise_if_cancelled()
-                self.render_page(page)
+            max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(self.render_page, page) for page in document.page]
+                for future in concurrent.futures.as_completed(futures):
+                    self.translation_config.raise_if_cancelled()
+                    future.result()
 
     def render_page(self, page: il_version_1.Page):
         fonts: dict[

@@ -227,7 +227,7 @@ stages:
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
                   --min-instances=1 \
-                  --concurrency=2 \
+                  --concurrency=1 \
                   --port=8000 \
                   --timeout=600 \
                   --memory=8Gi \
