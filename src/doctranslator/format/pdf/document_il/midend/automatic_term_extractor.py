@@ -190,38 +190,63 @@ class AutomaticTermExtractor:
             llm_output = llm_output[:-3]
         return llm_output.strip()
 
-    def _process_llm_response(self, llm_response_text: str, request_id: str):
-        try:
-            cleaned_response_text = self._clean_json_output(llm_response_text)
-            extracted_data = json.loads(cleaned_response_text)
-
-            if not isinstance(extracted_data, list):
-                logger.warning(
-                    f"Request ID {request_id}: LLM response was not a JSON list, but type: {type(extracted_data)}. Content: {cleaned_response_text[:200]}"
-                )
-                return
-
-            for item in extracted_data:
-                if isinstance(item, dict) and "src" in item and "tgt" in item:
-                    src_term = str(item["src"]).strip()
-                    tgt_term = str(item["tgt"]).strip()
-                    if (
-                        src_term and tgt_term and len(src_term) < 100
-                    ):  # Basic validation
-                        self.shared_context.add_raw_extracted_term_pair(
-                            src_term, tgt_term
-                        )
-                else:
-                    logger.warning(
-                        f"Request ID {request_id}: Skipping malformed item in LLM JSON response: {item}"
-                    )
-
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"Request ID {request_id}: JSON Parsing Error: {e}. Problematic LLM Response after cleaning (start): {cleaned_response_text[:200]}..."
+    def _parse_terms_json(self, llm_response_text: str, request_id: str) -> list[dict]:
+        cleaned_response_text = self._clean_json_output(llm_response_text or "")
+        if not cleaned_response_text:
+            logger.warning(
+                f"Request ID {request_id}: Empty term extraction LLM output after cleaning",
             )
+            return []
+
+        try:
+            extracted_data = json.loads(cleaned_response_text)
+        except json.JSONDecodeError as e:
+            preview = cleaned_response_text[:300].replace("\n", "\\n")
+            logger.warning(
+                f"Request ID {request_id}: Term extraction JSON parse error: {e}. "
+                f"response_head={preview!r}",
+            )
+            return []
         except Exception as e:
-            logger.error(f"Request ID {request_id}: Error processing LLM response: {e}")
+            logger.warning(
+                f"Request ID {request_id}: Unexpected error parsing term extraction output: {e}",
+            )
+            return []
+
+        if isinstance(extracted_data, dict):
+            for key in ("terms", "items", "results", "data"):
+                value = extracted_data.get(key)
+                if isinstance(value, list):
+                    extracted_data = value
+                    break
+            else:
+                # Single-item object fallback
+                if "src" in extracted_data and "tgt" in extracted_data:
+                    extracted_data = [extracted_data]
+
+        if not isinstance(extracted_data, list):
+            logger.warning(
+                f"Request ID {request_id}: Term extraction output is not a JSON list "
+                f"(got {type(extracted_data).__name__})",
+            )
+            return []
+        return extracted_data
+
+    def _process_llm_response(self, llm_response_text: str, request_id: str):
+        extracted_data = self._parse_terms_json(llm_response_text, request_id)
+        for item in extracted_data:
+            if isinstance(item, dict) and "src" in item and "tgt" in item:
+                src_term = str(item["src"]).strip()
+                tgt_term = str(item["tgt"]).strip()
+                if src_term and tgt_term and len(src_term) < 100:
+                    self.shared_context.add_raw_extracted_term_pair(
+                        src_term,
+                        tgt_term,
+                    )
+            else:
+                logger.warning(
+                    f"Request ID {request_id}: Skipping malformed term item: {item}",
+                )
 
     def process_page(
         self,
@@ -289,6 +314,10 @@ class AutomaticTermExtractor:
                 tracker.append_paragraph_unicode(u)
             if not inputs:
                 return
+            request_id = (
+                f"ate-{id(paragraphs)}-"
+                f"{paragraphs.paragraphs[0].debug_id if paragraphs.paragraphs else 'na'}"
+            )
 
             # Build reference glossary section
             reference_glossary_section = ""
@@ -336,11 +365,14 @@ class AutomaticTermExtractor:
                 },
             )
             tracker.set_output(output)
-            cleaned_output = self._clean_json_output(output)
-            response = json.loads(cleaned_output)
-            if not isinstance(response, list):
-                response = [response]  # Ensure we have a list
+            response = self._parse_terms_json(output, request_id)
+            if not response:
+                logger.warning(
+                    f"Request ID {request_id}: No valid extracted terms parsed from LLM output",
+                )
+                return
 
+            valid_terms = 0
             for term in response:
                 if isinstance(term, dict) and "src" in term and "tgt" in term:
                     src_term = str(term["src"]).strip()
@@ -349,14 +381,28 @@ class AutomaticTermExtractor:
                         continue
                     if src_term and tgt_term and len(src_term) < 100:
                         self.shared_context.add_raw_extracted_term_pair(
-                            src_term, tgt_term
+                            src_term,
+                            tgt_term,
                         )
+                        valid_terms += 1
+                else:
+                    logger.warning(
+                        f"Request ID {request_id}: Skipping malformed term item: {term}",
+                    )
+            logger.debug(
+                f"Request ID {request_id}: Parsed {valid_terms} valid term pairs "
+                f"from {len(response)} extracted items",
+            )
 
         except Exception as e:
-            logger.warning(f"Error during automatic terms extract: {e}")
+            logger.warning(
+                f"Error during automatic terms extract: {e}. "
+                f"paragraph_count={len(paragraphs.paragraphs)} token_count={paragraph_token_count}",
+            )
             return
         finally:
-            pbar.advance(len(paragraphs.paragraphs))
+            if pbar:
+                pbar.advance(len(paragraphs.paragraphs))
 
     def procress(self, doc_il: ILDocument):
         logger.info(f"{self.stage_name}: Starting term extraction for document.")

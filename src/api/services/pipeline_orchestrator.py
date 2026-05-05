@@ -148,12 +148,8 @@ class PipelineOrchestrator:
             await self.bigquery.write_dlp_tokens(
                 list(attempt_result.get("dlp_token_rows") or [])
             )
-            attempts = attempt_result.get("attempts", [])
-            if not attempts:
+            if not attempt_result:
                 raise RuntimeError("No attempt report produced by translation pipeline")
-
-            
-
             output_files: dict[str, Path] = {}
             for key in (
                 "mono_pdf_path",
@@ -184,12 +180,12 @@ class PipelineOrchestrator:
                 
                 "intent": intent,
                 "model_used": attempt_result.get("model_id"),
-                "retry_count": max(0, len(attempts) - 1),
+                "retry_count": max(0, attempt_result.get("attempt_index")),
                 "quality_report": attempt_result.get("quality_report"),
                 
                 "dlp_provider": attempt_result.get("dlp_provider"),
                 "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode"),
-                "attempts": attempts,
+                "attempts": attempt_result,
             }
 
             completed_at = datetime.now(UTC)
