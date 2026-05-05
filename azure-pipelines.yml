@@ -227,10 +227,12 @@ stages:
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
                   --min-instances=1 \
+                  --concurrency=2 \
                   --port=8000 \
                   --timeout=600 \
                   --memory=8Gi \
-                  --cpu=2 \
+                  --cpu=4 \
+                  --no-cpu-throttling \
                   --cpu-boost \
                   --add-volume mount-path=$(ASSETS_MOUNT_PATH),type=cloud-storage,bucket=$(GCS_BUCKET_NAME),readonly=false,mount-options="only-dir=$(GCS_ASSETS_DIR)" \
                   --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=$(APP_CONFIG_SECRET_VERSION),IS_LOCAL=false,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp"
