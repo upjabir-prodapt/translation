@@ -16,6 +16,14 @@ class TranslateResponse(BaseModel):
     status_url: str = Field(..., description="URL to poll for job status")
 
 
+class AuthTokenResponse(BaseModel):
+    """Response model for access token issuance."""
+
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field("bearer", description="Token type")
+    expires_in: int = Field(..., description="Access token lifetime in seconds")
+
+
 # ---------------------------------------------------------------------------
 # GET /translate/{job_id} — detailed job result
 # ---------------------------------------------------------------------------

@@ -237,6 +237,9 @@ class Settings(BaseSettings):
 
     ALLOWED_HOSTS: list[str] = ["*"]
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["*"])
+    JWT_SECRET_KEY: str | None = None
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     # -----------------------------
     # File Limits
@@ -294,6 +297,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def setup_directories(self) -> "Settings":
+        if self.JWT_ALGORITHM.upper() != "HS256":
+            raise ValueError("JWT_ALGORITHM must be HS256")
+        if not self.IS_LOCAL and not self.JWT_SECRET_KEY:
+            raise ValueError("JWT_SECRET_KEY is required when IS_LOCAL is false")
+
         cache_folder = self.assets_root_path
         cache_folder.mkdir(parents=True, exist_ok=True)
 

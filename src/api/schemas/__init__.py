@@ -6,7 +6,9 @@ from .common import OutputFiles
 from .common import ProgressInfo
 from .requests import JobCancelRequest
 from .requests import JobListRequest
+from .requests import AuthTokenRequest
 from .requests import TranslateRequest
+from .responses import AuthTokenResponse
 from .responses import DownloadResponse
 from .responses import ErrorResponse
 from .responses import HealthResponse
@@ -17,10 +19,12 @@ from .responses import TranslateResponse
 __all__ = [
     # Requests
     "TranslateRequest",
+    "AuthTokenRequest",
     "JobCancelRequest",
     "JobListRequest",
     # Responses
     "TranslateResponse",
+    "AuthTokenResponse",
     "JobStatusResponse",
     "JobListResponse",
     "DownloadResponse",

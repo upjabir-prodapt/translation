@@ -141,6 +141,14 @@ class CostAttributionInput(BaseModel):
     organization: str = Field(..., min_length=1, description="Organization name")
 
 
+class AuthTokenRequest(BaseModel):
+    """Request payload for token issuance."""
+
+    email: str = Field(..., min_length=3, description="User email address")
+    business_unit: str = Field(..., min_length=1, description="Business unit name")
+    organization: str = Field(..., min_length=1, description="Organization name")
+
+
 class TranslateRequest(BaseModel):
     """Request model for document translation."""
 

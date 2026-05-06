@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from src.api.core.security import create_access_token
 from src.api.dependencies import get_job_service, get_translation_service
 from src.api.main import app
 from src.api.schemas.responses import (
@@ -107,7 +108,16 @@ def api_client(mock_translation_service, mock_job_service):
     app.dependency_overrides[get_translation_service] = lambda: mock_translation_service
     app.dependency_overrides[get_job_service] = lambda: mock_job_service
 
+    token = create_access_token(
+        {
+            "sub": "user@colt.net",
+            "business_unit": "engineering",
+            "organization": "colt",
+        }
+    )
+
     with TestClient(app, raise_server_exceptions=False) as client:
+        client.headers.update({"Authorization": f"Bearer {token}"})
         yield client
 
     app.dependency_overrides.clear()

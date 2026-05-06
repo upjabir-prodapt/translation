@@ -5,6 +5,7 @@ from fastapi import Body
 from fastapi import Depends
 from fastapi import Query
 
+from src.api.core.security import get_current_user_context
 from src.api.dependencies import get_jobs_handler
 from src.api.handlers.jobs_handler import JobsHandler
 from src.api.schemas.requests import JobCancelRequest
@@ -12,7 +13,7 @@ from src.api.schemas.responses import DownloadResponse
 from src.api.schemas.responses import JobListResponse
 from src.api.schemas.responses import JobStatusResponse
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user_context)])
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse, tags=["jobs"])
