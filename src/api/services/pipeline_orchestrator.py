@@ -150,39 +150,32 @@ class PipelineOrchestrator:
             )
             if not attempt_result:
                 raise RuntimeError("No attempt report produced by translation pipeline")
-            output_files: dict[str, Path] = {}
-            for key in (
-                "mono_pdf_path",
-                "dual_pdf_path",
-                "no_watermark_mono_pdf_path",
-                "no_watermark_dual_pdf_path",
-            ):
-                value = attempt_result.get(key)
-                if value:
-                    output_files[key] = Path(str(value))
-
-            uploaded_outputs = await self.assembly_service.upload_outputs(job_id, output_files)
-            selected_output_uri = (
-                uploaded_outputs.get("mono_pdf_path")
-                or next(iter(uploaded_outputs.values()), None)
+            mono_pdf_path = attempt_result.get("mono_pdf_path")
+            preferred_output_name = str(
+                source_doc.get("output_filename")
+                or source_doc.get("original_filename")
+                or "output.pdf"
             )
+            selected_output_uri = None
+            if mono_pdf_path:
+                selected_output_uri = await self.assembly_service.upload_output(
+                    job_id=job_id,
+                    local_path=Path(str(mono_pdf_path)),
+                    preferred_filename=preferred_output_name,
+                )
 
             result_payload = {
                 "output_gcs_uri": selected_output_uri,
-                "output_gs_uris": uploaded_outputs,
-                
                 "token_count": int(
                     (attempt_result.get("token_usage") or {}).get("total_tokens", 0)
                 ),
                 "cost_usd": float(
                     (attempt_result.get("token_usage") or {}).get("estimated_cost_usd", 0.0)
                 ),
-                
                 "intent": intent,
                 "model_used": attempt_result.get("model_id"),
                 "retry_count": max(0, attempt_result.get("attempt_index")),
                 "quality_report": attempt_result.get("quality_report"),
-                
                 "dlp_provider": attempt_result.get("dlp_provider"),
                 "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode")
             }

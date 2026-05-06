@@ -76,11 +76,8 @@ class TranslationService:
                 job_id=job_id,
             )
 
-            # Build output filename: original_name_<target_lang_code>.<ext>
-            orig_name = metadata["filename"].rsplit(".", 1)
-            name_stem = orig_name[0] if len(orig_name) == 2 else metadata["filename"]
-            name_ext = orig_name[1] if len(orig_name) == 2 else "pdf"
-            output_filename = f"{name_stem}_{config['lang_out']}.{name_ext}"
+            # Keep output filename same as input filename.
+            output_filename = metadata["filename"]
 
             now = datetime.now(UTC)
             job_data = {

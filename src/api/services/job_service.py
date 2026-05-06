@@ -76,10 +76,7 @@ class JobService:
         download_url: str | None = None
         if status in ("completed", "human_review_required"):
             result_payload = self._result_payload(job_data)
-            output_uris = result_payload.get(
-                "output_gs_uris", job_data.get("output_gs_uris", {})
-            )
-            output_gcs_uri = output_uris.get("mono") or result_payload.get("output_gcs_uri")
+            output_gcs_uri = result_payload.get("output_gcs_uri")
             if output_gcs_uri:
                 try:
                     download_url = await self.storage.generate_signed_url(
@@ -268,16 +265,19 @@ class JobService:
 
         # Get output URIs
         result_payload = job_data.get("result", {}) or {}
-        output_uris = result_payload.get("output_gs_uris", job_data.get("output_gs_uris", {}))
-
-        if file_type not in output_uris:
+        if file_type != "mono":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Output file {file_type} not found",
             )
+        gcs_uri = result_payload.get("output_gcs_uri")
+        if not gcs_uri:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Output file mono not found",
+            )
 
         # Generate signed URL
-        gcs_uri = output_uris[file_type]
         download_url = await self.storage.generate_signed_url(
             blob_path=gcs_uri,
             expires_in=3600,  # 1 hour
