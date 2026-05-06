@@ -46,7 +46,7 @@ variables:
   - name: APP_CONFIG_SECRET_NAME
     value: 'translation-service-env'
   - name: APP_CONFIG_SECRET_VERSION
-    value: '6'
+    value: '7'
   - name: GCS_BUCKET_NAME
     value: 'aicoesandox-vxai-translation-app-001'
   - name: GCS_ASSETS_DIR
