@@ -113,6 +113,9 @@ class JobStatusResponse(BaseModel):
     created_at: datetime = Field(..., description="Job creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     completed_at: datetime | None = Field(None, description="Job completion timestamp")
+    download_url: str | None = Field(
+        None, description="Signed URL to download translated output when available"
+    )
     error_message: str | None = Field(None, description="Error message if job failed")
 
 

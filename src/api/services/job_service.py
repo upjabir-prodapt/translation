@@ -71,7 +71,25 @@ class JobService:
         if not job_data:
             raise JobNotFoundError(job_id)
 
-        progress, current_stage = self._progress_and_stage(str(job_data.get("status", "")))
+        status = str(job_data.get("status", ""))
+        progress, current_stage = self._progress_and_stage(status)
+        download_url: str | None = None
+        if status in ("completed", "human_review_required"):
+            result_payload = self._result_payload(job_data)
+            output_uris = result_payload.get(
+                "output_gs_uris", job_data.get("output_gs_uris", {})
+            )
+            output_gcs_uri = output_uris.get("mono") or result_payload.get("output_gcs_uri")
+            if output_gcs_uri:
+                try:
+                    download_url = await self.storage.generate_signed_url(
+                        blob_path=output_gcs_uri, expires_in=3600
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Could not generate download URL for job {job_id}: {e}"
+                    )
+
         cost_attribution = job_data.get("cost_attribution", {})
         return JobStatusResponse(
             job_id=job_data["job_id"],
@@ -83,6 +101,7 @@ class JobService:
             created_at=job_data.get("submitted_at"),
             updated_at=job_data.get("completed_at") or job_data.get("submitted_at"),
             completed_at=job_data.get("completed_at"),
+            download_url=download_url,
             error_message=self._job_error_message(job_data),
         )
 
