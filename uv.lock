@@ -430,6 +430,7 @@ dependencies = [
     { name = "pytest-cov" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyzstd" },
     { name = "rapidocr-onnxruntime" },
     { name = "rich" },
