@@ -120,10 +120,7 @@ def download_and_verify(
     name = asset_name or local_path.name
     logger.info(f"Downloading {name}...")
 
-    try:
-        download_with_retry(blob_path, local_path, storage_repo)
-    except AssetDownloadError:
-        raise
+    download_with_retry(blob_path, local_path, storage_repo)
 
     try:
         verify_and_raise(local_path, expected_hash, name)

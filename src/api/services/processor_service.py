@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -501,7 +501,7 @@ class JobProcessor:
             page_languages[detected_language] += len(chunk)
         return page_languages, page_chars
 
-    def _iter_page_text_chunks(self, page: Any) -> Iterable[str]:
+    def _iter_page_text_chunks(self, page: Any) -> Iterator[str]:
         # Use PyMuPDF page blocks for robust text extraction without pdfminer internals.
         for block in page.get_text("blocks") or []:
             if len(block) < 5:

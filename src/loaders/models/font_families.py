@@ -29,6 +29,10 @@ class FontFamilyConfig:
         return itertools.chain(self.script, self.normal, self.fallback, self.base)
 
 
+SOURCE_HAN_SANS_CN_REGULAR = "SourceHanSansCN-Regular.ttf"
+GO_NOTO_KURRENT_REGULAR = "GoNotoKurrent-Regular.ttf"
+GO_NOTO_KURRENT_BOLD = "GoNotoKurrent-Bold.ttf"
+
 # Chinese (Simplified)
 CN_FONT_FAMILY = FontFamilyConfig(
     script=[
@@ -38,13 +42,13 @@ CN_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSerifCN-Bold.ttf",
         "SourceHanSerifCN-Regular.ttf",
         "SourceHanSansCN-Bold.ttf",
-        "SourceHanSansCN-Regular.ttf",
+        SOURCE_HAN_SANS_CN_REGULAR,
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
-    base=["SourceHanSansCN-Regular.ttf"],
+    base=[SOURCE_HAN_SANS_CN_REGULAR],
 )
 
 # Hong Kong (Traditional)
@@ -57,10 +61,10 @@ HK_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSansHK-Regular.ttf",
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
-    base=["SourceHanSansCN-Regular.ttf"],
+    base=[SOURCE_HAN_SANS_CN_REGULAR],
 )
 
 # Taiwan (Traditional)
@@ -73,10 +77,10 @@ TW_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSansTW-Regular.ttf",
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
-    base=["SourceHanSansCN-Regular.ttf"],
+    base=[SOURCE_HAN_SANS_CN_REGULAR],
 )
 
 # Korean
@@ -89,10 +93,10 @@ KR_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSansKR-Regular.ttf",
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
-    base=["SourceHanSansCN-Regular.ttf"],
+    base=[SOURCE_HAN_SANS_CN_REGULAR],
 )
 
 # Japanese
@@ -105,10 +109,10 @@ JP_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSansJP-Regular.ttf",
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
-    base=["SourceHanSansCN-Regular.ttf"],
+    base=[SOURCE_HAN_SANS_CN_REGULAR],
 )
 
 # English/Western
@@ -126,8 +130,8 @@ EN_FONT_FAMILY = FontFamilyConfig(
         "NotoSans-Bold.ttf",
     ],
     fallback=[
-        "GoNotoKurrent-Regular.ttf",
-        "GoNotoKurrent-Bold.ttf",
+        GO_NOTO_KURRENT_REGULAR,
+        GO_NOTO_KURRENT_BOLD,
     ],
     base=[
         "NotoSans-Regular.ttf",
@@ -169,21 +173,22 @@ def get_font_family(lang_code: str) -> FontFamilyConfig:
     return ALL_FONT_FAMILIES["EN"]
 
 
+def _merge_fonts(family1: FontFamilyConfig, family2: FontFamilyConfig, added_fonts: set[str]) -> None:
+    for category in ["script", "normal", "fallback", "base"]:
+        fonts_list = getattr(family1, category)
+        for font in getattr(family2, category):
+            if font not in added_fonts:
+                fonts_list.append(font)
+                added_fonts.add(font)
+
+
 def _add_fallback_to_font_families() -> None:
     """Add fonts from other families as fallbacks to each family."""
-    # Create mutable copies
     for lang1, family1 in ALL_FONT_FAMILIES.items():
         added_fonts: set[str] = set(family1.all_fonts())
-
         for lang2, family2 in ALL_FONT_FAMILIES.items():
             if lang1 != lang2:
-                # Add fonts from family2 to family1's categories
-                for category in ["script", "normal", "fallback", "base"]:
-                    fonts_list = getattr(family1, category)
-                    for font in getattr(family2, category):
-                        if font not in added_fonts:
-                            fonts_list.append(font)
-                            added_fonts.add(font)
+                _merge_fonts(family1, family2, added_fonts)
 
 
 # Initialize fallback fonts
