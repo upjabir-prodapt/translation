@@ -226,7 +226,7 @@ stages:
                   --platform=managed \
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
-                  --min-instances=1 \
+                  --min-instances=0 \
                   --concurrency=1 \
                   --port=8000 \
                   --timeout=600 \
