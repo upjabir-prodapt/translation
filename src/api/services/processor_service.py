@@ -121,69 +121,37 @@ class JobProcessor:
         attempt_reports: list[dict[str, Any]] = []
 
         for model_index in range(max_attempts):
-            attempt_index = model_index + 1
-            selected_model = model_list[model_index]
-            attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
-            attempt_output_dir.mkdir(parents=True, exist_ok=True)
-            attempt_config = {
-                **config,
-                "selected_model": selected_model,
-                "attempt_index": attempt_index,
-            }
-            logger.info(f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}")
-            translation_config = self._build_translation_config(
-                attempt_config, attempt_output_dir
+            (
+                attempt_result,
+                attempt_config,
+                translation_config,
+                quality_result,
+                attempt_report,
+            ) = await self._execute_attempt(
+                model_index=model_index,
+                model_list=model_list,
+                config=config,
+                output_base_dir=output_base_dir,
+                max_attempts=max_attempts,
+                judge=judge,
             )
 
-            await self.progress_tracker.update(
-                self.PROGRESS_START,
-                f"Attempt {attempt_index}/{max_attempts}: model={selected_model}",
-            )
-            try:
-                attempt_result = await self._run_single_attempt(
-                    translation_config, attempt_config
-                )
-            except Exception as exc:
-                logger.exception(
-                    f"Attempt {attempt_index} failed with model {selected_model} with exception: {exc}"
-                )
-                if attempt_index == max_attempts:
-                    raise
+            if not attempt_result or not quality_result or not attempt_report:
                 continue
 
-            source_text, translated_text = extract_attempt_text(
-                Path(str(translation_config.working_dir))
-            )
-            quality_result = await self._evaluate_attempt_quality(
-                judge=judge,
-                source_text=source_text,
-                translated_text=translated_text,
-            )
-            token_usage = self._collect_token_usage(translation_config, selected_model)
-            attempt_report = {
-                "attempt_index": attempt_index,
-                "model_id": selected_model,
-                "quality": quality_result.to_dict(),
-                "token_usage": token_usage,
-                "working_dir": str(translation_config.working_dir),
-                "output_dir": str(attempt_output_dir),
-            }
             attempt_reports.append(attempt_report)
-            self._write_quality_report(
-                Path(str(translation_config.working_dir)), attempt_report
-            )
-
             final_score = quality_result.final_score
+
             if final_score > best_attempt_score:
                 best_attempt_score = final_score
                 best_attempt_result = {
                     **attempt_result,
-                    "attempt_index": attempt_index,
-                    "model_id": selected_model,
+                    "attempt_index": attempt_config["attempt_index"],
+                    "model_id": attempt_config["selected_model"],
                     "quality_report": quality_result.to_dict(),
-                    "token_usage": token_usage,
+                    "token_usage": attempt_report["token_usage"],
                 }
-                best_attempt_config = dict(attempt_config)
+                best_attempt_config = attempt_config
                 best_translation_config = translation_config
                 best_quality_result = quality_result
 
@@ -213,6 +181,68 @@ class JobProcessor:
             )
         
         return best_attempt_result
+
+    async def _execute_attempt(
+        self,
+        *,
+        model_index: int,
+        model_list: list[str],
+        config: dict[str, Any],
+        output_base_dir: Path,
+        max_attempts: int,
+        judge: GoogleADKJudgeAgent,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any], TranslationConfig | None, QualityJudgeResult | None, dict[str, Any] | None]:
+        attempt_index = model_index + 1
+        selected_model = model_list[model_index]
+        attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
+        attempt_output_dir.mkdir(parents=True, exist_ok=True)
+        attempt_config = {
+            **config,
+            "selected_model": selected_model,
+            "attempt_index": attempt_index,
+        }
+        logger.info(f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}")
+        translation_config = self._build_translation_config(
+            attempt_config, attempt_output_dir
+        )
+
+        await self.progress_tracker.update(
+            self.PROGRESS_START,
+            f"Attempt {attempt_index}/{max_attempts}: model={selected_model}",
+        )
+        try:
+            attempt_result = await self._run_single_attempt(
+                translation_config, attempt_config
+            )
+        except Exception as exc:
+            logger.exception(
+                f"Attempt {attempt_index} failed with model {selected_model} with exception: {exc}"
+            )
+            if attempt_index == max_attempts:
+                raise
+            return None, attempt_config, None, None, None
+
+        source_text, translated_text = extract_attempt_text(
+            Path(str(translation_config.working_dir))
+        )
+        quality_result = await self._evaluate_attempt_quality(
+            judge=judge,
+            source_text=source_text,
+            translated_text=translated_text,
+        )
+        token_usage = self._collect_token_usage(translation_config, selected_model)
+        attempt_report = {
+            "attempt_index": attempt_index,
+            "model_id": selected_model,
+            "quality": quality_result.to_dict(),
+            "token_usage": token_usage,
+            "working_dir": str(translation_config.working_dir),
+            "output_dir": str(attempt_output_dir),
+        }
+        self._write_quality_report(
+            Path(str(translation_config.working_dir)), attempt_report
+        )
+        return attempt_result, attempt_config, translation_config, quality_result, attempt_report
 
     async def _run_single_attempt(
         self, translation_config: TranslationConfig, config: dict[str, Any]

@@ -183,15 +183,15 @@ class GoogleADKJudgeAgent:
             parsed = (getattr(response, "text", "") or "").strip()
             try:
                 parsed = json.loads(parsed.replace("```json", "").replace("```", "").strip())
-                return parsed
+                return QualityJudgeLLMScores(**parsed)
             except Exception as parse_error:
                 logger.warning(f"Judge fallback JSON parse failed: {parse_error}")
-                return {
-                    "alignment_score":0.0,
-                    "omission_score":0.0,
-                    "hallucination_score":0.8,
-                    "reasons":["Judge parse failed, fallback heuristic used."],
-                }
+                return QualityJudgeLLMScores(
+                    alignment_score=0.0,
+                    omission_score=0.0,
+                    hallucination_score=0.8,
+                    reasons=["Judge parse failed, fallback heuristic used."],
+                )
 
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:

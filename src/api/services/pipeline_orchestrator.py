@@ -42,6 +42,8 @@ class _PipelineProgressTracker:
             logger.info(
                 f"job_id={self.job_id} progress={progress} stage={current_stage}"
             )
+        import asyncio
+        await asyncio.sleep(0)
         return True
 
 

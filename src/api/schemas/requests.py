@@ -25,7 +25,7 @@ class DocumentInput(BaseModel):
         """Validate that content is valid base64."""
         try:
             base64.b64decode(v, validate=True)
-        except (binascii.Error, ValueError) as e:
+        except ValueError as e:
             raise ValueError("content must be valid base64-encoded data") from e
         return v
 

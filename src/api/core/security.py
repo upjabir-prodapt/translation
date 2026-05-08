@@ -88,7 +88,7 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-async def verify_token(
+def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> dict[str, Any]:
     """Verify bearer token and return JWT payload."""
@@ -101,18 +101,18 @@ async def verify_token(
     return decode_and_verify_token(credentials.credentials)
 
 
-async def get_current_user(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> dict[str, Any]:
     """Backward-compatible dependency returning raw token payload."""
-    return await verify_token(credentials)
+    return verify_token(credentials)
 
 
-async def get_current_user_context(
+def get_current_user_context(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    payload = await verify_token(credentials)
+    payload = verify_token(credentials)
     return AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),
