@@ -120,14 +120,72 @@ def paeth_predictor(left: int, above: int, upper_left: int) -> int:
         return upper_left
 
 
+def _apply_png_filter_none(line_encoded: bytes) -> list[int]:
+    """Filter type 0: None — return raw bytes unchanged."""
+    return list(line_encoded)
+
+
+def _apply_png_filter_sub(line_encoded: bytes, bpp: int) -> list[int]:
+    """Filter type 1: Sub — Raw(x) = Sub(x) + Raw(x-bpp) mod 256."""
+    raw: list[int] = []
+    for j, sub_x in enumerate(line_encoded):
+        raw_x_bpp = int(raw[j - bpp]) if j - bpp >= 0 else 0
+        raw.append((sub_x + raw_x_bpp) & 255)
+    return raw
+
+
+def _apply_png_filter_up(line_encoded: bytes, line_above: list[int]) -> list[int]:
+    """Filter type 2: Up — Raw(x) = Up(x) + Prior(x) mod 256."""
+    return [(up_x + prior_x) & 255 for up_x, prior_x in zip(line_encoded, line_above, strict=False)]
+
+
+def _apply_png_filter_average(line_encoded: bytes, line_above: list[int], bpp: int) -> list[int]:
+    """Filter type 3: Average — Raw(x) = Average(x) + floor((Raw(x-bpp)+Prior(x))/2) mod 256."""
+    raw: list[int] = []
+    for j, average_x in enumerate(line_encoded):
+        raw_x_bpp = int(raw[j - bpp]) if j - bpp >= 0 else 0
+        prior_x = int(line_above[j])
+        raw.append((average_x + (raw_x_bpp + prior_x) // 2) & 255)
+    return raw
+
+
+def _apply_png_filter_paeth(line_encoded: bytes, line_above: list[int], bpp: int) -> list[int]:
+    """Filter type 4: Paeth — Raw(x) = Paeth(x) + PaethPredictor(...) mod 256."""
+    raw: list[int] = []
+    for j, paeth_x in enumerate(line_encoded):
+        raw_x_bpp = int(raw[j - bpp]) if j - bpp >= 0 else 0
+        prior_x_bpp = int(line_above[j - bpp]) if j - bpp >= 0 else 0
+        prior_x = int(line_above[j])
+        raw.append((paeth_x + paeth_predictor(raw_x_bpp, prior_x, prior_x_bpp)) & 255)
+    return raw
+
+
+def _decode_png_scanline(
+    filter_type: int, line_encoded: bytes, line_above: list[int], bpp: int
+) -> list[int]:
+    """Dispatch a single scanline to the appropriate filter decoder."""
+    if filter_type == 0:
+        return _apply_png_filter_none(line_encoded)
+    elif filter_type == 1:
+        return _apply_png_filter_sub(line_encoded, bpp)
+    elif filter_type == 2:
+        return _apply_png_filter_up(line_encoded, line_above)
+    elif filter_type == 3:
+        return _apply_png_filter_average(line_encoded, line_above, bpp)
+    elif filter_type == 4:
+        return _apply_png_filter_paeth(line_encoded, line_above, bpp)
+    else:
+        raise PDFValueError("Unsupported predictor value: %d" % filter_type)
+
+
 def apply_png_predictor(
-    pred: int,
+    _pred: int,
     colors: int,
     columns: int,
     bitspercomponent: int,
     data: bytes,
 ) -> bytes:
-    """Reverse the effect of the PNG predictor
+    """Reverse the effect of the PNG predictor.
 
     Documentation: http://www.libpng.org/pub/png/spec/1.2/PNG-Filters.html
     """
@@ -137,85 +195,12 @@ def apply_png_predictor(
 
     nbytes = colors * columns * bitspercomponent // 8
     bpp = colors * bitspercomponent // 8  # number of bytes per complete pixel
-    buf = []
-    line_above = list(b"\x00" * columns)
+    buf: list[int] = []
+    line_above: list[int] = list(b"\x00" * columns)
     for scanline_i in range(0, len(data), nbytes + 1):
         filter_type = data[scanline_i]
         line_encoded = data[scanline_i + 1 : scanline_i + 1 + nbytes]
-        raw = []
-
-        if filter_type == 0:
-            # Filter type 0: None
-            raw = list(line_encoded)
-
-        elif filter_type == 1:
-            # Filter type 1: Sub
-            # To reverse the effect of the Sub() filter after decompression,
-            # output the following value:
-            #   Raw(x) = Sub(x) + Raw(x - bpp)
-            # (computed mod 256), where Raw() refers to the bytes already
-            #  decoded.
-            for j, sub_x in enumerate(line_encoded):
-                if j - bpp < 0:
-                    raw_x_bpp = 0
-                else:
-                    raw_x_bpp = int(raw[j - bpp])
-                raw_x = (sub_x + raw_x_bpp) & 255
-                raw.append(raw_x)
-
-        elif filter_type == 2:
-            # Filter type 2: Up
-            # To reverse the effect of the Up() filter after decompression,
-            # output the following value:
-            #   Raw(x) = Up(x) + Prior(x)
-            # (computed mod 256), where Prior() refers to the decoded bytes of
-            # the prior scanline.
-            for up_x, prior_x in zip(line_encoded, line_above, strict=False):
-                raw_x = (up_x + prior_x) & 255
-                raw.append(raw_x)
-
-        elif filter_type == 3:
-            # Filter type 3: Average
-            # To reverse the effect of the Average() filter after
-            # decompression, output the following value:
-            #    Raw(x) = Average(x) + floor((Raw(x-bpp)+Prior(x))/2)
-            # where the result is computed mod 256, but the prediction is
-            # calculated in the same way as for encoding. Raw() refers to the
-            # bytes already decoded, and Prior() refers to the decoded bytes of
-            # the prior scanline.
-            for j, average_x in enumerate(line_encoded):
-                if j - bpp < 0:
-                    raw_x_bpp = 0
-                else:
-                    raw_x_bpp = int(raw[j - bpp])
-                prior_x = int(line_above[j])
-                raw_x = (average_x + (raw_x_bpp + prior_x) // 2) & 255
-                raw.append(raw_x)
-
-        elif filter_type == 4:
-            # Filter type 4: Paeth
-            # To reverse the effect of the Paeth() filter after decompression,
-            # output the following value:
-            #    Raw(x) = Paeth(x)
-            #             + PaethPredictor(Raw(x-bpp), Prior(x), Prior(x-bpp))
-            # (computed mod 256), where Raw() and Prior() refer to bytes
-            # already decoded. Exactly the same PaethPredictor() function is
-            # used by both encoder and decoder.
-            for j, paeth_x in enumerate(line_encoded):
-                if j - bpp < 0:
-                    raw_x_bpp = 0
-                    prior_x_bpp = 0
-                else:
-                    raw_x_bpp = int(raw[j - bpp])
-                    prior_x_bpp = int(line_above[j - bpp])
-                prior_x = int(line_above[j])
-                paeth = paeth_predictor(raw_x_bpp, prior_x, prior_x_bpp)
-                raw_x = (paeth_x + paeth) & 255
-                raw.append(raw_x)
-
-        else:
-            raise PDFValueError("Unsupported predictor value: %d" % filter_type)
-
+        raw = _decode_png_scanline(filter_type, line_encoded, line_above, bpp)
         buf.extend(raw)
         line_above = raw
     return bytes(buf)
@@ -648,7 +633,7 @@ def matrix2str(m: Matrix) -> str:
     return f"[{a:.2f},{b:.2f},{c:.2f},{d:.2f}, ({e:.2f},{f:.2f})]"
 
 
-def vecBetweenBoxes(obj1: "LTComponent", obj2: "LTComponent") -> Point:
+def vec_between_boxes(obj1: "LTComponent", obj2: "LTComponent") -> Point:
     """A distance function between two TextBoxes.
 
     Consider the bounding rectangle for obj1 and obj2.

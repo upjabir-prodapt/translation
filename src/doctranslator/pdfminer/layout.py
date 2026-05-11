@@ -697,6 +697,61 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         LTContainer.__init__(self, bbox)
         self.groups: list[LTTextGroup] | None = None
 
+    @staticmethod
+    def _compute_halign(obj0: LTComponent, obj1: LTComponent, laparams: LAParams) -> bool:
+        """Return True if obj0 and obj1 are horizontally aligned within char_margin."""
+        return (
+            obj0.is_voverlap(obj1)
+            and min(obj0.height, obj1.height) * laparams.line_overlap < obj0.voverlap(obj1)
+            and obj0.hdistance(obj1) < max(obj0.width, obj1.width) * laparams.char_margin
+        )
+
+    @staticmethod
+    def _compute_valign(obj0: LTComponent, obj1: LTComponent, laparams: LAParams) -> bool:
+        """Return True if obj0 and obj1 are vertically aligned (detect_vertical mode)."""
+        return (
+            laparams.detect_vertical
+            and obj0.is_hoverlap(obj1)
+            and min(obj0.width, obj1.width) * laparams.line_overlap < obj0.hoverlap(obj1)
+            and obj0.vdistance(obj1) < max(obj0.height, obj1.height) * laparams.char_margin
+        )
+
+    def _advance_line(
+        self,
+        obj0: LTComponent,
+        obj1: LTComponent,
+        line: "LTTextLine | None",
+        halign: bool,
+        valign: bool,
+        laparams: LAParams,
+    ) -> "tuple[LTTextLine | None, LTTextLine | None]":
+        """Decide how to extend or yield the current text line given alignment flags.
+
+        Returns (new_line, line_to_yield). If line_to_yield is not None, the caller
+        should yield it before using new_line.
+        """
+        if (halign and isinstance(line, LTTextLineHorizontal)) or (
+            valign and isinstance(line, LTTextLineVertical)
+        ):
+            line.add(obj1)  # type: ignore[union-attr]
+            return line, None
+        elif line is not None:
+            return None, line
+        elif valign and not halign:
+            new_line: LTTextLine = LTTextLineVertical(laparams.word_margin)
+            new_line.add(obj0)
+            new_line.add(obj1)
+            return new_line, None
+        elif halign and not valign:
+            new_line = LTTextLineHorizontal(laparams.word_margin)
+            new_line.add(obj0)
+            new_line.add(obj1)
+            return new_line, None
+        else:
+            fallback: LTTextLine = LTTextLineHorizontal(laparams.word_margin)
+            fallback.add(obj0)
+            return None, fallback
+
     # group_objects: group text object to textlines.
     def group_objects(
         self,
@@ -707,67 +762,11 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         line = None
         for obj1 in objs:
             if obj0 is not None:
-                # halign: obj0 and obj1 is horizontally aligned.
-                #
-                #   +------+ - - -
-                #   | obj0 | - - +------+   -
-                #   |      |     | obj1 |   | (line_overlap)
-                #   +------+ - - |      |   -
-                #          - - - +------+
-                #
-                #          |<--->|
-                #        (char_margin)
-                halign = (
-                    obj0.is_voverlap(obj1)
-                    and min(obj0.height, obj1.height) * laparams.line_overlap
-                    < obj0.voverlap(obj1)
-                    and obj0.hdistance(obj1)
-                    < max(obj0.width, obj1.width) * laparams.char_margin
-                )
-
-                # valign: obj0 and obj1 is vertically aligned.
-                #
-                #   +------+
-                #   | obj0 |
-                #   |      |
-                #   +------+ - - -
-                #     |    |     | (char_margin)
-                #     +------+ - -
-                #     | obj1 |
-                #     |      |
-                #     +------+
-                #
-                #     |<-->|
-                #   (line_overlap)
-                valign = (
-                    laparams.detect_vertical
-                    and obj0.is_hoverlap(obj1)
-                    and min(obj0.width, obj1.width) * laparams.line_overlap
-                    < obj0.hoverlap(obj1)
-                    and obj0.vdistance(obj1)
-                    < max(obj0.height, obj1.height) * laparams.char_margin
-                )
-
-                if (halign and isinstance(line, LTTextLineHorizontal)) or (
-                    valign and isinstance(line, LTTextLineVertical)
-                ):
-                    line.add(obj1)
-                elif line is not None:
-                    yield line
-                    line = None
-                elif valign and not halign:
-                    line = LTTextLineVertical(laparams.word_margin)
-                    line.add(obj0)
-                    line.add(obj1)
-                elif halign and not valign:
-                    line = LTTextLineHorizontal(laparams.word_margin)
-                    line.add(obj0)
-                    line.add(obj1)
-                else:
-                    line = LTTextLineHorizontal(laparams.word_margin)
-                    line.add(obj0)
-                    yield line
-                    line = None
+                halign = self._compute_halign(obj0, obj1, laparams)
+                valign = self._compute_valign(obj0, obj1, laparams)
+                line, to_yield = self._advance_line(obj0, obj1, line, halign, valign, laparams)
+                if to_yield is not None:
+                    yield to_yield
             obj0 = obj1
         if line is None:
             line = LTTextLineHorizontal(laparams.word_margin)
@@ -831,75 +830,59 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         :param boxes: All textbox objects to be grouped.
         :return: a list that has only one element, the final top level group.
         """
-        ElementT = Union[LTTextBox, LTTextGroup]
-        plane: Plane[ElementT] = Plane(self.bbox)
+        element_t = Union[LTTextBox, LTTextGroup]
+        plane: Plane[element_t] = Plane(self.bbox)
 
         def dist(obj1: LTComponent, obj2: LTComponent) -> float:
-            """A distance function between two TextBoxes.
-
-            Consider the bounding rectangle for obj1 and obj2.
-            Return its area less the areas of obj1 and obj2,
-            shown as 'www' below. This value may be negative.
-                    +------+..........+ (x1, y1)
-                    | obj1 |wwwwwwwwww:
-                    +------+www+------+
-                    :wwwwwwwwww| obj2 |
-            (x0, y0) +..........+------+
-            """
+            """Bounding-box area minus the areas of the two objects (gap metric)."""
             x0 = min(obj1.x0, obj2.x0)
             y0 = min(obj1.y0, obj2.y0)
             x1 = max(obj1.x1, obj2.x1)
             y1 = max(obj1.y1, obj2.y1)
-            return (
-                (x1 - x0) * (y1 - y0)
-                - obj1.width * obj1.height
-                - obj2.width * obj2.height
-            )
+            return (x1 - x0) * (y1 - y0) - obj1.width * obj1.height - obj2.width * obj2.height
 
-        def isany(obj1: ElementT, obj2: ElementT) -> set[ElementT]:
-            """Check if there's any other object between obj1 and obj2."""
+        def isany(obj1: element_t, obj2: element_t) -> set[element_t]:
+            """Return any objects occupying the bounding box between obj1 and obj2."""
             x0 = min(obj1.x0, obj2.x0)
             y0 = min(obj1.y0, obj2.y0)
             x1 = max(obj1.x1, obj2.x1)
             y1 = max(obj1.y1, obj2.y1)
-            objs = set(plane.find((x0, y0, x1, y1)))
-            return objs.difference((obj1, obj2))
+            return set(plane.find((x0, y0, x1, y1))).difference((obj1, obj2))
 
-        dists: list[tuple[bool, float, int, int, ElementT, ElementT]] = []
-        for i in range(len(boxes)):
-            box1 = boxes[i]
-            for j in range(i + 1, len(boxes)):
-                box2 = boxes[j]
-                dists.append((False, dist(box1, box2), id(box1), id(box2), box1, box2))
+        def _make_group(obj1: element_t, obj2: element_t) -> LTTextGroup:
+            """Create the appropriate LTTextGroup subclass for a pair of objects."""
+            if isinstance(obj1, (LTTextBoxVertical, LTTextGroupTBRL)) or isinstance(
+                obj2, (LTTextBoxVertical, LTTextGroupTBRL)
+            ):
+                return LTTextGroupTBRL([obj1, obj2])
+            return LTTextGroupLRTB([obj1, obj2])
+
+        dists: list[tuple[bool, float, int, int, element_t, element_t]] = [
+            (False, dist(boxes[i], boxes[j]), id(boxes[i]), id(boxes[j]), boxes[i], boxes[j])
+            for i in range(len(boxes))
+            for j in range(i + 1, len(boxes))
+        ]
         heapq.heapify(dists)
 
         plane.extend(boxes)
-        done = set()
-        while len(dists) > 0:
+        done: set[int] = set()
+        while dists:
             (skip_isany, d, id1, id2, obj1, obj2) = heapq.heappop(dists)
-            # Skip objects that are already merged
-            if (id1 not in done) and (id2 not in done):
-                if not skip_isany and isany(obj1, obj2):
-                    heapq.heappush(dists, (True, d, id1, id2, obj1, obj2))
-                    continue
-                if isinstance(obj1, (LTTextBoxVertical, LTTextGroupTBRL)) or isinstance(
-                    obj2,
-                    (LTTextBoxVertical, LTTextGroupTBRL),
-                ):
-                    group: LTTextGroup = LTTextGroupTBRL([obj1, obj2])
-                else:
-                    group = LTTextGroupLRTB([obj1, obj2])
-                plane.remove(obj1)
-                plane.remove(obj2)
-                done.update([id1, id2])
-
-                for other in plane:
-                    heapq.heappush(
-                        dists,
-                        (False, dist(group, other), id(group), id(other), group, other),
-                    )
-                plane.add(group)
-        # By now only groups are in the plane
+            if id1 in done or id2 in done:
+                continue
+            if not skip_isany and isany(obj1, obj2):
+                heapq.heappush(dists, (True, d, id1, id2, obj1, obj2))
+                continue
+            group = _make_group(obj1, obj2)
+            plane.remove(obj1)
+            plane.remove(obj2)
+            done.update([id1, id2])
+            for other in plane:
+                heapq.heappush(
+                    dists,
+                    (False, dist(group, other), id(group), id(other), group, other),
+                )
+            plane.add(group)
         return list(cast(LTTextGroup, g) for g in plane)
 
     def analyze(self, laparams: LAParams) -> None:

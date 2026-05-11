@@ -388,12 +388,67 @@ class StylesAndFormulas:
         max_y = max(char.visual_bbox.box.y2 for char in line.pdf_character)
         line.box = Box(min_x, min_y, max_x, max_y)
 
+    def _is_formula_char(
+        self,
+        char: PdfCharacter,
+        in_formula_state: bool,
+        formula_font_ids: set[int],
+    ) -> bool:
+        """Return True if `char` should be classified as formula (first-pass, no corner-mark logic)."""
+        return (
+            char.formula_layout_id
+            or (
+                is_formulas_start_char(char.char_unicode, self.font_mapper, self.translation_config)
+                and not in_formula_state
+            )
+            or (
+                is_formulas_middle_char(char.char_unicode, self.font_mapper, self.translation_config)
+                and in_formula_state
+            )
+            or char.pdf_style.font_id in formula_font_ids
+            or char.vertical
+            or (char.char_unicode is None and in_formula_state)
+            or (
+                char.box.x > char.visual_bbox.box.x2
+                or char.box.x2 < char.visual_bbox.box.x
+                or char.box.y > char.visual_bbox.box.y2
+                or char.box.y2 < char.visual_bbox.box.y
+            )
+        )
+
+    @staticmethod
+    def _is_corner_mark(
+        char: PdfCharacter,
+        previous_char: "PdfCharacter | None",
+        next_char: "PdfCharacter | None",
+        isspace: bool,
+        prev_is_space: bool,
+        first_is_bullet: bool,
+        in_corner_mark_state: bool,
+    ) -> bool:
+        """Return True if `char` is a superscript/subscript corner mark."""
+        if previous_char is not None and not isspace and not prev_is_space and not first_is_bullet:
+            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 0.79 and not in_corner_mark_state:
+                return True
+            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 1.1 and in_corner_mark_state:
+                return True
+        if (
+            previous_char is None
+            and next_char is not None
+            and not isspace
+            and not prev_is_space
+            and not first_is_bullet
+            and char.pdf_style.font_size < next_char.pdf_style.font_size * 0.79
+            and not in_corner_mark_state
+        ):
+            return True
+        return False
+
     def _classify_characters_in_composition(
         self,
         composition: PdfParagraphComposition,
         formula_font_ids: set[int],
         first_is_bullet_so_far: bool,
-        line_index: int,
     ) -> tuple[list[tuple[PdfCharacter, bool]], bool]:
         """
         Phase 1: Classify every character in a composition as either formula or text.
@@ -411,56 +466,17 @@ class StylesAndFormulas:
         in_corner_mark_state = False
         corner_mark_info = []
 
-        # Determine the `is_formula` tag for each character
         for i, char in enumerate(line.pdf_character):
-            # The original logic for `first_is_bullet`: it is set if any segment starts with a bullet.
-            # A "segment" started when `current_chars` was empty.
-            # We determine the start of a segment by looking at the previous char's tag.
             is_start_of_segment = i == 0 or (
                 len(is_formula_tags) > 0 and is_formula_tags[-1] != in_formula_state
             )
             if not first_is_bullet and is_start_of_segment and is_bullet_point(char):
                 first_is_bullet = True
 
-            is_formula = (
-                (  # 区分公式开头的字符&公式中间的字符。主要是逗号不能在公式开头，但是可以在中间。
-                    char.formula_layout_id
-                    or (
-                        is_formulas_start_char(
-                            char.char_unicode,
-                            self.font_mapper,
-                            self.translation_config,
-                        )
-                        and not in_formula_state
-                    )
-                    or (
-                        is_formulas_middle_char(
-                            char.char_unicode,
-                            self.font_mapper,
-                            self.translation_config,
-                        )
-                        and in_formula_state
-                    )
-                )  # 公式字符
-                or char.pdf_style.font_id in formula_font_ids  # 公式字体
-                or char.vertical  # 垂直字体
-                or (
-                    #   如果是程序添加的 dummy 空格
-                    char.char_unicode is None and in_formula_state
-                )
-                or (
-                    # 如果字符的视觉框和实际框不一致，则认为是公式字符
-                    char.box.x > char.visual_bbox.box.x2
-                    or char.box.x2 < char.visual_bbox.box.x
-                    or char.box.y > char.visual_bbox.box.y2
-                    or char.box.y2 < char.visual_bbox.box.y
-                )
-            )
+            is_formula = self._is_formula_char(char, in_formula_state, formula_font_ids)
 
             previous_char = line.pdf_character[i - 1] if i > 0 else None
-            next_char = (
-                line.pdf_character[i + 1] if i < len(line.pdf_character) - 1 else None
-            )
+            next_char = line.pdf_character[i + 1] if i < len(line.pdf_character) - 1 else None
             isspace = char.char_unicode.isspace() if char.char_unicode else False
             prev_is_space = (
                 previous_char.char_unicode.isspace()
@@ -468,38 +484,8 @@ class StylesAndFormulas:
                 else False
             )
 
-            is_corner_mark = (
-                (
-                    previous_char is not None
-                    and not isspace
-                    and not prev_is_space
-                    and not first_is_bullet
-                    # 角标字体，有 0.76 的角标和 0.799 的大写，这里用 0.79 取中，同时考虑首字母放大的情况
-                    and char.pdf_style.font_size
-                    < previous_char.pdf_style.font_size * 0.79
-                    and not in_corner_mark_state
-                )
-                or (
-                    previous_char is not None
-                    and not isspace
-                    and not prev_is_space
-                    and not first_is_bullet
-                    # 角标字体，有 0.76 的角标和 0.799 的大写，这里用 0.79 取中，同时考虑首字母放大的情况
-                    and char.pdf_style.font_size
-                    < previous_char.pdf_style.font_size * 1.1
-                    and in_corner_mark_state
-                )
-                or (
-                    # 检查段落开始的角标：当没有前一个字符时，通过下一个字符判断
-                    previous_char is None
-                    and next_char is not None
-                    and not isspace
-                    and not prev_is_space
-                    and not first_is_bullet
-                    # 当前字符字体大小明显小于下一个字符，判定为角标
-                    and char.pdf_style.font_size < next_char.pdf_style.font_size * 0.79
-                    and not in_corner_mark_state
-                )
+            is_corner_mark = self._is_corner_mark(
+                char, previous_char, next_char, isspace, prev_is_space, first_is_bullet, in_corner_mark_state
             )
 
             is_formula = is_formula or is_corner_mark
@@ -507,7 +493,6 @@ class StylesAndFormulas:
             if char.char_unicode == " ":
                 is_formula = in_formula_state
 
-            # This simulates the state change for the next iteration
             if is_formula != in_formula_state:
                 in_formula_state = is_formula
 
@@ -525,7 +510,6 @@ class StylesAndFormulas:
     def _group_classified_characters(
         self,
         tagged_chars: list[tuple[PdfCharacter, bool, bool]],
-        line_index: int,
     ) -> list[PdfParagraphComposition]:
         """
         Phase 2: Group consecutive characters with the same tag into new compositions.
@@ -547,7 +531,7 @@ class StylesAndFormulas:
                 has_corner_mark = any(current_corner_mark_flags)
                 new_compositions.append(
                     self.create_composition(
-                        current_chars, current_tag, line_index, has_corner_mark
+                        current_chars, current_tag, has_corner_mark
                     ),
                 )
                 current_chars = [char]
@@ -559,7 +543,7 @@ class StylesAndFormulas:
             has_corner_mark = any(current_corner_mark_flags)
             new_compositions.append(
                 self.create_composition(
-                    current_chars, current_tag, line_index, has_corner_mark
+                    current_chars, current_tag, has_corner_mark
                 ),
             )
 
@@ -594,9 +578,7 @@ class StylesAndFormulas:
             # This flag is carried through all compositions in a paragraph, as in the original implementation.
             first_is_bullet = False
 
-            for line_index, composition in enumerate(
-                paragraph.pdf_paragraph_composition
-            ):
+            for composition in paragraph.pdf_paragraph_composition:
                 (
                     tagged_chars,
                     first_is_bullet,
@@ -604,7 +586,7 @@ class StylesAndFormulas:
                     composition,
                     current_formula_font_ids,
                     first_is_bullet,
-                    line_index,
+
                 )
 
                 if not tagged_chars:
@@ -612,7 +594,7 @@ class StylesAndFormulas:
                     continue
 
                 grouped_compositions = self._group_classified_characters(
-                    tagged_chars, line_index
+                    tagged_chars
                 )
                 new_paragraph_compositions.extend(grouped_compositions)
 
@@ -787,7 +769,7 @@ class StylesAndFormulas:
     ) -> PdfParagraphComposition:
         """创建具有相同样式的文本组合"""
         if not chars:
-            return None
+            return None  # type: ignore[return-value]
 
         # 计算边界框
         min_x = min(char.visual_bbox.box.x for char in chars)
@@ -897,10 +879,8 @@ class StylesAndFormulas:
                     formula.y_offset = 0
 
                 if max(abs(formula.y_offset), abs(formula.x_offset)) > 10:
+                    # Offset is unusually large; intentionally left as-is (debug logging suppressed).
                     pass
-                    # logging.debug(
-                    #     f"公式 {formula.box} 的偏移量过大：{formula.x_offset}, {formula.y_offset}"
-                    # )
 
     def calculate_line_spacing(self, paragraph) -> float:
         """计算段落中的平均行间距"""
@@ -934,11 +914,10 @@ class StylesAndFormulas:
         self,
         chars: list[PdfCharacter],
         is_formula: bool,
-        line_index: int,
         is_corner_mark: bool = False,
     ) -> PdfParagraphComposition:
         if is_formula:
-            formula = PdfFormula(pdf_character=chars, line_id=line_index)
+            formula = PdfFormula(pdf_character=chars)
             formula.is_corner_mark = is_corner_mark
             self.update_formula_data(formula)
             return PdfParagraphComposition(pdf_formula=formula)
@@ -1154,7 +1133,7 @@ class StylesAndFormulas:
                             break
 
     def _have_same_layout_ids(
-        self, formula1: PdfFormula, formula2: PdfFormula, page: Page
+        self, formula1: PdfFormula, formula2: PdfFormula, _page: Page
     ) -> bool:
         """检查两个公式的所有字符是否具有相同的 layout id"""
         # 获取 formula1 中所有字符的 layout id

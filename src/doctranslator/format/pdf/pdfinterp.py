@@ -56,34 +56,38 @@ class PDFContentParserEx(PDFContentParser):
     def __init__(self, streams: Sequence[object]) -> None:
         super().__init__(streams)
 
+    def _handle_keyword_id(self, pos: int) -> None:
+        """Handle the ID keyword for inline images."""
+        try:
+            (_, objs) = self.end_type("inline")
+            if len(objs) % 2 != 0:
+                error_msg = f"Invalid dictionary construct: {objs!r}"
+                raise PSTypeError(error_msg)
+            d = {literal_name(k): resolve1(v) for (k, v) in choplist(2, objs)}
+            eos = b"EI"
+            filter_ = d.get("F", None)
+            if filter_:
+                if isinstance(filter_, PSLiteral):
+                    filter_ = [filter_]
+                if filter_[0] in LITERALS_ASCII85_DECODE:
+                    eos = b"~>"
+            (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
+            if eos != b"EI":  # it may be necessary for decoding
+                data += eos
+            obj = PDFStream(d, data)
+            self.push((pos, obj))
+            if eos == b"EI":  # otherwise it is still in the stream
+                self.push((pos, self.KEYWORD_EI))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
         if token is self.KEYWORD_BI:
             # inline image within a content stream
             self.start_type(pos, "inline")
         elif token is self.KEYWORD_ID:
-            try:
-                (_, objs) = self.end_type("inline")
-                if len(objs) % 2 != 0:
-                    error_msg = f"Invalid dictionary construct: {objs!r}"
-                    raise PSTypeError(error_msg)
-                d = {literal_name(k): resolve1(v) for (k, v) in choplist(2, objs)}
-                eos = b"EI"
-                filter_ = d.get("F", None)
-                if filter_:
-                    if isinstance(filter_, PSLiteral):
-                        filter_ = [filter_]
-                    if filter_[0] in LITERALS_ASCII85_DECODE:
-                        eos = b"~>"
-                (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
-                if eos != b"EI":  # it may be necessary for decoding
-                    data += eos
-                obj = PDFStream(d, data)
-                self.push((pos, obj))
-                if eos == b"EI":  # otherwise it is still in the stream
-                    self.push((pos, self.KEYWORD_EI))
-            except PSTypeError:
-                if settings.STRICT:
-                    raise
+            self._handle_keyword_id(pos)
         else:
             self.push((pos, token))
 
@@ -114,6 +118,45 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             self.il_creater,
         )
 
+    @staticmethod
+    def _get_colorspace(spec: object) -> PDFColorSpace | None:
+        """Resolve a colorspace spec to a PDFColorSpace object."""
+        if isinstance(spec, list):
+            name = literal_name(spec[0])
+        else:
+            name = literal_name(spec)
+        if name == "ICCBased" and isinstance(spec, list) and len(spec) >= 2:
+            val = stream_value(spec[1])
+            if "N" in val:
+                return PDFColorSpace(name, val["N"])
+            if "Alternate" in val:
+                return PREDEFINED_COLORSPACE[val["Alternate"].name]
+            return None
+        if name == "DeviceN" and isinstance(spec, list) and len(spec) >= 2:
+            return PDFColorSpace(name, len(list_value(spec[1])))
+        return PREDEFINED_COLORSPACE.get(name)
+
+    def _load_font_resources(self, v: object) -> None:
+        """Populate fontmap and fontid from a Font resource dict."""
+        for fontid, spec in dict_value(v).items():
+            objid = None
+            if isinstance(spec, PDFObjRef):
+                objid = spec.objid
+            spec = dict_value(spec)
+            font = self.rsrcmgr.get_font(objid, spec)
+            font.xobj_id = objid
+            self.il_creater.on_page_resource_font(font, objid, fontid)
+            self.fontmap[fontid] = font
+            self.fontmap[fontid].descent = 0  # hack fix descent
+            self.fontid[self.fontmap[fontid]] = fontid
+
+    def _load_colorspace_resources(self, v: object) -> None:
+        """Populate csmap from a ColorSpace resource dict."""
+        for csid, spec in dict_value(v).items():
+            colorspace = self._get_colorspace(resolve1(spec))
+            if colorspace is not None:
+                self.csmap[csid] = colorspace
+
     def init_resources(self, resources: dict[object, object]) -> None:
         # 重载设置 fontid 和 descent
         """Prepare the fonts and XObjects listed in the Resource attribute."""
@@ -125,47 +168,16 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         if not resources:
             return
 
-        def get_colorspace(spec: object) -> PDFColorSpace | None:
-            if isinstance(spec, list):
-                name = literal_name(spec[0])
-            else:
-                name = literal_name(spec)
-            if name == "ICCBased" and isinstance(spec, list) and len(spec) >= 2:
-                val = stream_value(spec[1])
-                if "N" in val:
-                    return PDFColorSpace(name, val["N"])
-                elif "Alternate" in val:
-                    return PREDEFINED_COLORSPACE[val["Alternate"].name]
-            elif name == "DeviceN" and isinstance(spec, list) and len(spec) >= 2:
-                return PDFColorSpace(name, len(list_value(spec[1])))
-            else:
-                return PREDEFINED_COLORSPACE.get(name)
-
         for k, v in dict_value(resources).items():
-            # log.debug("Resource: %r: %r", k, v)
             if k == "Font":
-                for fontid, spec in dict_value(v).items():
-                    objid = None
-                    if isinstance(spec, PDFObjRef):
-                        objid = spec.objid
-                    spec = dict_value(spec)
-                    font = self.rsrcmgr.get_font(objid, spec)
-                    font.xobj_id = objid
-                    self.il_creater.on_page_resource_font(font, objid, fontid)
-                    self.fontmap[fontid] = font
-                    self.fontmap[fontid].descent = 0  # hack fix descent
-                    self.fontid[self.fontmap[fontid]] = fontid
+                self._load_font_resources(v)
             elif k == "ColorSpace":
-                for csid, spec in dict_value(v).items():
-                    colorspace = get_colorspace(resolve1(spec))
-                    if colorspace is not None:
-                        self.csmap[csid] = colorspace
+                self._load_colorspace_resources(v)
             elif k == "ProcSet":
                 self.rsrcmgr.get_procset(list_value(v))
             elif k == "XObject":
                 for xobjid, xobjstrm in dict_value(v).items():
                     self.xobjmap[xobjid] = xobjstrm
-        pass
 
     def do_CS(self, name: PDFStackT) -> None:
         """Set color space for stroking operations
@@ -178,9 +190,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         except KeyError:
             if settings.STRICT:
                 raise PDFInterpreterError(f"Undefined ColorSpace: {name!r}") from None
-        return
 
-    def do_cs(self, name: PDFStackT) -> None:
+    def do_cs_op(self, name: PDFStackT) -> None:
         """Set color space for nonstroking operations"""
         try:
             self.il_creater.on_non_stroking_color_space(literal_name(name))
@@ -188,37 +199,36 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         except KeyError:
             if settings.STRICT:
                 raise PDFInterpreterError(f"Undefined ColorSpace: {name!r}") from None
-        return
+
+    # Keep the original name as an alias so existing callers continue to work
+    do_cs = do_cs_op
 
     ############################################################
     # 重载返回调用参数（SCN）
     def do_SCN(self) -> None:
         """Set color for stroking operations."""
-        if self.scs:
-            n = self.scs.ncomponents
-        else:
+        if not self.scs:
             if settings.STRICT:
                 raise PDFInterpreterError("No colorspace specified!")
-            n = 1
         n = len(self.argstack)
         args = self.pop(n)
         self.il_creater.on_passthrough_per_char("SCN", args)
         self.graphicstate.scolor = cast(Color, args)
         return args
 
-    def do_scn(self) -> None:
+    def do_scn_op(self) -> None:
         """Set color for nonstroking operations"""
-        if self.ncs:
-            n = self.ncs.ncomponents
-        else:
+        if not self.ncs:
             if settings.STRICT:
                 raise PDFInterpreterError("No colorspace specified!")
-            n = 1
         n = len(self.argstack)
         args = self.pop(n)
         self.il_creater.on_passthrough_per_char("scn", args)
         self.graphicstate.ncolor = cast(Color, args)
         return args
+
+    # Keep the original name as an alias so existing callers continue to work
+    do_scn = do_scn_op
 
     def do_SC(self) -> None:
         """Set color for stroking operations"""
@@ -227,12 +237,105 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         self.il_creater.on_passthrough_per_char("SC", args)
         return args
 
-    def do_sc(self) -> None:
+    def do_sc_op(self) -> None:
         """Set color for nonstroking operations"""
-        args = self.do_scn()
+        args = self.do_scn_op()
         self.il_creater.remove_latest_passthrough_per_char_instruction()
         self.il_creater.on_passthrough_per_char("sc", args)
         return args
+
+    # Keep the original name as an alias so existing callers continue to work
+    do_sc = do_sc_op
+
+    @staticmethod
+    def _compute_ctm_inverse(ctm) -> tuple | None:
+        """Compute CTM inverse matrix components; returns None if singular."""
+        try:
+            ctm_inv = np.linalg.inv(np.array(ctm[:4]).reshape(2, 2))
+        except Exception:
+            return None
+        np_version = np.__version__
+        if np_version.split(".")[0] >= "2":
+            pos_inv = -np.asmatrix(ctm[4:]) * ctm_inv
+        else:
+            pos_inv = -np.mat(ctm[4:]) * ctm_inv
+        a, b, c, d = ctm_inv.reshape(4).tolist()
+        e, f = pos_inv.tolist()[0]
+        return a, b, c, d, e, f
+
+    def _handle_form_xobj(self, xobj, xobjid: str) -> None:
+        """Process a Form-type XObject."""
+        # In extremely rare cases, a none might be mixed in the bbox, for example
+        # /BBox [ 0 3.052 null 274.9 157.3 ]
+        bbox = list(
+            filter(lambda x: x is not None, cast(Rect, list_value(xobj["BBox"])))
+        )
+        if len(bbox) < 4:
+            return
+
+        matrix = cast(Matrix, list_value(xobj.get("Matrix", MATRIX_IDENTITY)))
+        # According to PDF reference 1.7 section 4.9.1, XObjects in
+        # earlier PDFs (prior to v1.2) use the page's Resources entry
+        # instead of having their own Resources entry.
+        xobjres = xobj.get("Resources")
+        resources = dict_value(xobjres) if xobjres else self.resources.copy()
+
+        self.il_creater.on_xobj_form(
+            self.ctm,
+            self.il_creater.xobj_id,
+            xobj.objid,
+            "form",
+            xobjid,
+            bbox,
+            matrix,
+        )
+
+        self.device.begin_figure(xobjid, bbox, matrix)
+        ctm = mult_matrix(matrix, self.ctm)
+        (x, y, x2, y2) = guarded_bbox(bbox)
+        (x, y) = apply_matrix_pt(ctm, (x, y))
+        (x2, y2) = apply_matrix_pt(ctm, (x2, y2))
+        x_id = self.il_creater.on_xobj_begin((x, y, x2, y2), xobj.objid)
+        inv = self._compute_ctm_inverse(ctm)
+        if inv is None:
+            self.il_creater.on_xobj_end(x_id, " ")
+            return
+        a, b, c, d, e, f = inv
+        interpreter = self.dup()
+        ops_base = interpreter.render_contents(resources, [xobj], ctm=ctm)
+        self.ncs = interpreter.ncs
+        self.scs = interpreter.scs
+        self.il_creater.on_xobj_end(
+            x_id,
+            f"{a:.6f} {b:.6f} {c:.6f} {d:.6f} {e:.6f} {f:.6f} cm ",
+        )
+        try:  # 有的时候 form 字体加不上这里会烂掉
+            self.device.fontid = interpreter.fontid
+            self.device.fontmap = interpreter.fontmap
+            ops_new = self.device.end_figure(xobjid)
+            inv2 = self._compute_ctm_inverse(ctm)
+            if inv2 is not None:
+                a, b, c, d, e, f = inv2
+            self.obj_patch[self.xobjmap[xobjid].objid] = (
+                f"q {ops_base}Q {a:.6f} {b:.6f} {c:.6f} {d:.6f} {e:.6f} {f:.6f} cm {ops_new}"
+            )
+        except Exception:
+            pass
+
+    def _handle_image_xobj(self, xobj, xobjid: str) -> None:
+        """Process an Image-type XObject."""
+        self.il_creater.on_xobj_form(
+            self.ctm,
+            self.il_creater.xobj_id,
+            xobj.objid,
+            "image",
+            xobjid,
+            (0, 0, 1, 1),
+            MATRIX_IDENTITY,
+        )
+        self.device.begin_figure(xobjid, (0, 0, 1, 1), MATRIX_IDENTITY)
+        self.device.render_image(xobjid, xobj)
+        self.device.end_figure(xobjid)
 
     # Ensure bbox has four numbers, otherwise determine it as an illegal image
     # For example, some Form's bbox is '[ null -.00487 1.00412 .99393 ]'
@@ -246,102 +349,11 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             if settings.STRICT:
                 raise PDFInterpreterError(f"Undefined xobject id: {xobjid!r}") from None
             return
-        # log.debug("Processing xobj: %r", xobj)
         subtype = xobj.get("Subtype")
         if subtype is LITERAL_FORM and "BBox" in xobj:
-            interpreter = self.dup()
-
-            # In extremely rare cases, a none might be mixed in the bbox, for example
-            # /BBox [ 0 3.052 null 274.9 157.3 ]
-            bbox = list(
-                filter(lambda x: x is not None, cast(Rect, list_value(xobj["BBox"])))
-            )
-            if len(bbox) < 4:
-                return
-
-            matrix = cast(Matrix, list_value(xobj.get("Matrix", MATRIX_IDENTITY)))
-            # According to PDF reference 1.7 section 4.9.1, XObjects in
-            # earlier PDFs (prior to v1.2) use the page's Resources entry
-            # instead of having their own Resources entry.
-            xobjres = xobj.get("Resources")
-            if xobjres:
-                resources = dict_value(xobjres)
-            else:
-                resources = self.resources.copy()
-
-            self.il_creater.on_xobj_form(
-                self.ctm,
-                self.il_creater.xobj_id,
-                xobj.objid,
-                "form",
-                xobjid,
-                bbox,
-                matrix,
-            )
-
-            self.device.begin_figure(xobjid, bbox, matrix)
-            ctm = mult_matrix(matrix, self.ctm)
-            (x, y, x2, y2) = guarded_bbox(bbox)
-            (x, y) = apply_matrix_pt(ctm, (x, y))
-            (x2, y2) = apply_matrix_pt(ctm, (x2, y2))
-            x_id = self.il_creater.on_xobj_begin((x, y, x2, y2), xobj.objid)
-            try:
-                ctm_inv = np.linalg.inv(np.array(ctm[:4]).reshape(2, 2))
-            except Exception:
-                self.il_creater.on_xobj_end(x_id, " ")
-                return
-            np_version = np.__version__
-            if np_version.split(".")[0] >= "2":
-                pos_inv = -np.asmatrix(ctm[4:]) * ctm_inv
-            else:
-                pos_inv = -np.mat(ctm[4:]) * ctm_inv
-            a, b, c, d = ctm_inv.reshape(4).tolist()
-            e, f = pos_inv.tolist()[0]
-            ops_base = interpreter.render_contents(
-                resources,
-                [xobj],
-                ctm=ctm,
-            )
-            self.ncs = interpreter.ncs
-            self.scs = interpreter.scs
-            self.il_creater.on_xobj_end(
-                x_id,
-                # f"q {ops_base} Q {a} {b} {c} {d} {e} {f} cm ",
-                f"{a:.6f} {b:.6f} {c:.6f} {d:.6f} {e:.6f} {f:.6f} cm ",
-            )
-            try:  # 有的时候 form 字体加不上这里会烂掉
-                self.device.fontid = interpreter.fontid
-                self.device.fontmap = interpreter.fontmap
-                ops_new = self.device.end_figure(xobjid)
-                ctm_inv = np.linalg.inv(np.array(ctm[:4]).reshape(2, 2))
-                np_version = np.__version__
-                if np_version.split(".")[0] >= "2":
-                    pos_inv = -np.asmatrix(ctm[4:]) * ctm_inv
-                else:
-                    pos_inv = -np.mat(ctm[4:]) * ctm_inv
-                a, b, c, d = ctm_inv.reshape(4).tolist()
-                e, f = pos_inv.tolist()[0]
-                self.obj_patch[self.xobjmap[xobjid].objid] = (
-                    f"q {ops_base}Q {a:.6f} {b:.6f} {c:.6f} {d:.6f} {e:.6f} {f:.6f} cm {ops_new}"
-                )
-            except Exception:
-                pass
+            self._handle_form_xobj(xobj, xobjid)
         elif subtype is LITERAL_IMAGE and "Width" in xobj and "Height" in xobj:
-            self.il_creater.on_xobj_form(
-                self.ctm,
-                self.il_creater.xobj_id,
-                xobj.objid,
-                "image",
-                xobjid,
-                (0, 0, 1, 1),
-                MATRIX_IDENTITY,
-            )
-            self.device.begin_figure(xobjid, (0, 0, 1, 1), MATRIX_IDENTITY)
-            self.device.render_image(xobjid, xobj)
-            self.device.end_figure(xobjid)
-        else:
-            # unsupported xobject type.
-            pass
+            self._handle_image_xobj(xobj, xobjid)
 
     def do_W(self) -> None:
         """Set clipping path using nonzero winding number rule"""
@@ -355,21 +367,9 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         path = self.curpath
         self.il_creater.on_pdf_clip_path(path, evenodd, self.ctm)
 
-    def process_page(self, page: PDFPage) -> None:
+    def process_page(self, page: PDFPage) -> str:
         # 重载设置 page 的 obj_patch
-        # log.debug("Processing page: %r", page)
-        # print(page.mediabox,page.cropbox)
-        # (x0, y0, x1, y1) = page.mediabox
         (x0, y0, x1, y1) = page.cropbox
-        if page.rotate == 90:
-            ctm = (0, -1, 1, 0, -y0, x1)
-        elif page.rotate == 180:
-            ctm = (-1, 0, 0, -1, x1, y1)
-        elif page.rotate == 270:
-            ctm = (0, 1, -1, 0, y1, -x0)
-        else:
-            ctm = (1, 0, 0, 1, -x0, -y0)
-        # ctm_for_ops = copy.copy(ctm)
         ctm_for_ops = (1, 0, 0, 1, -x0, -y0)
         ctm = (1, 0, 0, 1, -x0, -y0)
         if page.rotate == 90 or page.rotate == 270:
@@ -381,15 +381,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         self.device.fontid = self.fontid
         self.device.fontmap = self.fontmap
         _ops_new = self.device.end_page(page)
-        # 上面渲染的时候会根据 cropbox 减掉页面偏移得到真实坐标，这里输出的时候需要用 cm 把页面偏移加回来
-        # self.obj_patch[page.page_xref] = (
-        #     # f"q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}"  # ops_base 里可能有图，需要让 ops_new 里的文字覆盖在上面，使用 q/Q 重置位置矩阵
-        #     ""
-        # )
-        # for obj in page.contents:
-        #     self.obj_patch[obj.objid] = ""
         return f"q {ops_base} Q {' '.join(f'{x:f}' for x in ctm_for_ops)} cm"
-        # return f"q {ops_base} Q 1 0 0 1 {x0} {y0} cm"
 
     def render_contents(
         self,
@@ -416,14 +408,15 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         """Save graphics state"""
         self.gstack.append(self.get_current_state())
         self.il_creater.push_passthrough_per_char_instruction()
-        return
 
-    def do_Q(self) -> None:
+    def do_Q_op(self) -> None:
         """Restore graphics state"""
         if self.gstack:
             self.set_current_state(self.gstack.pop())
         self.il_creater.pop_passthrough_per_char_instruction()
-        return
+
+    # Keep the original name as an alias so existing callers continue to work
+    do_Q = do_Q_op
 
     def do_TJ(self, seq: PDFStackT) -> None:
         """Show text, allowing individual glyph positioning"""
@@ -441,7 +434,6 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         if isinstance(seq, int) or isinstance(seq, float):
             seq = [seq]
         self.device.render_string(self.textstate, cast(PDFTextSeq, seq), self.ncs, gs)
-        return
 
     def do_d(self, dash: PDFStackT, phase: PDFStackT) -> None:
         """Set line dash pattern"""
@@ -461,9 +453,67 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         if isinstance(obj, PDFStream):
             self.il_creater.on_inline_image_end(obj, self.ctm)
 
+    @staticmethod
+    def _format_args(args) -> str:
+        """Format a list of arguments as a PDF operand string."""
+        return " ".join(
+            f"{x:f}" if isinstance(x, float) else str(x).replace("'", "")
+            for x in args
+        )
+
+    def _build_ops_for_args_op(self, name: str, args) -> str:
+        """Return the ops string contribution for an operator that takes arguments."""
+        if self.il_creater.is_graphic_operation(name):
+            return ""
+        if name == "d":
+            arg0 = f"[{' '.join(f'{arg}' for arg in args[0])}]"
+            arg1 = args[1]
+            return f"{arg0} {arg1} {name} "
+        # 过滤 T 系列文字指令，EI，和 marked 系列指令
+        if name[0] == "T" or name in ['"', "'", "EI", "MP", "DP", "BMC", "BDC"]:
+            return ""
+        return f"{self._format_args(args)} {name} "
+
+    def _build_ops_for_no_args_op(self, name: str, targs) -> str:
+        """Return the ops string contribution for a zero-argument operator."""
+        if self.il_creater.is_graphic_operation(name):
+            return ""
+        if name[0] == "T" or name in ["BI", "ID", "EMC"]:
+            return ""
+        return f"{self._format_args(targs)} {name} "
+
+    def _dispatch_keyword(self, name: str) -> tuple[bool, str]:
+        """Dispatch a single PDF keyword; return (should_continue, ops_fragment)."""
+        act_name = name.replace("*", "_a").replace('"', "_w").replace("'", "_q")
+        method = f"do_{act_name}"
+        if not hasattr(self, method):
+            if settings.STRICT:
+                raise PDFInterpreterError(f"Unknown operator: {name!r}")
+            return False, ""
+
+        func = getattr(self, method)
+        nargs = func.__code__.co_argcount - 1
+        if nargs:
+            args = self.pop(nargs)
+            if len(args) != nargs:
+                return False, ""
+            func(*args)
+            if self.il_creater.is_passthrough_per_char_operation(name):
+                self.il_creater.on_passthrough_per_char(name, args)
+            ops_fragment = self._build_ops_for_args_op(name, args)
+            should_continue = self.il_creater.is_graphic_operation(name)
+        else:
+            targs = func()
+            if targs is None:
+                targs = []
+            ops_fragment = self._build_ops_for_no_args_op(name, targs)
+            should_continue = self.il_creater.is_graphic_operation(name)
+
+        return should_continue, ops_fragment
+
     # Run PostScript commands
     # The Do_xxx method is the method for executing corresponding postscript instructions
-    def execute(self, streams: Sequence[object]) -> None:
+    def execute(self, streams: Sequence[object]) -> str:
         ops = ""
         for stream in streams:
             self.il_creater.on_new_stream()
@@ -472,7 +522,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
                 parser = PDFContentParserEx([stream])
             except PSEOF:
                 # empty page
-                return
+                return ops
             while True:
                 try:
                     (_, obj) = parser.nextobject()
@@ -480,67 +530,10 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
                     break
                 if isinstance(obj, PSKeyword):
                     name = keyword_name(obj)
-                    act_name = (
-                        name.replace("*", "_a").replace('"', "_w").replace("'", "_q")
-                    )
-                    method = f"do_{act_name}"
-                    if hasattr(self, method):
-                        func = getattr(self, method)
-                        nargs = func.__code__.co_argcount - 1
-                        if nargs:
-                            args = self.pop(nargs)
-                            # log.debug("exec: %s %r", name, args)
-                            if len(args) == nargs:
-                                func(*args)
-                                if self.il_creater.is_passthrough_per_char_operation(
-                                    name,
-                                ):
-                                    self.il_creater.on_passthrough_per_char(name, args)
-                                if self.il_creater.is_graphic_operation(name):
-                                    continue
-                                elif name == "d":
-                                    arg0 = f"[{' '.join(f'{arg}' for arg in args[0])}]"
-                                    arg1 = args[1]
-                                    ops += f"{arg0} {arg1} {name} "
-                                elif not (
-                                    name[0] == "T"
-                                    or name
-                                    in ['"', "'", "EI", "MP", "DP", "BMC", "BDC"]
-                                ):  # 过滤 T 系列文字指令，因为 EI 的参数是 obj 所以也需要过滤（只在少数文档中画横线时使用），过滤 marked 系列指令
-                                    p = " ".join(
-                                        [
-                                            (
-                                                f"{x:f}"
-                                                if isinstance(x, float)
-                                                else str(x).replace("'", "")
-                                            )
-                                            for x in args
-                                        ],
-                                    )
-                                    ops += f"{p} {name} "
-                        else:
-                            # log.debug("exec: %s", name)
-                            targs = func()
-                            if targs is None:
-                                targs = []
-                            if self.il_creater.is_graphic_operation(name):
-                                continue
-                            elif not (name[0] == "T" or name in ["BI", "ID", "EMC"]):
-                                p = " ".join(
-                                    [
-                                        (
-                                            f"{x:f}"
-                                            if isinstance(x, float)
-                                            else str(x).replace("'", "")
-                                        )
-                                        for x in targs
-                                    ],
-                                )
-                                ops += f"{p} {name} "
-                    elif settings.STRICT:
-                        error_msg = f"Unknown operator: {name!r}"
-                        raise PDFInterpreterError(error_msg)
+                    should_continue, ops_fragment = self._dispatch_keyword(name)
+                    if should_continue:
+                        continue
+                    ops += ops_fragment
                 else:
                     self.push(obj)
-            # print('REV DATA',ops)
         return ops

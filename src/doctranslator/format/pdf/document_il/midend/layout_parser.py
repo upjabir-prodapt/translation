@@ -136,14 +136,9 @@ class LayoutParser:
                     # Convert coordinate system from picture to il
                     # system to the il coordinate system
                     x0, y0, x1, y1 = layout.xyxy
-                    # pix = get_no_rotation_img(mupdf_doc[page.page_number])
-                    # pix = mupdf_doc[page.page_number].get_pixmap()
-                    # h, w = pix.height, pix.width
                     box = mupdf_doc[page.page_number].mediabox_size
                     b_h = math.ceil(box.y)
                     b_w = math.ceil(box.x)
-                    # if b_h != h or b_w != w:
-                    #     logger.warning(f"page {page.page_number} mediabox is not correct, b_h: {b_h}, h: {h}, b_w: {b_w}, w: {w}")
                     h, w = b_h, b_w
                     x0, y0, x1, y1 = (
                         np.clip(int(x0 - 1), 0, w - 1),
@@ -165,8 +160,6 @@ class LayoutParser:
                     page_layouts.append(page_layout)
 
                 page.page_layout = page_layouts
-                # self.generate_fallback_line_layout_for_page(page)
-                # self._save_debug_box_to_page(page)
                 progress.advance(1)
             with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
                 for page in docs.page:

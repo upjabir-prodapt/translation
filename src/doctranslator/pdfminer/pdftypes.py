@@ -86,9 +86,8 @@ class PDFObjRef(PDFObject):
                 DeprecationWarning,
             )
 
-        if objid == 0:
-            if settings.STRICT:
-                raise PDFValueError("PDF object id cannot be 0.")
+        if objid == 0 and settings.STRICT:
+            raise PDFValueError("PDF object id cannot be 0.")
 
         self.doc = doc
         self.objid = objid
@@ -306,6 +305,65 @@ class PDFStream(PDFObject):
         resolved_params = [resolve1(param) for param in params]
         return list(zip(resolved_filters, resolved_params, strict=False))
 
+    def _apply_stream_predictor(self, data: bytes, params: dict) -> bytes:
+        """Apply a PNG/LZW predictor to already-decoded stream data."""
+        pred = int_value(params["Predictor"])
+        if pred == 1:
+            # no predictor
+            return data
+        elif pred >= 10:
+            # PNG predictor
+            colors = int_value(params.get("Colors", 1))
+            columns = int_value(params.get("Columns", 1))
+            raw_bits_per_component = params.get("BitsPerComponent", 8)
+            bitspercomponent = int_value(raw_bits_per_component)
+            return apply_png_predictor(pred, colors, columns, bitspercomponent, data)
+        else:
+            error_msg = "Unsupported predictor: %r" % pred
+            raise PDFNotImplementedError(error_msg)
+
+    def _apply_single_stream_filter(self, data: bytes, f: object, params: object) -> bytes:
+        """Apply one filter to stream data and return the decoded bytes."""
+        if f in LITERALS_FLATE_DECODE:
+            # will get errors if the document is encrypted.
+            try:
+                data = zlib.decompress(data)
+            except zlib.error as e:
+                if settings.STRICT:
+                    error_msg = f"Invalid zlib bytes: {e!r}, {data!r}"
+                    raise PDFException(error_msg)
+                try:
+                    data = decompress_corrupted(data)
+                except zlib.error:
+                    data = b""
+        elif f in LITERALS_LZW_DECODE:
+            data = lzwdecode(data)
+        elif f in LITERALS_ASCII85_DECODE:
+            data = ascii85decode(data)
+        elif f in LITERALS_ASCIIHEX_DECODE:
+            data = asciihexdecode(data)
+        elif f in LITERALS_RUNLENGTH_DECODE:
+            data = rldecode(data)
+        elif f in LITERALS_CCITTFAX_DECODE:
+            data = ccittfaxdecode(data, params)
+        elif f in LITERALS_DCT_DECODE:
+            # This is probably a JPG stream — it does not need to be decoded
+            # twice; just return the stream to the user.
+            pass
+        elif f in LITERALS_JBIG2_DECODE or f in LITERALS_JPX_DECODE:
+            pass  # JBIG2/JPX streams are passed through as-is
+        elif f == LITERAL_CRYPT:
+            # not yet..
+            raise PDFNotImplementedError("/Crypt filter is unsupported")
+        else:
+            raise PDFNotImplementedError("Unsupported filter: %r" % f)
+
+        # apply predictors
+        if params and "Predictor" in params:
+            data = self._apply_stream_predictor(data, params)
+
+        return data
+
     def decode(self) -> None:
         assert self.data is None and self.rawdata is not None, str(
             (self.data, self.rawdata),
@@ -322,65 +380,7 @@ class PDFStream(PDFObject):
             self.rawdata = None
             return
         for f, params in filters:
-            if f in LITERALS_FLATE_DECODE:
-                # will get errors if the document is encrypted.
-                try:
-                    data = zlib.decompress(data)
-
-                except zlib.error as e:
-                    if settings.STRICT:
-                        error_msg = f"Invalid zlib bytes: {e!r}, {data!r}"
-                        raise PDFException(error_msg)
-
-                    try:
-                        data = decompress_corrupted(data)
-                    except zlib.error:
-                        data = b""
-
-            elif f in LITERALS_LZW_DECODE:
-                data = lzwdecode(data)
-            elif f in LITERALS_ASCII85_DECODE:
-                data = ascii85decode(data)
-            elif f in LITERALS_ASCIIHEX_DECODE:
-                data = asciihexdecode(data)
-            elif f in LITERALS_RUNLENGTH_DECODE:
-                data = rldecode(data)
-            elif f in LITERALS_CCITTFAX_DECODE:
-                data = ccittfaxdecode(data, params)
-            elif f in LITERALS_DCT_DECODE:
-                # This is probably a JPG stream
-                # it does not need to be decoded twice.
-                # Just return the stream to the user.
-                pass
-            elif f in LITERALS_JBIG2_DECODE or f in LITERALS_JPX_DECODE:
-                pass
-            elif f == LITERAL_CRYPT:
-                # not yet..
-                raise PDFNotImplementedError("/Crypt filter is unsupported")
-            else:
-                raise PDFNotImplementedError("Unsupported filter: %r" % f)
-            # apply predictors
-            if params and "Predictor" in params:
-                pred = int_value(params["Predictor"])
-                if pred == 1:
-                    # no predictor
-                    pass
-                elif pred >= 10:
-                    # PNG predictor
-                    colors = int_value(params.get("Colors", 1))
-                    columns = int_value(params.get("Columns", 1))
-                    raw_bits_per_component = params.get("BitsPerComponent", 8)
-                    bitspercomponent = int_value(raw_bits_per_component)
-                    data = apply_png_predictor(
-                        pred,
-                        colors,
-                        columns,
-                        bitspercomponent,
-                        data,
-                    )
-                else:
-                    error_msg = "Unsupported predictor: %r" % pred
-                    raise PDFNotImplementedError(error_msg)
+            data = self._apply_single_stream_filter(data, f, params)
         self.data = data
         self.rawdata = None
 

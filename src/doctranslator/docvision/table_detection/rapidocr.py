@@ -181,15 +181,12 @@ class RapidOCRModel:
         boxes[..., :4] = (boxes[..., :4] - [pad_x, pad_y, pad_x, pad_y]) / gain
         return boxes
 
-    def predict(self, image, imgsz=800, batch_size=16, **kwargs):
+    def predict(self, image):
         """
         Predict the layout of document pages.
 
         Args:
-            image: A single image or a list of images of document pages.
-            imgsz: Resize the image to this size. Must be a multiple of the stride.
-            batch_size: Number of images to process in one batch.
-            **kwargs: Additional arguments.
+            image: A single image of a document page.
 
         Returns:
             A YoloResult object containing the detected boxes.
@@ -202,10 +199,7 @@ class RapidOCRModel:
 
         orig_shape = (image.shape[0], image.shape[1])
 
-        pix = self.resize_and_pad_image(image, new_shape=target_imgsz)
-        # pix = np.transpose(pix, (2, 0, 1))  # CHW
-        # pix = pix.astype(np.float32) / 255.0  # Normalize to [0, 1]
-        input_ = pix
+        input_ = self.resize_and_pad_image(image, new_shape=target_imgsz)
 
         new_h, new_w = input_.shape[:2]
 
@@ -239,7 +233,6 @@ class RapidOCRModel:
         for page in pages:
             translate_config.raise_if_cancelled()
             with self.lock:
-                # pix = mupdf_doc[page.page_number].get_pixmap(dpi=72)
                 pix = get_no_rotation_img(mupdf_doc[page.page_number])
             image = np.frombuffer(pix.samples, np.uint8).reshape(
                 pix.height,
@@ -263,7 +256,7 @@ class RapidOCRModel:
                 for table_box in table_boxes:
                     # Determine if box is inside or overlapping with table_box with image dimensions
                     if self._is_box_in_table(
-                        box_xyxy, table_box, page, image.shape[1], image.shape[0]
+                        box_xyxy, table_box, image.shape[0]
                     ):
                         ok_boxes.append(box)
                         break
@@ -276,15 +269,13 @@ class RapidOCRModel:
             )
             yield page, yolo_result
 
-    def _is_box_in_table(self, box_xyxy, table_box, page, img_width, img_height):
+    def _is_box_in_table(self, box_xyxy, table_box, img_height):
         """
         Check if a box from image coordinates is inside a table box from PDF coordinates.
 
         Args:
             box_xyxy (list): Box coordinates in image coordinate system [x1, y1, x2, y2]
             table_box (Box): Table box in PDF coordinate system
-            page: The page object containing information for coordinate conversion
-            img_width: Width of the image
             img_height: Height of the image
 
         Returns:

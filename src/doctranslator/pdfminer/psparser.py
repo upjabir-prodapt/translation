@@ -137,7 +137,7 @@ HEX = re.compile(rb"[0-9a-fA-F]")
 END_LITERAL = re.compile(rb"[#/%\[\]()<>{}\s]")
 END_HEX_STRING = re.compile(rb"[^\s0-9a-fA-F]")
 HEX_PAIR = re.compile(rb"[0-9a-fA-F]{2}|.")
-END_NUMBER = re.compile(rb"[^0-9]")
+END_NUMBER = re.compile(rb"\D")
 END_KEYWORD = re.compile(rb"[#/%\[\]()<>{}\s]")
 END_STRING = re.compile(rb"[()\134]")
 OCT_STRING = re.compile(rb"[0-7]")
@@ -170,6 +170,7 @@ class PSBaseParser:
         return "<%s: %r, bufpos=%d>" % (self.__class__.__name__, self.fp, self.bufpos)
 
     def flush(self) -> None:
+        # Not implemented in base class
         pass
 
     def close(self) -> None:
@@ -576,7 +577,53 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
         return (pos, objs)
 
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
+        # Not implemented in base class
         pass
+
+    def _handle_end_collection(self, pos: int, type_char: str) -> None:
+        """Handle end of array or proc collection, pushing result onto stack."""
+        try:
+            self.push(self.end_type(type_char))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
+    def _handle_end_dict(self, pos: int) -> None:
+        """Handle end of dictionary, building and pushing a dict onto the stack."""
+        try:
+            (pos, objs) = self.end_type("d")
+            if len(objs) % 2 != 0:
+                error_msg = "Invalid dictionary construct: %r" % objs
+                raise PSSyntaxError(error_msg)
+            d = {
+                literal_name(k): v
+                for (k, v) in choplist(2, objs)
+                if v is not None
+            }
+            self.push((pos, d))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
+    def _handle_keyword_token(self, pos: int, token: PSKeyword) -> None:
+        """Dispatch keyword tokens to do_keyword or log unknown tokens."""
+        if isinstance(token, PSKeyword):
+            log.debug(
+                "do_keyword: pos=%r, token=%r, stack=%r",
+                pos,
+                token,
+                self.curstack,
+            )
+            self.do_keyword(pos, token)
+        else:
+            log.error(
+                "unknown token: pos=%r, token=%r, stack=%r",
+                pos,
+                token,
+                self.curstack,
+            )
+            self.do_keyword(pos, token)
+            raise PSException
 
     def nextobject(self) -> PSStackEntry[ExtraT]:
         """Yields a list of objects.
@@ -596,57 +643,21 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
                 self.start_type(pos, "a")
             elif token == KEYWORD_ARRAY_END:
                 # end array
-                try:
-                    self.push(self.end_type("a"))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
+                self._handle_end_collection(pos, "a")
             elif token == KEYWORD_DICT_BEGIN:
                 # begin dictionary
                 self.start_type(pos, "d")
             elif token == KEYWORD_DICT_END:
                 # end dictionary
-                try:
-                    (pos, objs) = self.end_type("d")
-                    if len(objs) % 2 != 0:
-                        error_msg = "Invalid dictionary construct: %r" % objs
-                        raise PSSyntaxError(error_msg)
-                    d = {
-                        literal_name(k): v
-                        for (k, v) in choplist(2, objs)
-                        if v is not None
-                    }
-                    self.push((pos, d))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
+                self._handle_end_dict(pos)
             elif token == KEYWORD_PROC_BEGIN:
                 # begin proc
                 self.start_type(pos, "p")
             elif token == KEYWORD_PROC_END:
                 # end proc
-                try:
-                    self.push(self.end_type("p"))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
-            elif isinstance(token, PSKeyword):
-                log.debug(
-                    "do_keyword: pos=%r, token=%r, stack=%r",
-                    pos,
-                    token,
-                    self.curstack,
-                )
-                self.do_keyword(pos, token)
+                self._handle_end_collection(pos, "p")
             else:
-                log.error(
-                    "unknown token: pos=%r, token=%r, stack=%r",
-                    pos,
-                    token,
-                    self.curstack,
-                )
-                self.do_keyword(pos, token)
-                raise PSException
+                self._handle_keyword_token(pos, token)
             if self.context:
                 continue
             else:

@@ -62,25 +62,21 @@ class RemoveDescent:
                 self.process_page(page)
                 pbar.advance()
 
-    def process_page(self, page: il_version_1.Page):
-        """Process a single page to remove descent adjustments.
-
-        Args:
-            page: The page to process
-        """
-        # Build font map including xobjects
+    def _build_font_map(self, page: il_version_1.Page):
+        """Build a font lookup map for the page including xobject fonts."""
         fonts: dict[
             str | int,
             il_version_1.PdfFont | dict[str, il_version_1.PdfFont],
         ] = {f.font_id: f for f in page.pdf_font}
         page_fonts = {f.font_id: f for f in page.pdf_font}
-
-        # Add xobject fonts
         for xobj in page.pdf_xobject:
             fonts[xobj.xobj_id] = page_fonts.copy()
             for font in xobj.pdf_font:
                 fonts[xobj.xobj_id][font.font_id] = font
+        return fonts
 
+    def _make_get_font(self, fonts):
+        """Return a cached font-lookup closure for the given font map."""
         @cache
         def get_font(
             font_id: str,
@@ -95,6 +91,55 @@ class RemoveDescent:
                 if isinstance(fonts.get(font_id), il_version_1.PdfFont)
                 else None
             )
+        return get_font
+
+    def _process_chars_in_composition(self, comp, get_font, descent_values, vertical_chars):
+        """Remove descent from all characters in a single composition and collect results."""
+        if comp.pdf_character:
+            font = get_font(comp.pdf_character.pdf_style.font_id, comp.pdf_character.xobj_id)
+            if font:
+                descent = self._remove_char_descent(comp.pdf_character, font)
+                if descent is not None:
+                    descent_values.append(descent)
+                    vertical_chars.append(comp.pdf_character.vertical)
+        elif comp.pdf_line:
+            self._process_char_list(comp.pdf_line.pdf_character, get_font, descent_values, vertical_chars)
+        elif comp.pdf_formula:
+            self._process_char_list(comp.pdf_formula.pdf_character, get_font, descent_values, vertical_chars)
+        elif comp.pdf_same_style_characters:
+            self._process_char_list(comp.pdf_same_style_characters.pdf_character, get_font, descent_values, vertical_chars)
+
+    def _process_char_list(self, chars, get_font, descent_values, vertical_chars):
+        """Remove descent from a list of characters and collect descent/vertical data."""
+        for char in chars:
+            if font := get_font(char.pdf_style.font_id, char.xobj_id):
+                descent = self._remove_char_descent(char, font)
+                if descent is not None:
+                    descent_values.append(descent)
+                    vertical_chars.append(char.vertical)
+
+    def _adjust_paragraph_box(self, paragraph, descent_values, vertical_chars):
+        """Shift a paragraph's bounding box by the modal descent value."""
+        if not descent_values or not paragraph.box:
+            return
+        most_common_descent = Counter(descent_values).most_common(1)[0][0]
+        is_vertical = all(vertical_chars) if vertical_chars else False
+        if paragraph.box.y is not None and paragraph.box.y2 is not None:
+            if is_vertical:
+                paragraph.box.x += most_common_descent
+                paragraph.box.x2 += most_common_descent
+            else:
+                paragraph.box.y -= most_common_descent
+                paragraph.box.y2 -= most_common_descent
+
+    def process_page(self, page: il_version_1.Page):
+        """Process a single page to remove descent adjustments.
+
+        Args:
+            page: The page to process
+        """
+        fonts = self._build_font_map(page)
+        get_font = self._make_get_font(fonts)
 
         # Process all standalone characters in the page
         for char in page.pdf_character:
@@ -103,66 +148,8 @@ class RemoveDescent:
 
         # Process all paragraphs
         for paragraph in page.pdf_paragraph:
-            descent_values = []
-            vertical_chars = []
-
-            # Process all characters in paragraph compositions
+            descent_values: list[float] = []
+            vertical_chars: list[bool] = []
             for comp in paragraph.pdf_paragraph_composition:
-                # Handle direct characters
-                if comp.pdf_character:
-                    font = get_font(
-                        comp.pdf_character.pdf_style.font_id,
-                        comp.pdf_character.xobj_id,
-                    )
-                    if font:
-                        descent = self._remove_char_descent(comp.pdf_character, font)
-                        if descent is not None:
-                            descent_values.append(descent)
-                            vertical_chars.append(comp.pdf_character.vertical)
-
-                # Handle characters in PdfLine
-                elif comp.pdf_line:
-                    for char in comp.pdf_line.pdf_character:
-                        if font := get_font(char.pdf_style.font_id, char.xobj_id):
-                            descent = self._remove_char_descent(char, font)
-                            if descent is not None:
-                                descent_values.append(descent)
-                                vertical_chars.append(char.vertical)
-
-                # Handle characters in PdfFormula
-                elif comp.pdf_formula:
-                    for char in comp.pdf_formula.pdf_character:
-                        if font := get_font(char.pdf_style.font_id, char.xobj_id):
-                            descent = self._remove_char_descent(char, font)
-                            if descent is not None:
-                                descent_values.append(descent)
-                                vertical_chars.append(char.vertical)
-
-                # Handle characters in PdfSameStyleCharacters
-                elif comp.pdf_same_style_characters:
-                    for char in comp.pdf_same_style_characters.pdf_character:
-                        if font := get_font(char.pdf_style.font_id, char.xobj_id):
-                            descent = self._remove_char_descent(char, font)
-                            if descent is not None:
-                                descent_values.append(descent)
-                                vertical_chars.append(char.vertical)
-
-            # Adjust paragraph box based on most common descent value
-            if descent_values and paragraph.box:
-                # Calculate mode of descent values
-                descent_counter = Counter(descent_values)
-                most_common_descent = descent_counter.most_common(1)[0][0]
-
-                # Check if paragraph is vertical (all characters are vertical)
-                is_vertical = all(vertical_chars) if vertical_chars else False
-
-                # Adjust paragraph box
-                if paragraph.box.y is not None and paragraph.box.y2 is not None:
-                    if is_vertical:
-                        # For vertical paragraphs, adjust x coordinates
-                        paragraph.box.x += most_common_descent
-                        paragraph.box.x2 += most_common_descent
-                    else:
-                        # For horizontal paragraphs, adjust y coordinates
-                        paragraph.box.y -= most_common_descent
-                        paragraph.box.y2 -= most_common_descent
+                self._process_chars_in_composition(comp, get_font, descent_values, vertical_chars)
+            self._adjust_paragraph_box(paragraph, descent_values, vertical_chars)

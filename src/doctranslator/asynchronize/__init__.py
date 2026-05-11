@@ -3,7 +3,7 @@ import asyncio
 
 class Args:
     def __init__(self, args, kwargs):
-        self.args = args
+        self.positional_args = args
         self.kwargs = kwargs
 
 

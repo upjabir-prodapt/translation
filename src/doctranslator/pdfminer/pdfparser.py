@@ -59,6 +59,66 @@ class PDFParser(PSStackParser[Union[PSKeyword, PDFStream, PDFObjRef, None]]):
     KEYWORD_XREF = KWD(b"xref")
     KEYWORD_STARTXREF = KWD(b"startxref")
 
+    def _handle_keyword_r(self, pos: int) -> None:
+        """Handle the 'R' keyword: push an indirect object reference."""
+        if len(self.curstack) >= 2:
+            (_, _object_id), _ = self.pop(2)
+            object_id = safe_int(_object_id)
+            if object_id is not None:
+                obj = PDFObjRef(self.doc, object_id)
+                self.push((pos, obj))
+
+    def _handle_keyword_stream(self, pos: int) -> None:
+        """Handle the 'stream' keyword: read stream data from the file."""
+        ((_, dic),) = self.pop(1)
+        dic = dict_value(dic)
+        objlen = 0
+        if not self.fallback:
+            try:
+                objlen = int_value(dic["Length"])
+            except KeyError:
+                if settings.STRICT:
+                    raise PDFSyntaxError("/Length is undefined: %r" % dic)
+        self.seek(pos)
+        try:
+            (_, line) = self.nextline()  # 'stream'
+        except PSEOF:
+            if settings.STRICT:
+                raise PDFSyntaxError("Unexpected EOF")
+            return
+        pos += len(line)
+        self.fp.seek(pos)
+        data = bytearray(self.fp.read(objlen))
+        self.seek(pos + objlen)
+        while 1:
+            try:
+                (linepos, line) = self.nextline()
+            except PSEOF:
+                if settings.STRICT:
+                    raise PDFSyntaxError("Unexpected EOF")
+                break
+            if b"endstream" in line:
+                i = line.index(b"endstream")
+                objlen += i
+                if self.fallback:
+                    data += line[:i]
+                break
+            objlen += len(line)
+            if self.fallback:
+                data += line
+        self.seek(pos + objlen)
+        # XXX limit objlen not to exceed object boundary
+        log.debug(
+            "Stream: pos=%d, objlen=%d, dic=%r, data=%r...",
+            pos,
+            objlen,
+            dic,
+            data[:10],
+        )
+        assert self.doc is not None
+        stream = PDFStream(dic, bytes(data), self.doc.decipher)
+        self.push((pos, stream))
+
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
         """Handles PDF-related keywords."""
         if token in (self.KEYWORD_XREF, self.KEYWORD_STARTXREF):
@@ -73,63 +133,11 @@ class PDFParser(PSStackParser[Union[PSKeyword, PDFStream, PDFObjRef, None]]):
 
         elif token is self.KEYWORD_R:
             # reference to indirect object
-            if len(self.curstack) >= 2:
-                (_, _object_id), _ = self.pop(2)
-                object_id = safe_int(_object_id)
-                if object_id is not None:
-                    obj = PDFObjRef(self.doc, object_id)
-                    self.push((pos, obj))
+            self._handle_keyword_r(pos)
 
         elif token is self.KEYWORD_STREAM:
             # stream object
-            ((_, dic),) = self.pop(1)
-            dic = dict_value(dic)
-            objlen = 0
-            if not self.fallback:
-                try:
-                    objlen = int_value(dic["Length"])
-                except KeyError:
-                    if settings.STRICT:
-                        raise PDFSyntaxError("/Length is undefined: %r" % dic)
-            self.seek(pos)
-            try:
-                (_, line) = self.nextline()  # 'stream'
-            except PSEOF:
-                if settings.STRICT:
-                    raise PDFSyntaxError("Unexpected EOF")
-                return
-            pos += len(line)
-            self.fp.seek(pos)
-            data = bytearray(self.fp.read(objlen))
-            self.seek(pos + objlen)
-            while 1:
-                try:
-                    (linepos, line) = self.nextline()
-                except PSEOF:
-                    if settings.STRICT:
-                        raise PDFSyntaxError("Unexpected EOF")
-                    break
-                if b"endstream" in line:
-                    i = line.index(b"endstream")
-                    objlen += i
-                    if self.fallback:
-                        data += line[:i]
-                    break
-                objlen += len(line)
-                if self.fallback:
-                    data += line
-            self.seek(pos + objlen)
-            # XXX limit objlen not to exceed object boundary
-            log.debug(
-                "Stream: pos=%d, objlen=%d, dic=%r, data=%r...",
-                pos,
-                objlen,
-                dic,
-                data[:10],
-            )
-            assert self.doc is not None
-            stream = PDFStream(dic, bytes(data), self.doc.decipher)
-            self.push((pos, stream))
+            self._handle_keyword_stream(pos)
 
         else:
             # others

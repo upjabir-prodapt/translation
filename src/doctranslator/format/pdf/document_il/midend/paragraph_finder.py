@@ -134,7 +134,7 @@ class ParagraphFinder:
             elif composition.pdf_character:
                 chars.append(composition.pdf_character)
             elif composition.pdf_same_style_unicode_characters:
-                continue
+                pass
             else:
                 logger.error(
                     "Unexpected composition type"
@@ -142,7 +142,7 @@ class ParagraphFinder:
                     "This type only appears in the IL "
                     "after the translation is completed.",
                 )
-                continue
+                # no action needed; continue iterating over remaining compositions
 
         if update_unicode and chars:
             paragraph.unicode = get_char_unicode_string(chars)
@@ -309,6 +309,27 @@ class ParagraphFinder:
         # 新阶段：设置段落的 renderorder 为所有组成部分中 renderorder 最小的
         self._set_paragraph_render_order(page)
 
+    @staticmethod
+    def _min_render_order_for_chars(chars) -> int:
+        """Return the minimum render_order among a list of characters."""
+        result = 9999999999999999
+        for char in chars:
+            if hasattr(char, "render_order") and char.render_order is not None:
+                result = min(result, char.render_order)
+        return result
+
+    def _min_render_order_for_composition(self, composition) -> int:
+        """Return the minimum render_order for a single composition."""
+        if composition.pdf_line:
+            return self._min_render_order_for_chars(composition.pdf_line.pdf_character)
+        if composition.pdf_character:
+            char = composition.pdf_character
+            if hasattr(char, "render_order") and char.render_order is not None:
+                return char.render_order
+        if composition.pdf_formula:
+            return self._min_render_order_for_chars(composition.pdf_formula.pdf_character)
+        return 9999999999999999
+
     def _set_paragraph_render_order(self, page: Page):
         """
         设置段落的 renderorder 为段落所有组成部分中 renderorder 最小的值
@@ -316,31 +337,9 @@ class ParagraphFinder:
         for paragraph in page.pdf_paragraph:
             min_render_order = 9999999999999999
 
-            # 遍历段落的所有组成部分
             for composition in paragraph.pdf_paragraph_composition:
-                # 检查 PdfLine 中的字符
-                if composition.pdf_line:
-                    for char in composition.pdf_line.pdf_character:
-                        if (
-                            hasattr(char, "render_order")
-                            and char.render_order is not None
-                        ):
-                            min_render_order = min(min_render_order, char.render_order)
-
-                # 检查单个字符
-                elif composition.pdf_character:
-                    char = composition.pdf_character
-                    if hasattr(char, "render_order") and char.render_order is not None:
-                        min_render_order = min(min_render_order, char.render_order)
-
-                # 检查公式中的字符
-                elif composition.pdf_formula:
-                    for char in composition.pdf_formula.pdf_character:
-                        if (
-                            hasattr(char, "render_order")
-                            and char.render_order is not None
-                        ):
-                            min_render_order = min(min_render_order, char.render_order)
+                comp_min = self._min_render_order_for_composition(composition)
+                min_render_order = min(min_render_order, comp_min)
 
             # 如果找到了有效的 renderorder，设置段落的 renderorder
             if min_render_order != 9999999999999999:
@@ -417,6 +416,59 @@ class ParagraphFinder:
                     continue
             i += 1
 
+    @staticmethod
+    def _compute_median_char_area(chars) -> float:
+        """Compute the median area of visual bounding boxes for a list of characters."""
+        char_areas = [
+            (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
+            * (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
+            for char in chars
+        ]
+        if not char_areas:
+            return 0.0
+        char_areas.sort()
+        mid = len(char_areas) // 2
+        return (
+            char_areas[mid]
+            if len(char_areas) % 2 == 1
+            else (char_areas[mid - 1] + char_areas[mid]) / 2
+        )
+
+    def _should_start_new_paragraph(
+        self,
+        char,
+        char_layout: Layout,
+        current_paragraph: "PdfParagraph | None",
+        current_layout: "Layout | None",
+        is_small_char: bool,
+    ) -> bool:
+        """Return True if the current character should begin a new paragraph."""
+        if current_paragraph is None:
+            return True
+        # Small chars in the same layout stay in the current paragraph
+        if (
+            is_small_char
+            and current_paragraph.pdf_paragraph_composition
+            and char_layout.id == current_layout.id
+        ):
+            return False
+        if char.char_unicode in HEIGHT_NOT_USFUL_CHAR_IN_CHAR:
+            return False
+        # Different layout (ignoring spaces)
+        if char_layout.id != current_layout.id and not SPACE_REGEX.match(char.char_unicode):
+            return True
+        # Different xobject
+        if (
+            current_paragraph.pdf_paragraph_composition
+            and current_paragraph.pdf_paragraph_composition[-1].pdf_character.xobj_id
+            != char.xobj_id
+        ):
+            return True
+        # Bullet point starts new paragraph
+        if is_bullet_point(char) and not current_paragraph.pdf_paragraph_composition:
+            return True
+        return False
+
     def _group_characters_into_paragraphs(
         self, page: Page, layout_index, layout_map
     ) -> list[PdfParagraph]:
@@ -425,20 +477,7 @@ class ParagraphFinder:
             paragraphs.extend(page.pdf_paragraph)
             page.pdf_paragraph = []
 
-        char_areas = [
-            (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
-            * (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
-            for char in page.pdf_character
-        ]
-        median_char_area = 0.0
-        if char_areas:
-            char_areas.sort()
-            mid = len(char_areas) // 2
-            median_char_area = (
-                char_areas[mid]
-                if len(char_areas) % 2 == 1
-                else (char_areas[mid - 1] + char_areas[mid]) / 2
-            )
+        median_char_area = self._compute_median_char_area(page.pdf_character)
 
         current_paragraph: PdfParagraph | None = None
         current_layout: Layout | None = None
@@ -456,43 +495,12 @@ class ParagraphFinder:
                 continue
 
             char_box = char.visual_bbox.box
-            # char_pdf_box = char.box
-            # if calculate_iou_for_boxes(char_box, char_pdf_box) < 0.2:
-            #     char_box = char_pdf_box
             char_area = (char_box.x2 - char_box.x) * (char_box.y2 - char_box.y)
             is_small_char = char_area < median_char_area * 0.05
 
-            is_new_paragraph = False
-            if current_paragraph is None:
-                is_new_paragraph = True
-            elif (
-                not (
-                    is_small_char
-                    and current_paragraph.pdf_paragraph_composition
-                    and char_layout.id == current_layout.id
-                )
-                and char.char_unicode not in HEIGHT_NOT_USFUL_CHAR_IN_CHAR
+            if self._should_start_new_paragraph(
+                char, char_layout, current_paragraph, current_layout, is_small_char
             ):
-                if (
-                    (
-                        char_layout.id != current_layout.id
-                        and not SPACE_REGEX.match(char.char_unicode)
-                    )
-                    or (  # not same xobject
-                        current_paragraph.pdf_paragraph_composition
-                        and current_paragraph.pdf_paragraph_composition[
-                            -1
-                        ].pdf_character.xobj_id
-                        != char.xobj_id
-                    )
-                    or (
-                        is_bullet_point(char)
-                        and not current_paragraph.pdf_paragraph_composition
-                    )
-                ):
-                    is_new_paragraph = True
-
-            if is_new_paragraph:
                 current_layout = char_layout
                 current_paragraph = PdfParagraph(
                     pdf_paragraph_composition=[],
@@ -606,7 +614,6 @@ class ParagraphFinder:
         PDF bounding box. This helps use more accurate layout information when available.
         """
         visual_box = char.visual_bbox.box
-        return visual_box.y, visual_box.y2
         pdf_box = char.box
         if calculate_iou_for_boxes(visual_box, pdf_box) >= 0.5:
             return visual_box.y, visual_box.y2
@@ -649,8 +656,63 @@ class ParagraphFinder:
 
         return np.cumsum(hist[:-1])
 
+    def _extract_chars_and_other_compositions(
+        self, paragraph: PdfParagraph
+    ) -> tuple[list[PdfCharacter], list[PdfParagraphComposition]]:
+        """Separate a paragraph's compositions into plain characters and everything else."""
+        all_chars: list[PdfCharacter] = []
+        other_compositions: list[PdfParagraphComposition] = []
+        for comp in paragraph.pdf_paragraph_composition:
+            if comp.pdf_character:
+                all_chars.append(comp.pdf_character)
+            else:
+                other_compositions.append(comp)
+        return all_chars, other_compositions
+
+    def _build_char_y_bounds(self, all_chars: list[PdfCharacter]) -> list[dict]:
+        """Return per-character dicts with effective y1/y2 bounds."""
+        return [
+            {"char": char, "y1": y1, "y2": y2}
+            for char in all_chars
+            for y1, y2 in [self._get_effective_y_bounds(char)]
+        ]
+
+    @staticmethod
+    def _find_histogram_gaps(collision_counts) -> list[tuple[int, int]]:
+        """Identify contiguous zero-count regions in a collision histogram."""
+        gaps = []
+        in_gap = False
+        gap_start_index = 0
+        for i, count in enumerate(collision_counts):
+            if count < 1 and not in_gap:
+                in_gap = True
+                gap_start_index = i
+            elif count >= 1 and in_gap:
+                in_gap = False
+                gaps.append((gap_start_index, i - 1))
+        if in_gap:
+            gaps.append((gap_start_index, len(collision_counts) - 1))
+        return gaps
+
+    def _assign_chars_to_line_buckets(
+        self, char_y_bounds: list[dict], separator_y_coords: list[float]
+    ) -> list[list[PdfCharacter]]:
+        """Assign each character to a line bucket based on separator y-coordinates."""
+        lines: list[list[PdfCharacter]] = [
+            [] for _ in range(len(separator_y_coords) + 1)
+        ]
+        for b in char_y_bounds:
+            char_y_center = (b["y1"] + b["y2"]) / 2
+            line_idx = 0
+            for sep_y in separator_y_coords:
+                if char_y_center > sep_y:
+                    break
+                line_idx += 1
+            lines[line_idx].append(b["char"])
+        return lines
+
     def _split_paragraph_into_lines(
-        self, paragraph: PdfParagraph, formula_font_ids: set[str]
+        self, paragraph: PdfParagraph, _formula_font_ids: set[str]
     ):
         """
         Splits a paragraph into lines using a "line-threading" method.
@@ -665,23 +727,13 @@ class ParagraphFinder:
             return
 
         # 1. Extract all characters and other compositions from the paragraph.
-        all_chars: list[PdfCharacter] = []
-        other_compositions: list[PdfParagraphComposition] = []
-        for comp in paragraph.pdf_paragraph_composition:
-            if comp.pdf_character:
-                all_chars.append(comp.pdf_character)
-            else:
-                other_compositions.append(comp)
+        all_chars, other_compositions = self._extract_chars_and_other_compositions(paragraph)
 
         if not all_chars:
             return
 
         # 2. Determine effective y-bounds for each character and the paragraph's total vertical range.
-        char_y_bounds = [
-            {"char": char, "y1": y1, "y2": y2}
-            for char in all_chars
-            for y1, y2 in [self._get_effective_y_bounds(char)]
-        ]
+        char_y_bounds = self._build_char_y_bounds(all_chars)
 
         if not char_y_bounds:
             paragraph.pdf_paragraph_composition = other_compositions
@@ -693,7 +745,6 @@ class ParagraphFinder:
 
         # If the paragraph is vertically flat, treat it as a single line.
         if (para_y_max - para_y_min) < 5:  # Using a small threshold
-            # all_chars.sort(key=lambda c: c.visual_bbox.box.x)
             single_line_composition = self.create_line(all_chars)
             paragraph.pdf_paragraph_composition = [
                 single_line_composition
@@ -702,12 +753,8 @@ class ParagraphFinder:
             return
 
         # 3. Perform "threading" scan to create a collision histogram.
-        # Scan from top (max y) to bottom (min y) with a step of 0.5.
-        scan_y_min = para_y_min
-        scan_y_max = para_y_max
         step = 0.25
-
-        y_coordinates = np.arange(scan_y_max, scan_y_min, -step)
+        y_coordinates = np.arange(para_y_max, para_y_min, -step)
 
         # Compute collision counts using NumPy histogram (O(m + n))
         y1_arr = np.array([b["y1"] for b in char_y_bounds], dtype=np.float32)
@@ -715,27 +762,16 @@ class ParagraphFinder:
         collision_counts = self._compute_collision_counts_histogram(
             y1_arr,
             y2_arr,
-            scan_y_min,
-            scan_y_max,
+            para_y_min,
+            para_y_max,
             step,
         )
 
         # 4. Find gaps (regions with low collision count) from the histogram.
-        gaps = []
-        in_gap = False
-        for i, count in enumerate(collision_counts):
-            if count < 1 and not in_gap:
-                in_gap = True
-                gap_start_index = i
-            elif count >= 1 and in_gap:
-                in_gap = False
-                gaps.append((gap_start_index, i - 1))
-        if in_gap:
-            gaps.append((gap_start_index, len(collision_counts) - 1))
+        gaps = self._find_histogram_gaps(collision_counts)
 
         # If no significant gaps are found, treat it as a single line.
         if not gaps:
-            # all_chars.sort(key=lambda c: c.visual_bbox.box.x)
             single_line_composition = self.create_line(all_chars)
             paragraph.pdf_paragraph_composition = [
                 single_line_composition
@@ -744,33 +780,17 @@ class ParagraphFinder:
             return
 
         # 5. Assign characters to lines based on the identified gaps.
-        # Calculate separator y-coordinates from the midpoints of the gaps.
         separator_y_coords = sorted(
-            [y_coordinates[start_idx] for start_idx, end_idx in gaps],
+            [y_coordinates[start_idx] for start_idx, _end_idx in gaps],
             reverse=True,
         )
 
-        lines: list[list[PdfCharacter]] = [
-            [] for _ in range(len(separator_y_coords) + 1)
-        ]
-
-        for b in char_y_bounds:
-            char_y_center = (b["y1"] + b["y2"]) / 2
-            line_idx = 0
-            # Find which line bucket the character belongs to.
-            for sep_y in separator_y_coords:
-                if char_y_center > sep_y:
-                    break
-                line_idx += 1
-            lines[line_idx].append(b["char"])
+        lines = self._assign_chars_to_line_buckets(char_y_bounds, separator_y_coords)
 
         # 6. Rebuild the paragraph's composition list from the new lines.
-        new_line_compositions = []
-        for line_chars in lines:
-            if line_chars:
-                # Sort characters within each line by x-coordinate (left-to-right).
-                # line_chars.sort(key=lambda c: c.visual_bbox.box.x)
-                new_line_compositions.append(self.create_line(line_chars))
+        new_line_compositions = [
+            self.create_line(line_chars) for line_chars in lines if line_chars
+        ]
 
         # The lines are already sorted vertically due to the scanning process.
         paragraph.pdf_paragraph_composition = new_line_compositions + other_compositions
@@ -838,6 +858,45 @@ class ParagraphFinder:
             return (line_widths[mid - 1] + line_widths[mid]) / 2
         return line_widths[mid]
 
+    def _split_off_tail_as_paragraph(
+        self,
+        paragraph: PdfParagraph,
+        paragraphs: list[PdfParagraph],
+        i: int,
+        j: int,
+    ) -> None:
+        """Split compositions[j:] out of paragraph into a new paragraph inserted at i+1."""
+        new_paragraph = PdfParagraph(
+            box=Box(0, 0, 0, 0),
+            pdf_paragraph_composition=paragraph.pdf_paragraph_composition[j:],
+            unicode="",
+            debug_id=generate_base58_id(),
+            layout_label=paragraph.layout_label,
+            layout_id=paragraph.layout_id,
+        )
+        paragraph.pdf_paragraph_composition = paragraph.pdf_paragraph_composition[:j]
+        self.update_paragraph_data(paragraph)
+        self.update_paragraph_data(new_paragraph)
+        paragraphs.insert(i + 1, new_paragraph)
+
+    def _is_short_line_split(self, prev_width: float, median_width: float) -> bool:
+        """Return True if the previous line is short enough to trigger a split."""
+        return (
+            self.translation_config.split_short_lines
+            and prev_width < median_width * self.translation_config.short_line_split_factor
+        )
+
+    @staticmethod
+    def _next_line_starts_with_bullet(
+        paragraph: PdfParagraph, j: int
+    ) -> bool:
+        """Return True if the composition at index j starts with a bullet point."""
+        current_line = paragraph.pdf_paragraph_composition[j]
+        line = current_line.pdf_line
+        if not line or not line.pdf_character:
+            return False
+        return is_bullet_point(line.pdf_character[0])
+
     def process_independent_paragraphs(
         self,
         paragraphs: list[PdfParagraph],
@@ -864,65 +923,15 @@ class ParagraphFinder:
                 # 检查是否包含连续的点（至少 20 个）
                 # 如果有至少连续 20 个点，则代表这是目录条目
                 if re.search(r"\.{20,}", prev_text):
-                    # 创建新的段落
-                    new_paragraph = PdfParagraph(
-                        box=Box(0, 0, 0, 0),  # 临时边界框
-                        pdf_paragraph_composition=(
-                            paragraph.pdf_paragraph_composition[j:]
-                        ),
-                        unicode="",
-                        debug_id=generate_base58_id(),
-                        layout_label=paragraph.layout_label,
-                        layout_id=paragraph.layout_id,
-                    )
-                    # 更新原段落
-                    paragraph.pdf_paragraph_composition = (
-                        paragraph.pdf_paragraph_composition[:j]
-                    )
-
-                    # 更新两个段落的数据
-                    self.update_paragraph_data(paragraph)
-                    self.update_paragraph_data(new_paragraph)
-
-                    # 在原段落后插入新段落
-                    paragraphs.insert(i + 1, new_paragraph)
+                    self._split_off_tail_as_paragraph(paragraph, paragraphs, i, j)
                     break
 
                 # 如果前一行宽度小于中位数的一半，将当前行及后续行分割成新段落
-                if (
-                    self.translation_config.split_short_lines
-                    and prev_width
-                    < median_width * self.translation_config.short_line_split_factor
-                ) or (
-                    paragraph.pdf_paragraph_composition
-                    and (current_line := paragraph.pdf_paragraph_composition[j])
-                    and (line := current_line.pdf_line)
-                    and (chars := line.pdf_character)
-                    and (char := chars[0])
-                    and is_bullet_point(char)
-                ):
-                    # 创建新的段落
-                    new_paragraph = PdfParagraph(
-                        box=Box(0, 0, 0, 0),  # 临时边界框
-                        pdf_paragraph_composition=(
-                            paragraph.pdf_paragraph_composition[j:]
-                        ),
-                        unicode="",
-                        debug_id=generate_base58_id(),
-                        layout_label=paragraph.layout_label,
-                        layout_id=paragraph.layout_id,
-                    )
-                    # 更新原段落
-                    paragraph.pdf_paragraph_composition = (
-                        paragraph.pdf_paragraph_composition[:j]
-                    )
-
-                    # 更新两个段落的数据
-                    self.update_paragraph_data(paragraph)
-                    self.update_paragraph_data(new_paragraph)
-
-                    # 在原段落后插入新段落
-                    paragraphs.insert(i + 1, new_paragraph)
+                should_split = self._is_short_line_split(
+                    prev_width, median_width
+                ) or self._next_line_starts_with_bullet(paragraph, j)
+                if should_split:
+                    self._split_off_tail_as_paragraph(paragraph, paragraphs, i, j)
                     break
                 j += 1
             i += 1
@@ -935,6 +944,54 @@ class ParagraphFinder:
         # Check if bbox2 is contained in bbox1
         bbox2_in_bbox1 = bbox2.y >= bbox1.y and bbox2.y2 <= bbox1.y2
         return bbox1_in_bbox2 or bbox2_in_bbox1
+
+    def _resolve_paragraph_overlap(self, para1, para2) -> bool:
+        """
+        Attempt to resolve vertical overlap between two paragraphs by adjusting
+        their bounding boxes to the midpoint of the overlap.
+        Returns True if an overlap was found and processed (even if unresolvable).
+        """
+        if para1.box is None or para2.box is None:
+            return False
+        if para1.xobj_id != para2.xobj_id:
+            return False
+        if not self.bbox_overlap(para1.box, para2.box):
+            return False
+        if self.is_bbox_contain_in_vertical(para1.box, para2.box):
+            return False
+
+        overlap_y_start = max(para1.box.y, para2.box.y)
+        overlap_y_end = min(para1.box.y2, para2.box.y2)
+        overlap_height = overlap_y_end - overlap_y_start
+        overlap_x_start = max(para1.box.x, para2.box.x)
+        overlap_x_end = min(para1.box.x2, para2.box.x2)
+        overlap_width = overlap_x_end - overlap_x_start
+
+        if overlap_height <= 1e-6 or overlap_width <= 1e-6:
+            return False
+
+        # Determine which paragraph is visually higher
+        if para1.box.y2 > para2.box.y and para1.box.y < para2.box.y:
+            higher_para, lower_para = para2, para1
+        elif para1.box.y2 < para2.box.y2:
+            higher_para, lower_para = para2, para1
+        else:
+            higher_para, lower_para = para1, para2
+
+        mid_y = overlap_y_start + overlap_height / 2
+        if mid_y > higher_para.box.y and mid_y < lower_para.box.y2:
+            higher_para.box.y = mid_y + 1
+            lower_para.box.y2 = mid_y - 1
+        else:
+            logger.warning(
+                "Could not resolve overlap between paragraphs"
+                f" {higher_para.debug_id} and {lower_para.debug_id}"
+                " using simple midpoint strategy."
+                f" Midpoint: {mid_y},"
+                f" Higher Box: {higher_para.box},"
+                f" Lower Box: {lower_para.box}"
+            )
+        return True
 
     def fix_overlapping_paragraphs(self, page: Page):
         """
@@ -957,66 +1014,8 @@ class ParagraphFinder:
 
             for i in range(len(paragraphs)):
                 for j in range(i + 1, len(paragraphs)):
-                    para1 = paragraphs[i]
-                    para2 = paragraphs[j]
-
-                    if para1.box is None or para2.box is None:
-                        continue
-
-                    if para1.xobj_id != para2.xobj_id:
-                        continue
-
-                    # Check for overlap using the existing method
-                    if self.bbox_overlap(para1.box, para2.box):
-                        if self.is_bbox_contain_in_vertical(para1.box, para2.box):
-                            continue
-                        # Calculate vertical overlap details
-                        overlap_y_start = max(para1.box.y, para2.box.y)
-                        overlap_y_end = min(para1.box.y2, para2.box.y2)
-                        overlap_height = overlap_y_end - overlap_y_start
-
-                        # Calculate horizontal overlap details
-                        overlap_x_start = max(para1.box.x, para2.box.x)
-                        overlap_x_end = min(para1.box.x2, para2.box.x2)
-                        overlap_width = overlap_x_end - overlap_x_start
-
-                        # Ensure there's a real 2D overlap, focusing on vertical adjustment
-                        if overlap_height > 1e-6 and overlap_width > 1e-6:
-                            overlap_found_in_pass = True
-
-                            # Determine which paragraph is visually higher
-                            if para1.box.y2 > para2.box.y and para1.box.y < para2.box.y:
-                                lower_para = para1
-                                higher_para = para2
-                            # Handle cases where y values are identical (or very close)
-                            # Prefer the one with smaller y2 as the higher one, or break tie arbitrarily
-                            elif para1.box.y2 < para2.box.y2:
-                                lower_para = para1
-                                higher_para = para2
-                            else:
-                                lower_para = para2
-                                higher_para = para1
-
-                            # Calculate the midpoint of the vertical overlap
-                            mid_y = overlap_y_start + overlap_height / 2
-
-                            # Adjust boxes, ensuring they remain valid (y2 > y)
-                            if mid_y > higher_para.box.y and mid_y < lower_para.box.y2:
-                                higher_para.box.y = mid_y + 1
-                                lower_para.box.y2 = mid_y - 1
-                            else:
-                                # This might happen if one box is fully contained vertically
-                                # within another, or due to floating point issues.
-                                # Log a warning and skip adjustment for this pair in this iteration.
-                                # A more complex strategy might be needed for full containment.
-                                logger.warning(
-                                    "Could not resolve overlap between paragraphs"
-                                    f" {higher_para.debug_id} and {lower_para.debug_id}"
-                                    " using simple midpoint strategy."
-                                    f" Midpoint: {mid_y},"
-                                    f" Higher Box: {higher_para.box},"
-                                    f" Lower Box: {lower_para.box}"
-                                )
+                    if self._resolve_paragraph_overlap(paragraphs[i], paragraphs[j]):
+                        overlap_found_in_pass = True
 
             # If no overlaps were found and adjusted in this pass, we're done.
             if not overlap_found_in_pass:

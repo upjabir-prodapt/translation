@@ -47,30 +47,38 @@ class PDFDevice:
         self.close()
 
     def close(self) -> None:
+        # Not implemented in base class
         pass
 
     def set_ctm(self, ctm: Matrix) -> None:
         self.ctm = ctm
 
     def begin_tag(self, tag: PSLiteral, props: Optional["PDFStackT"] = None) -> None:
+        # Not implemented in base class
         pass
 
     def end_tag(self) -> None:
+        # Not implemented in base class
         pass
 
     def do_tag(self, tag: PSLiteral, props: Optional["PDFStackT"] = None) -> None:
+        # Not implemented in base class
         pass
 
     def begin_page(self, page: PDFPage, ctm: Matrix) -> None:
+        # Not implemented in base class
         pass
 
     def end_page(self, page: PDFPage) -> None:
+        # Not implemented in base class
         pass
 
     def begin_figure(self, name: str, bbox: Rect, matrix: Matrix) -> None:
+        # Not implemented in base class
         pass
 
     def end_figure(self, name: str) -> None:
+        # Not implemented in base class
         pass
 
     def paint_path(
@@ -81,9 +89,11 @@ class PDFDevice:
         evenodd: bool,
         path: Sequence[PathSegment],
     ) -> None:
+        # Not implemented in base class
         pass
 
     def render_image(self, name: str, stream: PDFStream) -> None:
+        # Not implemented in base class
         pass
 
     def render_string(
@@ -93,6 +103,7 @@ class PDFDevice:
         ncs: PDFColorSpace,
         graphicstate: "PDFGraphicState",
     ) -> None:
+        # Not implemented in base class
         pass
 
 
@@ -148,6 +159,40 @@ class PDFTextDevice(PDFDevice):
                 graphicstate,
             )
 
+    def _render_chars_horizontal(
+        self,
+        cids: Iterable[int],
+        x: float,
+        y: float,
+        matrix: Matrix,
+        font: PDFFont,
+        fontsize: float,
+        scaling: float,
+        charspace: float,
+        wordspace: float,
+        rise: float,
+        ncs: PDFColorSpace,
+        graphicstate: "PDFGraphicState",
+        needcharspace: bool,
+    ) -> tuple[float, bool]:
+        for cid in cids:
+            if needcharspace:
+                x += charspace
+            x += self.render_char(
+                utils.translate_matrix(matrix, (x, y)),
+                font,
+                fontsize,
+                scaling,
+                rise,
+                cid,
+                ncs,
+                graphicstate,
+            )
+            if cid == 32 and wordspace:
+                x += wordspace
+            needcharspace = True
+        return x, needcharspace
+
     def render_string_horizontal(
         self,
         seq: PDFTextSeq,
@@ -170,27 +215,50 @@ class PDFTextDevice(PDFDevice):
                 x -= obj * dxscale
                 needcharspace = True
             elif isinstance(obj, bytes):
-                for cid in font.decode(obj):
-                    if needcharspace:
-                        x += charspace
-                    x += self.render_char(
-                        utils.translate_matrix(matrix, (x, y)),
-                        font,
-                        fontsize,
-                        scaling,
-                        rise,
-                        cid,
-                        ncs,
-                        graphicstate,
-                    )
-                    if cid == 32 and wordspace:
-                        x += wordspace
-                    needcharspace = True
+                x, needcharspace = self._render_chars_horizontal(
+                    font.decode(obj),
+                    x, y, matrix, font, fontsize, scaling,
+                    charspace, wordspace, rise, ncs, graphicstate, needcharspace,
+                )
             else:
                 logger.warning(
                     f"Cannot render horizontal string because {obj!r} is not a valid int, float or bytes."
                 )
         return (x, y)
+
+    def _render_chars_vertical(
+        self,
+        cids: Iterable[int],
+        x: float,
+        y: float,
+        matrix: Matrix,
+        font: PDFFont,
+        fontsize: float,
+        scaling: float,
+        charspace: float,
+        wordspace: float,
+        rise: float,
+        ncs: PDFColorSpace,
+        graphicstate: "PDFGraphicState",
+        needcharspace: bool,
+    ) -> tuple[float, bool]:
+        for cid in cids:
+            if needcharspace:
+                y += charspace
+            y += self.render_char(
+                utils.translate_matrix(matrix, (x, y)),
+                font,
+                fontsize,
+                scaling,
+                rise,
+                cid,
+                ncs,
+                graphicstate,
+            )
+            if cid == 32 and wordspace:
+                y += wordspace
+            needcharspace = True
+        return y, needcharspace
 
     def render_string_vertical(
         self,
@@ -214,22 +282,11 @@ class PDFTextDevice(PDFDevice):
                 y -= obj * dxscale
                 needcharspace = True
             elif isinstance(obj, bytes):
-                for cid in font.decode(obj):
-                    if needcharspace:
-                        y += charspace
-                    y += self.render_char(
-                        utils.translate_matrix(matrix, (x, y)),
-                        font,
-                        fontsize,
-                        scaling,
-                        rise,
-                        cid,
-                        ncs,
-                        graphicstate,
-                    )
-                    if cid == 32 and wordspace:
-                        y += wordspace
-                    needcharspace = True
+                y, needcharspace = self._render_chars_vertical(
+                    font.decode(obj),
+                    x, y, matrix, font, fontsize, scaling,
+                    charspace, wordspace, rise, ncs, graphicstate, needcharspace,
+                )
             else:
                 logger.warning(
                     f"Cannot render vertical string because {obj!r} is not a valid int, float or bytes."
@@ -238,14 +295,14 @@ class PDFTextDevice(PDFDevice):
 
     def render_char(
         self,
-        matrix: Matrix,
-        font: PDFFont,
-        fontsize: float,
-        scaling: float,
-        rise: float,
-        cid: int,
-        ncs: PDFColorSpace,
-        graphicstate: "PDFGraphicState",
+        _matrix: Matrix,
+        _font: PDFFont,
+        _fontsize: float,
+        _scaling: float,
+        _rise: float,
+        _cid: int,
+        _ncs: PDFColorSpace,
+        _graphicstate: "PDFGraphicState",
     ) -> float:
         return 0
 

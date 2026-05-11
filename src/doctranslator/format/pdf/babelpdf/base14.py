@@ -1,9 +1,11 @@
 from .encoding import get_type1_encoding
 from .win_core import win_core
 
+NOTDEF = ".notdef"
+
 base14_bbox = {
     "Courier-BoldOblique": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (216, -15, 495, 572),
         "quotedbl": (212, 277, 584, 562),
         "numbersign": (88, -45, 640, 651),
@@ -266,7 +268,7 @@ base14_bbox = {
         "zcaron": (81, 0, 632, 667),
     },
     "Courier-Bold": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (202, -15, 398, 572),
         "quotedbl": (135, 277, 465, 562),
         "numbersign": (56, -45, 544, 651),
@@ -529,7 +531,7 @@ base14_bbox = {
         "zcaron": (81, 0, 520, 667),
     },
     "Courier": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (236, -15, 364, 572),
         "quotedbl": (187, 328, 413, 562),
         "numbersign": (93, -32, 507, 639),
@@ -792,7 +794,7 @@ base14_bbox = {
         "zcaron": (99, 0, 502, 669),
     },
     "Courier-Oblique": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (244, -15, 464, 572),
         "quotedbl": (273, 328, 532, 562),
         "numbersign": (133, -32, 596, 639),
@@ -1055,7 +1057,7 @@ base14_bbox = {
         "zcaron": (99, 0, 624, 669),
     },
     "Helvetica-BoldOblique": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (94, 0, 397, 718),
         "quotedbl": (193, 447, 529, 718),
         "numbersign": (60, 0, 644, 698),
@@ -1286,7 +1288,7 @@ base14_bbox = {
         "zcaron": (20, 0, 586, 750),
     },
     "Helvetica-Bold": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (90, 0, 244, 718),
         "quotedbl": (98, 447, 376, 718),
         "numbersign": (18, 0, 538, 698),
@@ -1517,7 +1519,7 @@ base14_bbox = {
         "zcaron": (20, 0, 480, 750),
     },
     "Helvetica-Oblique": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (90, 0, 340, 718),
         "quotedbl": (168, 463, 438, 718),
         "numbersign": (73, 0, 631, 688),
@@ -1748,7 +1750,7 @@ base14_bbox = {
         "zcaron": (31, 0, 571, 734),
     },
     "Helvetica": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (90, 0, 187, 718),
         "quotedbl": (70, 463, 285, 718),
         "numbersign": (28, 0, 529, 688),
@@ -1979,7 +1981,7 @@ base14_bbox = {
         "zcaron": (31, 0, 469, 734),
     },
     "Symbol": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (128, -17, 240, 672),
         "universal": (31, 0, 681, 705),
         "numbersign": (20, -16, 481, 673),
@@ -2171,7 +2173,7 @@ base14_bbox = {
         "space": (0, 0, 0, 0),
     },
     "Times-BoldItalic": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (67, -13, 370, 684),
         "quotedbl": (136, 398, 536, 685),
         "numbersign": (-33, 0, 533, 700),
@@ -2402,7 +2404,7 @@ base14_bbox = {
         "zcaron": (-43, -78, 424, 690),
     },
     "Times-Bold": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (81, -13, 251, 691),
         "quotedbl": (83, 404, 472, 691),
         "numbersign": (4, 0, 496, 700),
@@ -2633,7 +2635,7 @@ base14_bbox = {
         "zcaron": (21, 0, 420, 704),
     },
     "Times-Italic": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (39, -11, 302, 667),
         "quotedbl": (144, 421, 432, 666),
         "numbersign": (2, 0, 540, 676),
@@ -2864,7 +2866,7 @@ base14_bbox = {
         "zcaron": (-2, -81, 434, 661),
     },
     "Times-Roman": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "exclam": (130, -9, 238, 676),
         "quotedbl": (77, 431, 331, 676),
         "numbersign": (5, 0, 496, 662),
@@ -3095,7 +3097,7 @@ base14_bbox = {
         "zcaron": (27, 0, 418, 674),
     },
     "ZapfDingbats": {
-        ".notdef": (0, 0, 0, 0),
+        NOTDEF: (0, 0, 0, 0),
         "a1": (35, 72, 939, 621),
         "a2": (35, 81, 927, 611),
         "a202": (35, 72, 939, 621),

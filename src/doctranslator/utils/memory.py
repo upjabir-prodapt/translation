@@ -25,7 +25,7 @@ def _parse_pss_from_smaps_rollup(pid: int) -> int | None:
                         pss_kb = int(parts[1])
                         return pss_kb * 1024  # Convert to bytes
         return None
-    except (FileNotFoundError, PermissionError, ValueError, OSError):
+    except (ValueError, OSError):
         return None
 
 
@@ -47,7 +47,7 @@ def _parse_pss_from_smaps(pid: int) -> int | None:
         if total_pss_kb > 0:
             return total_pss_kb * 1024  # Convert to bytes
         return None
-    except (FileNotFoundError, PermissionError, ValueError, OSError):
+    except (ValueError, OSError):
         return None
 
 
@@ -99,21 +99,55 @@ def _get_single_process_memory(
     Returns:
         Memory usage in bytes, or None if all methods fail
     """
-    if sys.platform == "linux":
-        if prefer_pss:
-            if use_smaps_rollup_only:
-                # Only try smaps_rollup, then fallback to RSS
-                pss = _parse_pss_from_smaps_rollup(pid)
-                if pss is not None:
-                    return pss
-            else:
-                # Try full PSS (smaps_rollup -> smaps)
-                pss = _get_pss_linux(pid)
-                if pss is not None:
-                    return pss
+    if sys.platform == "linux" and prefer_pss:
+        if use_smaps_rollup_only:
+            # Only try smaps_rollup, then fallback to RSS
+            pss = _parse_pss_from_smaps_rollup(pid)
+            if pss is not None:
+                return pss
+        else:
+            # Try full PSS (smaps_rollup -> smaps)
+            pss = _get_pss_linux(pid)
+            if pss is not None:
+                return pss
 
     # Fallback to RSS
     return _get_rss_psutil(pid)
+
+
+def _get_children_memory(
+    pid: int, prefer_pss: bool, use_smaps_rollup_only: bool
+) -> int:
+    """
+    Sum memory usage of all child processes for the given pid.
+
+    Returns total child memory in bytes, or 0 if psutil is unavailable or
+    the process cannot be accessed.
+    """
+    if psutil is None:
+        return 0
+
+    try:
+        parent_process = psutil.Process(pid)
+        children = parent_process.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return 0
+
+    total = 0
+    for child in children:
+        try:
+            child_memory = _get_single_process_memory(
+                child.pid,
+                prefer_pss=prefer_pss,
+                use_smaps_rollup_only=use_smaps_rollup_only,
+            )
+            if child_memory is not None:
+                total += child_memory
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Child process died or no permission; skip it
+            pass
+
+    return total
 
 
 def get_memory_usage_bytes(
@@ -161,32 +195,37 @@ def get_memory_usage_bytes(
 
     # Get children memory if requested
     if include_children:
-        if psutil is None:
-            # Cannot get children without psutil
-            return total_memory
-
-        try:
-            parent_process = psutil.Process(pid)
-            children = parent_process.children(recursive=True)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            # Parent process not found or no permission
-            return total_memory
-
-        for child in children:
-            try:
-                child_pid = child.pid
-                child_memory = _get_single_process_memory(
-                    child_pid,
-                    prefer_pss=prefer_pss,
-                    use_smaps_rollup_only=use_smaps_rollup_only,
-                )
-                if child_memory is not None:
-                    total_memory += child_memory
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # Child process died or no permission; skip it
-                pass
+        total_memory += _get_children_memory(pid, prefer_pss, use_smaps_rollup_only)
 
     return max(0, total_memory)
+
+
+def _get_rss_estimate(pid: int, include_children: bool) -> int:
+    """
+    Get a fast RSS-only memory estimate for a process and optionally its children.
+
+    Used as a lightweight fallback when PSS checks are throttled.
+    Returns total RSS in bytes.
+    """
+    memory = 0
+    rss = _get_rss_psutil(pid)
+    if rss is not None:
+        memory += rss
+
+    if include_children and psutil is not None:
+        try:
+            parent_process = psutil.Process(pid)
+            for child in parent_process.children(recursive=True):
+                try:
+                    child_rss = _get_rss_psutil(child.pid)
+                    if child_rss is not None:
+                        memory += child_rss
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    return memory
 
 
 def get_memory_usage_with_throttle(
@@ -223,25 +262,8 @@ def get_memory_usage_with_throttle(
         and (current_time - last_pss_check_time) < pss_throttle_seconds
     ):
         # Throttled: use RSS only as a fast estimate
-        memory = 0
         pid_to_check = pid if pid is not None else os.getpid()
-        rss = _get_rss_psutil(pid_to_check)
-        if rss is not None:
-            memory += rss
-
-        if include_children and psutil is not None:
-            try:
-                parent_process = psutil.Process(pid_to_check)
-                for child in parent_process.children(recursive=True):
-                    try:
-                        child_rss = _get_rss_psutil(child.pid)
-                        if child_rss is not None:
-                            memory += child_rss
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
+        memory = _get_rss_estimate(pid_to_check, include_children)
         return memory, last_pss_check_time
 
     # Not throttled: do full check

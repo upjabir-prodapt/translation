@@ -190,6 +190,35 @@ class AutomaticTermExtractor:
             llm_output = llm_output[:-3]
         return llm_output.strip()
 
+    def _decode_json_safely(self, cleaned_text: str, request_id: str):
+        """Parse JSON string and return decoded object, or None on failure."""
+        try:
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError as e:
+            preview = cleaned_text[:300].replace("\n", "\\n")
+            logger.warning(
+                f"Request ID {request_id}: Term extraction JSON parse error: {e}. "
+                f"response_head={preview!r}",
+            )
+        except Exception as e:
+            logger.warning(
+                f"Request ID {request_id}: Unexpected error parsing term extraction output: {e}",
+            )
+        return None
+
+    def _normalize_extracted_data_to_list(self, extracted_data) -> list | None:
+        """Coerce a parsed JSON object into a list of term dicts, or return None."""
+        if isinstance(extracted_data, list):
+            return extracted_data
+        if isinstance(extracted_data, dict):
+            for key in ("terms", "items", "results", "data"):
+                value = extracted_data.get(key)
+                if isinstance(value, list):
+                    return value
+            if "src" in extracted_data and "tgt" in extracted_data:
+                return [extracted_data]
+        return None
+
     def _parse_terms_json(self, llm_response_text: str, request_id: str) -> list[dict]:
         cleaned_response_text = self._clean_json_output(llm_response_text or "")
         if not cleaned_response_text:
@@ -198,39 +227,18 @@ class AutomaticTermExtractor:
             )
             return []
 
-        try:
-            extracted_data = json.loads(cleaned_response_text)
-        except json.JSONDecodeError as e:
-            preview = cleaned_response_text[:300].replace("\n", "\\n")
-            logger.warning(
-                f"Request ID {request_id}: Term extraction JSON parse error: {e}. "
-                f"response_head={preview!r}",
-            )
-            return []
-        except Exception as e:
-            logger.warning(
-                f"Request ID {request_id}: Unexpected error parsing term extraction output: {e}",
-            )
+        extracted_data = self._decode_json_safely(cleaned_response_text, request_id)
+        if extracted_data is None:
             return []
 
-        if isinstance(extracted_data, dict):
-            for key in ("terms", "items", "results", "data"):
-                value = extracted_data.get(key)
-                if isinstance(value, list):
-                    extracted_data = value
-                    break
-            else:
-                # Single-item object fallback
-                if "src" in extracted_data and "tgt" in extracted_data:
-                    extracted_data = [extracted_data]
-
-        if not isinstance(extracted_data, list):
+        result = self._normalize_extracted_data_to_list(extracted_data)
+        if result is None:
             logger.warning(
                 f"Request ID {request_id}: Term extraction output is not a JSON list "
                 f"(got {type(extracted_data).__name__})",
             )
             return []
-        return extracted_data
+        return result
 
     def _process_llm_response(self, llm_response_text: str, request_id: str):
         extracted_data = self._parse_terms_json(llm_response_text, request_id)
@@ -271,9 +279,6 @@ class AutomaticTermExtractor:
             if is_placeholder_only_paragraph(paragraph):
                 pbar.advance(1)
                 continue
-            # if len(paragraph.unicode) < self.translation_config.min_text_length:
-            #     pbar.advance(1)
-            #     continue
             total_token_count += self.calc_token_count(paragraph.unicode)
             paragraphs.append(paragraph)
             max_tokens = self.translation_config.llm_term_extraction_batch_max_tokens
@@ -300,6 +305,51 @@ class AutomaticTermExtractor:
                 priority=1048576 - total_token_count,
             )
 
+    def _build_reference_glossary_section(self, inputs: list[str]) -> str:
+        """Build the reference glossary section string for the LLM prompt."""
+        user_glossaries = self.shared_context.user_glossaries
+        if not user_glossaries:
+            return ""
+
+        text_for_glossary = "\n\n".join(inputs)
+        glossary_entries = {}
+        for glossary in user_glossaries:
+            active_entries = glossary.get_active_entries_for_text(text_for_glossary)
+            if active_entries:
+                glossary_entries[glossary.name] = active_entries
+
+        if not glossary_entries:
+            return ""
+
+        section = "Reference Glossaries (for consistency and quality):\n"
+        for glossary_name, entries in glossary_entries.items():
+            section += f"\n{glossary_name}:\n"
+            for src, tgt in sorted(set(entries)):
+                section += f"- {src} → {tgt}\n"
+        section += (
+            "\nPlease consider these existing translations for consistency when extracting "
+            "new terms. IMPORTANT: You should also extract terms that appear in the reference "
+            "glossaries above if they are found in the input text - don't skip them just "
+            "because they already exist in the reference."
+        )
+        return section
+
+    def _store_valid_term(self, term: dict, request_id: str) -> bool:
+        """Validate and store a single extracted term pair. Returns True if stored."""
+        if not (isinstance(term, dict) and "src" in term and "tgt" in term):
+            logger.warning(
+                f"Request ID {request_id}: Skipping malformed term item: {term}",
+            )
+            return False
+        src_term = str(term["src"]).strip()
+        tgt_term = str(term["tgt"]).strip()
+        if src_term == tgt_term and len(src_term) < 3:
+            return False
+        if src_term and tgt_term and len(src_term) < 100:
+            self.shared_context.add_raw_extracted_term_pair(src_term, tgt_term)
+            return True
+        return False
+
     def extract_terms_from_paragraphs(
         self,
         paragraphs: BatchParagraph,
@@ -319,33 +369,7 @@ class AutomaticTermExtractor:
                 f"{paragraphs.paragraphs[0].debug_id if paragraphs.paragraphs else 'na'}"
             )
 
-            # Build reference glossary section
-            reference_glossary_section = ""
-            user_glossaries = self.shared_context.user_glossaries
-            if user_glossaries:
-                text_for_glossary = "\n\n".join(inputs)
-
-                # Group entries by glossary name
-                glossary_entries = {}
-                for glossary in user_glossaries:
-                    active_entries = glossary.get_active_entries_for_text(
-                        text_for_glossary
-                    )
-                    if active_entries:
-                        glossary_entries[glossary.name] = active_entries
-
-                if glossary_entries:
-                    reference_glossary_section = (
-                        "Reference Glossaries (for consistency and quality):\n"
-                    )
-
-                    # Add entries grouped by glossary name
-                    for glossary_name, entries in glossary_entries.items():
-                        reference_glossary_section += f"\n{glossary_name}:\n"
-                        for src, tgt in sorted(set(entries)):
-                            reference_glossary_section += f"- {src} → {tgt}\n"
-
-                    reference_glossary_section += "\nPlease consider these existing translations for consistency when extracting new terms. IMPORTANT: You should also extract terms that appear in the reference glossaries above if they are found in the input text - don't skip them just because they already exist in the reference."
+            reference_glossary_section = self._build_reference_glossary_section(inputs)
 
             prompt = LLM_PROMPT_TEMPLATE.format(
                 target_language=self.translation_config.lang_out,
@@ -372,23 +396,9 @@ class AutomaticTermExtractor:
                 )
                 return
 
-            valid_terms = 0
-            for term in response:
-                if isinstance(term, dict) and "src" in term and "tgt" in term:
-                    src_term = str(term["src"]).strip()
-                    tgt_term = str(term["tgt"]).strip()
-                    if src_term == tgt_term and len(src_term) < 3:
-                        continue
-                    if src_term and tgt_term and len(src_term) < 100:
-                        self.shared_context.add_raw_extracted_term_pair(
-                            src_term,
-                            tgt_term,
-                        )
-                        valid_terms += 1
-                else:
-                    logger.warning(
-                        f"Request ID {request_id}: Skipping malformed term item: {term}",
-                    )
+            valid_terms = sum(
+                1 for term in response if self._store_valid_term(term, request_id)
+            )
             logger.debug(
                 f"Request ID {request_id}: Parsed {valid_terms} valid term pairs "
                 f"from {len(response)} extracted items",

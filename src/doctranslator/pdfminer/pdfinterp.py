@@ -85,8 +85,6 @@ class PDFTextState:
         self.render: int = 0
         self.rise: float = 0
         self.reset()
-        # self.matrix is set
-        # self.linematrix is set
 
     def __repr__(self) -> str:
         return (
@@ -196,10 +194,8 @@ class PDFResourceManager:
 
     def get_procset(self, procs: Sequence[object]) -> None:
         for proc in procs:
-            if proc is LITERAL_PDF or proc is LITERAL_TEXT:
-                pass
-            else:
-                pass
+            if proc is not LITERAL_PDF and proc is not LITERAL_TEXT:
+                log.debug("Unknown procset: %r", proc)
 
     def get_cmap(self, cmapname: str, strict: bool = False) -> CMapBase:
         try:
@@ -209,48 +205,45 @@ class PDFResourceManager:
                 raise
             return CMap()
 
+    def _create_font(self, spec: Mapping[str, object]) -> PDFFont:
+        """Create a new PDFFont instance from a font spec dictionary."""
+        if settings.STRICT and spec["Type"] is not LITERAL_FONT:
+            raise PDFFontError("Type is not /Font")
+
+        if "Subtype" in spec:
+            subtype = literal_name(spec["Subtype"])
+        elif settings.STRICT:
+            raise PDFFontError("Font Subtype is not specified.")
+        else:
+            subtype = "Type1"
+
+        if subtype in ("Type1", "MMType1"):
+            return PDFType1Font(self, spec)
+        if subtype == "TrueType":
+            return PDFTrueTypeFont(self, spec)
+        if subtype == "Type3":
+            return PDFType3Font(self, spec)
+        if subtype in ("CIDFontType0", "CIDFontType2"):
+            return PDFCIDFont(self, spec)
+        if subtype == "Type0":
+            dfonts = list_value(spec["DescendantFonts"])
+            assert dfonts
+            subspec = dict_value(dfonts[0]).copy()
+            for k in ("Encoding", "ToUnicode"):
+                if k in spec:
+                    subspec[k] = resolve1(spec[k])
+            return self.get_font(None, subspec)
+        if settings.STRICT:
+            raise PDFFontError("Invalid Font spec: %r" % spec)
+        return PDFType1Font(self, spec)  # this is so wrong!
+
     def get_font(self, objid: object, spec: Mapping[str, object]) -> PDFFont:
         if objid and objid in self._cached_fonts:
-            font = self._cached_fonts[objid]
-        else:
-            log.debug("get_font: create: objid=%r, spec=%r", objid, spec)
-            if settings.STRICT:
-                if spec["Type"] is not LITERAL_FONT:
-                    raise PDFFontError("Type is not /Font")
-            # Create a Font object.
-            if "Subtype" in spec:
-                subtype = literal_name(spec["Subtype"])
-            else:
-                if settings.STRICT:
-                    raise PDFFontError("Font Subtype is not specified.")
-                subtype = "Type1"
-            if subtype in ("Type1", "MMType1"):
-                # Type1 Font
-                font = PDFType1Font(self, spec)
-            elif subtype == "TrueType":
-                # TrueType Font
-                font = PDFTrueTypeFont(self, spec)
-            elif subtype == "Type3":
-                # Type3 Font
-                font = PDFType3Font(self, spec)
-            elif subtype in ("CIDFontType0", "CIDFontType2"):
-                # CID Font
-                font = PDFCIDFont(self, spec)
-            elif subtype == "Type0":
-                # Type0 Font
-                dfonts = list_value(spec["DescendantFonts"])
-                assert dfonts
-                subspec = dict_value(dfonts[0]).copy()
-                for k in ("Encoding", "ToUnicode"):
-                    if k in spec:
-                        subspec[k] = resolve1(spec[k])
-                font = self.get_font(None, subspec)
-            else:
-                if settings.STRICT:
-                    raise PDFFontError("Invalid Font spec: %r" % spec)
-                font = PDFType1Font(self, spec)  # this is so wrong!
-            if objid and self.caching:
-                self._cached_fonts[objid] = font
+            return self._cached_fonts[objid]
+        log.debug("get_font: create: objid=%r, spec=%r", objid, spec)
+        font = self._create_font(spec)
+        if objid and self.caching:
+            self._cached_fonts[objid] = font
         return font
 
 
@@ -258,10 +251,10 @@ class PDFContentParser(PSStackParser[Union[PSKeyword, PDFStream]]):
     def __init__(self, streams: Sequence[object]) -> None:
         self.streams = streams
         self.istream = 0
-        # PSStackParser.__init__(fp=None) is safe only because we've overloaded
-        # all the methods that would attempt to access self.fp without first
-        # calling self.fillfp().
-        PSStackParser.__init__(self, None)  # type: ignore[arg-type]
+        # PSStackParser.__init__ is called with a cast placeholder because all
+        # methods that access self.fp are overloaded here to call fillfp() first,
+        # which lazily initialises self.fp from self.streams.
+        PSStackParser.__init__(self, cast(BytesIO, None))
 
     def fillfp(self) -> None:
         if not self.fp:
@@ -328,34 +321,44 @@ class PDFContentParser(PSStackParser[Union[PSKeyword, PDFStream]]):
     KEYWORD_ID = KWD(b"ID")
     KEYWORD_EI = KWD(b"EI")
 
+    def _get_inline_image_eos(self, d: dict) -> bytes:
+        """Determine the end-of-stream marker for an inline image."""
+        eos = b"EI"
+        filter_val = d.get("F", None)
+        if filter_val is None:
+            return eos
+        if isinstance(filter_val, PSLiteral):
+            filter_val = [filter_val]
+        if filter_val[0] in LITERALS_ASCII85_DECODE:
+            eos = b"~>"
+        return eos
+
+    def _handle_inline_image(self, pos: int) -> None:
+        """Handle the ID keyword by parsing the inline image data."""
+        try:
+            (_, objs) = self.end_type("inline")
+            if len(objs) % 2 != 0:
+                error_msg = f"Invalid dictionary construct: {objs!r}"
+                raise PSTypeError(error_msg)
+            d = {literal_name(k): resolve1(v) for (k, v) in choplist(2, objs)}
+            eos = self._get_inline_image_eos(d)
+            (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
+            if eos != b"EI":  # it may be necessary for decoding
+                data += eos
+            obj = PDFStream(d, data)
+            self.push((pos, obj))
+            if eos == b"EI":  # otherwise it is still in the stream
+                self.push((pos, self.KEYWORD_EI))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
         if token is self.KEYWORD_BI:
             # inline image within a content stream
             self.start_type(pos, "inline")
         elif token is self.KEYWORD_ID:
-            try:
-                (_, objs) = self.end_type("inline")
-                if len(objs) % 2 != 0:
-                    error_msg = f"Invalid dictionary construct: {objs!r}"
-                    raise PSTypeError(error_msg)
-                d = {literal_name(k): resolve1(v) for (k, v) in choplist(2, objs)}
-                eos = b"EI"
-                filter = d.get("F", None)
-                if filter is not None:
-                    if isinstance(filter, PSLiteral):
-                        filter = [filter]
-                    if filter[0] in LITERALS_ASCII85_DECODE:
-                        eos = b"~>"
-                (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
-                if eos != b"EI":  # it may be necessary for decoding
-                    data += eos
-                obj = PDFStream(d, data)
-                self.push((pos, obj))
-                if eos == b"EI":  # otherwise it is still in the stream
-                    self.push((pos, self.KEYWORD_EI))
-            except PSTypeError:
-                if settings.STRICT:
-                    raise
+            self._handle_inline_image(pos)
         else:
             self.push((pos, token))
 
@@ -377,6 +380,34 @@ class PDFPageInterpreter:
     def dup(self) -> "PDFPageInterpreter":
         return self.__class__(self.rsrcmgr, self.device)
 
+    @staticmethod
+    def _resolve_colorspace(spec: object) -> PDFColorSpace | None:
+        """Resolve a colorspace spec to a PDFColorSpace instance."""
+        if isinstance(spec, list):
+            name = literal_name(spec[0])
+        else:
+            name = literal_name(spec)
+        if name == "ICCBased" and isinstance(spec, list) and len(spec) >= 2:
+            return PDFColorSpace(name, stream_value(spec[1])["N"])
+        if name == "DeviceN" and isinstance(spec, list) and len(spec) >= 2:
+            return PDFColorSpace(name, len(list_value(spec[1])))
+        return PREDEFINED_COLORSPACE.get(name)
+
+    def _load_font_resources(self, v: object) -> None:
+        for fontid, spec in dict_value(v).items():
+            objid = spec.objid if isinstance(spec, PDFObjRef) else None
+            self.fontmap[fontid] = self.rsrcmgr.get_font(objid, dict_value(spec))
+
+    def _load_colorspace_resources(self, v: object) -> None:
+        for csid, spec in dict_value(v).items():
+            colorspace = self._resolve_colorspace(resolve1(spec))
+            if colorspace is not None:
+                self.csmap[csid] = colorspace
+
+    def _load_xobject_resources(self, v: object) -> None:
+        for xobjid, xobjstrm in dict_value(v).items():
+            self.xobjmap[xobjid] = xobjstrm
+
     def init_resources(self, resources: dict[object, object]) -> None:
         """Prepare the fonts and XObjects listed in the Resource attribute."""
         self.resources = resources
@@ -385,38 +416,16 @@ class PDFPageInterpreter:
         self.csmap: dict[str, PDFColorSpace] = PREDEFINED_COLORSPACE.copy()
         if not resources:
             return
-
-        def get_colorspace(spec: object) -> PDFColorSpace | None:
-            if isinstance(spec, list):
-                name = literal_name(spec[0])
-            else:
-                name = literal_name(spec)
-            if name == "ICCBased" and isinstance(spec, list) and len(spec) >= 2:
-                return PDFColorSpace(name, stream_value(spec[1])["N"])
-            elif name == "DeviceN" and isinstance(spec, list) and len(spec) >= 2:
-                return PDFColorSpace(name, len(list_value(spec[1])))
-            else:
-                return PREDEFINED_COLORSPACE.get(name)
-
         for k, v in dict_value(resources).items():
             log.debug("Resource: %r: %r", k, v)
             if k == "Font":
-                for fontid, spec in dict_value(v).items():
-                    objid = None
-                    if isinstance(spec, PDFObjRef):
-                        objid = spec.objid
-                    spec = dict_value(spec)
-                    self.fontmap[fontid] = self.rsrcmgr.get_font(objid, spec)
+                self._load_font_resources(v)
             elif k == "ColorSpace":
-                for csid, spec in dict_value(v).items():
-                    colorspace = get_colorspace(resolve1(spec))
-                    if colorspace is not None:
-                        self.csmap[csid] = colorspace
+                self._load_colorspace_resources(v)
             elif k == "ProcSet":
                 self.rsrcmgr.get_procset(list_value(v))
             elif k == "XObject":
-                for xobjid, xobjstrm in dict_value(v).items():
-                    self.xobjmap[xobjid] = xobjstrm
+                self._load_xobject_resources(v)
 
     def init_state(self, ctm: Matrix) -> None:
         """Initialize the text and graphic states for rendering a page."""
@@ -459,10 +468,13 @@ class PDFPageInterpreter:
         """Save graphics state"""
         self.gstack.append(self.get_current_state())
 
-    def do_Q(self) -> None:
-        """Restore graphics state"""
+    def do_q_upper(self) -> None:
+        """Restore graphics state (PDF operator Q, uppercase)"""
         if self.gstack:
             self.set_current_state(self.gstack.pop())
+
+    # PDF operator dispatch alias – 'Q' maps to do_Q via getattr
+    do_Q = do_q_upper
 
     def do_cm(
         self,
@@ -494,17 +506,23 @@ class PDFPageInterpreter:
         else:
             self.graphicstate.linewidth = linewidth_f
 
-    def do_J(self, linecap: PDFStackT) -> None:
-        """Set line cap style"""
+    def do_j_upper(self, linecap: PDFStackT) -> None:
+        """Set line cap style (PDF operator J, uppercase)"""
         self.graphicstate.linecap = linecap
+
+    # PDF operator dispatch alias – 'J' maps to do_J via getattr
+    do_J = do_j_upper
 
     def do_j(self, linejoin: PDFStackT) -> None:
         """Set line join style"""
         self.graphicstate.linejoin = linejoin
 
-    def do_M(self, miterlimit: PDFStackT) -> None:
-        """Set miter limit"""
+    def do_m_upper(self, miterlimit: PDFStackT) -> None:
+        """Set miter limit (PDF operator M, uppercase)"""
         self.graphicstate.miterlimit = miterlimit
+
+    # PDF operator dispatch alias – 'M' maps to do_M via getattr
+    do_M = do_m_upper
 
     def do_d(self, dash: PDFStackT, phase: PDFStackT) -> None:
         """Set line dash pattern"""
@@ -634,10 +652,13 @@ class PDFPageInterpreter:
             self.curpath.append(("l", x_f, y_f + h_f))
             self.curpath.append(("h",))
 
-    def do_S(self) -> None:
-        """Stroke path"""
+    def do_s_upper(self) -> None:
+        """Stroke path (PDF operator S, uppercase)"""
         self.device.paint_path(self.graphicstate, True, False, False, self.curpath)
         self.curpath = []
+
+    # PDF operator dispatch alias – 'S' maps to do_S via getattr
+    do_S = do_s_upper
 
     def do_s(self) -> None:
         """Close and stroke path"""
@@ -649,23 +670,32 @@ class PDFPageInterpreter:
         self.device.paint_path(self.graphicstate, False, True, False, self.curpath)
         self.curpath = []
 
-    def do_F(self) -> None:
-        """Fill path using nonzero winding number rule (obsolete)"""
+    def do_f_upper(self) -> None:
+        """Fill path using nonzero winding number rule (obsolete, PDF operator F, uppercase)"""
+
+    # PDF operator dispatch alias – 'F' maps to do_F via getattr
+    do_F = do_f_upper
 
     def do_f_a(self) -> None:
         """Fill path using even-odd rule"""
         self.device.paint_path(self.graphicstate, False, True, True, self.curpath)
         self.curpath = []
 
-    def do_B(self) -> None:
-        """Fill and stroke path using nonzero winding number rule"""
+    def do_b_upper(self) -> None:
+        """Fill and stroke path using nonzero winding number rule (PDF operator B, uppercase)"""
         self.device.paint_path(self.graphicstate, True, True, False, self.curpath)
         self.curpath = []
 
-    def do_B_a(self) -> None:
-        """Fill and stroke path using even-odd rule"""
+    # PDF operator dispatch alias – 'B' maps to do_B via getattr
+    do_B = do_b_upper
+
+    def do_b_upper_a(self) -> None:
+        """Fill and stroke path using even-odd rule (PDF operator B*, uppercase)"""
         self.device.paint_path(self.graphicstate, True, True, True, self.curpath)
         self.curpath = []
+
+    # PDF operator dispatch alias – 'B*' maps to do_B_a via getattr
+    do_B_a = do_b_upper_a
 
     def do_b(self) -> None:
         """Close, fill, and stroke path using nonzero winding number rule"""
@@ -681,16 +711,20 @@ class PDFPageInterpreter:
         """End path without filling or stroking"""
         self.curpath = []
 
-    def do_W(self) -> None:
-        """Set clipping path using nonzero winding number rule"""
-        pass
+    def do_w_upper(self) -> None:
+        """Set clipping path using nonzero winding number rule (PDF operator W, uppercase)"""
 
-    def do_W_a(self) -> None:
-        """Set clipping path using even-odd rule"""
-        pass
+    # PDF operator dispatch alias – 'W' maps to do_W via getattr
+    do_W = do_w_upper
 
-    def do_CS(self, name: PDFStackT) -> None:
-        """Set color space for stroking operations
+    def do_w_upper_a(self) -> None:
+        """Set clipping path using even-odd rule (PDF operator W*, uppercase)"""
+
+    # PDF operator dispatch alias – 'W*' maps to do_W_a via getattr
+    do_W_a = do_w_upper_a
+
+    def do_cs_upper(self, name: PDFStackT) -> None:
+        """Set color space for stroking operations (PDF operator CS, uppercase).
 
         Introduced in PDF 1.1
         """
@@ -700,6 +734,9 @@ class PDFPageInterpreter:
             if settings.STRICT:
                 raise PDFInterpreterError("Undefined ColorSpace: %r" % name)
 
+    # PDF operator dispatch alias – 'CS' maps to do_CS via getattr
+    do_CS = do_cs_upper
+
     def do_cs(self, name: PDFStackT) -> None:
         """Set color space for nonstroking operations"""
         try:
@@ -708,8 +745,8 @@ class PDFPageInterpreter:
             if settings.STRICT:
                 raise PDFInterpreterError("Undefined ColorSpace: %r" % name)
 
-    def do_G(self, gray: PDFStackT) -> None:
-        """Set gray level for stroking operations"""
+    def do_g_upper(self, gray: PDFStackT) -> None:
+        """Set gray level for stroking operations (PDF operator G, uppercase)"""
         gray_f = safe_float(gray)
 
         if gray_f is None:
@@ -719,6 +756,9 @@ class PDFPageInterpreter:
         else:
             self.graphicstate.scolor = gray_f
             self.scs = self.csmap["DeviceGray"]
+
+    # PDF operator dispatch alias – 'G' maps to do_G via getattr
+    do_G = do_g_upper
 
     def do_g(self, gray: PDFStackT) -> None:
         """Set gray level for nonstroking operations"""
@@ -732,8 +772,8 @@ class PDFPageInterpreter:
             self.graphicstate.ncolor = gray_f
             self.ncs = self.csmap["DeviceGray"]
 
-    def do_RG(self, r: PDFStackT, g: PDFStackT, b: PDFStackT) -> None:
-        """Set RGB color for stroking operations"""
+    def do_rg_upper(self, r: PDFStackT, g: PDFStackT, b: PDFStackT) -> None:
+        """Set RGB color for stroking operations (PDF operator RG, uppercase)"""
         rgb = safe_rgb(r, g, b)
 
         if rgb is None:
@@ -743,6 +783,9 @@ class PDFPageInterpreter:
         else:
             self.graphicstate.scolor = rgb
             self.scs = self.csmap["DeviceRGB"]
+
+    # PDF operator dispatch alias – 'RG' maps to do_RG via getattr
+    do_RG = do_rg_upper
 
     def do_rg(self, r: PDFStackT, g: PDFStackT, b: PDFStackT) -> None:
         """Set RGB color for nonstroking operations"""
@@ -756,8 +799,8 @@ class PDFPageInterpreter:
             self.graphicstate.ncolor = rgb
             self.ncs = self.csmap["DeviceRGB"]
 
-    def do_K(self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT) -> None:
-        """Set CMYK color for stroking operations"""
+    def do_k_upper(self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT) -> None:
+        """Set CMYK color for stroking operations (PDF operator K, uppercase)"""
         cmyk = safe_cmyk(c, m, y, k)
 
         if cmyk is None:
@@ -767,6 +810,9 @@ class PDFPageInterpreter:
         else:
             self.graphicstate.scolor = cmyk
             self.scs = self.csmap["DeviceCMYK"]
+
+    # PDF operator dispatch alias – 'K' maps to do_K via getattr
+    do_K = do_k_upper
 
     def do_k(self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT) -> None:
         """Set CMYK color for nonstroking operations"""
@@ -780,100 +826,70 @@ class PDFPageInterpreter:
             self.graphicstate.ncolor = cmyk
             self.ncs = self.csmap["DeviceCMYK"]
 
-    def do_SCN(self) -> None:
-        """Set color for stroking operations."""
-        if self.scs:
-            n = self.scs.ncomponents
-        else:
-            if settings.STRICT:
-                raise PDFInterpreterError("No colorspace specified!")
-            n = 1
-
+    def _apply_color(self, n: int, is_stroke: bool, label: str) -> None:
+        """Apply a color value with n components to stroking or nonstroking state."""
         if n == 1:
             gray = self.pop(1)[0]
             gray_f = safe_float(gray)
             if gray_f is None:
-                log.warning(
-                    f"Cannot set gray stroke color because {gray!r} is an invalid float value"
-                )
-            else:
+                log.warning(f"Cannot set gray {label} color because {gray!r} is an invalid float value")
+            elif is_stroke:
                 self.graphicstate.scolor = gray_f
-
+            else:
+                self.graphicstate.ncolor = gray_f
         elif n == 3:
             values = self.pop(3)
             rgb = safe_rgb(*values)
             if rgb is None:
-                log.warning(
-                    f"Cannot set RGB stroke color because not all values in {values!r} can be parsed as floats"
-                )
-            else:
+                log.warning(f"Cannot set RGB {label} color because not all values in {values!r} can be parsed as floats")
+            elif is_stroke:
                 self.graphicstate.scolor = rgb
-
+            else:
+                self.graphicstate.ncolor = rgb
         elif n == 4:
             values = self.pop(4)
             cmyk = safe_cmyk(*values)
-
             if cmyk is None:
-                log.warning(
-                    f"Cannot set CMYK stroke color because not all values in {values!r} can be parsed as floats"
-                )
-            else:
+                log.warning(f"Cannot set CMYK {label} color because not all values in {values!r} can be parsed as floats")
+            elif is_stroke:
                 self.graphicstate.scolor = cmyk
-
+            else:
+                self.graphicstate.ncolor = cmyk
         else:
             log.warning(
-                f"Cannot set stroke color because {n} components are specified but only 1 (grayscale), 3 (rgb) and 4 (cmyk) are supported"
+                f"Cannot set {label} color because {n} components are specified "
+                "but only 1 (grayscale), 3 (rgb) and 4 (cmyk) are supported"
             )
+
+    def do_scn_upper(self) -> None:
+        """Set color for stroking operations (PDF operator SCN, uppercase)."""
+        if self.scs:
+            n = self.scs.ncomponents
+        elif settings.STRICT:
+            raise PDFInterpreterError("No colorspace specified!")
+        else:
+            n = 1
+        self._apply_color(n, is_stroke=True, label="stroke")
+
+    # PDF operator dispatch alias – 'SCN' maps to do_SCN via getattr
+    do_SCN = do_scn_upper
 
     def do_scn(self) -> None:
         """Set color for nonstroking operations"""
         if self.ncs:
             n = self.ncs.ncomponents
+        elif settings.STRICT:
+            raise PDFInterpreterError("No colorspace specified!")
         else:
-            if settings.STRICT:
-                raise PDFInterpreterError("No colorspace specified!")
             n = 1
+        self._apply_color(n, is_stroke=False, label="non-stroke")
 
-        if n == 1:
-            gray = self.pop(1)[0]
-            gray_f = safe_float(gray)
-            if gray_f is None:
-                log.warning(
-                    f"Cannot set gray non-stroke color because {gray!r} is an invalid float value"
-                )
-            else:
-                self.graphicstate.ncolor = gray_f
-
-        elif n == 3:
-            values = self.pop(3)
-            rgb = safe_rgb(*values)
-
-            if rgb is None:
-                log.warning(
-                    f"Cannot set RGB non-stroke color because not all values in {values!r} can be parsed as floats"
-                )
-            else:
-                self.graphicstate.ncolor = rgb
-
-        elif n == 4:
-            values = self.pop(4)
-            cmyk = safe_cmyk(*values)
-
-            if cmyk is None:
-                log.warning(
-                    f"Cannot set CMYK non-stroke color because not all values in {values!r} can be parsed as floats"
-                )
-            else:
-                self.graphicstate.ncolor = cmyk
-
-        else:
-            log.warning(
-                f"Cannot set non-stroke color because {n} components are specified but only 1 (grayscale), 3 (rgb) and 4 (cmyk) are supported"
-            )
-
-    def do_SC(self) -> None:
-        """Set color for stroking operations"""
+    def do_sc_upper(self) -> None:
+        """Set color for stroking operations (PDF operator SC, uppercase)"""
         self.do_SCN()
+
+    # PDF operator dispatch alias – 'SC' maps to do_SC via getattr
+    do_SC = do_sc_upper
 
     def do_sc(self) -> None:
         """Set color for nonstroking operations"""
@@ -1065,8 +1081,8 @@ class PDFPageInterpreter:
 
         self.textstate.linematrix = (0, 0)
 
-    def do_TD(self, tx: PDFStackT, ty: PDFStackT) -> None:
-        """Move to the start of the next line.
+    def do_td_upper(self, tx: PDFStackT, ty: PDFStackT) -> None:
+        """Move to the start of the next line (PDF operator TD, uppercase).
 
         offset from the start of the current line by (tx , ty). As a side effect, this
         operator sets the leading parameter in the text state.
@@ -1079,7 +1095,6 @@ class PDFPageInterpreter:
             e_new = tx_ * a + ty_ * c + e
             f_new = tx_ * b + ty_ * d + f
             self.textstate.matrix = (a, b, c, d, e_new, f_new)
-
         elif settings.STRICT:
             raise PDFValueError("Invalid offset ({tx}, {ty}) for TD")
 
@@ -1087,6 +1102,9 @@ class PDFPageInterpreter:
             self.textstate.leading = ty_
 
         self.textstate.linematrix = (0, 0)
+
+    # PDF operator dispatch alias – 'TD' maps to do_TD via getattr
+    do_TD = do_td_upper
 
     def do_Tm(
         self,
@@ -1122,8 +1140,8 @@ class PDFPageInterpreter:
         )
         self.textstate.linematrix = (0, 0)
 
-    def do_TJ(self, seq: PDFStackT) -> None:
-        """Show text, allowing individual glyph positioning"""
+    def do_tj_upper(self, seq: PDFStackT) -> None:
+        """Show text, allowing individual glyph positioning (PDF operator TJ, uppercase)"""
         if self.textstate.font is None:
             if settings.STRICT:
                 raise PDFInterpreterError("No font specified!")
@@ -1135,6 +1153,9 @@ class PDFPageInterpreter:
             self.ncs,
             self.graphicstate.copy(),
         )
+
+    # PDF operator dispatch alias – 'TJ' maps to do_TJ via getattr
+    do_TJ = do_tj_upper
 
     def do_Tj(self, s: PDFStackT) -> None:
         """Show text"""
@@ -1244,6 +1265,29 @@ class PDFPageInterpreter:
         self.init_state(ctm)
         self.execute(list_value(streams))
 
+    @staticmethod
+    def _operator_to_method_name(name: str) -> str:
+        """Convert a PDF operator name to the corresponding do_* method name."""
+        return "do_%s" % name.replace("*", "_a").replace('"', "_w").replace("'", "_q")
+
+    def _dispatch_operator(self, name: str) -> None:
+        """Dispatch a PDF operator to its handler method."""
+        method = self._operator_to_method_name(name)
+        if not hasattr(self, method):
+            if settings.STRICT:
+                raise PDFInterpreterError("Unknown operator: %r" % name)
+            return
+        func = getattr(self, method)
+        nargs = func.__code__.co_argcount - 1
+        if nargs:
+            args = self.pop(nargs)
+            log.debug("exec: %s %r", name, args)
+            if len(args) == nargs:
+                func(*args)
+        else:
+            log.debug("exec: %s", name)
+            func()
+
     def execute(self, streams: Sequence[object]) -> None:
         try:
             parser = PDFContentParser(streams)
@@ -1256,24 +1300,6 @@ class PDFPageInterpreter:
             except PSEOF:
                 break
             if isinstance(obj, PSKeyword):
-                name = keyword_name(obj)
-                method = "do_%s" % name.replace("*", "_a").replace('"', "_w").replace(
-                    "'",
-                    "_q",
-                )
-                if hasattr(self, method):
-                    func = getattr(self, method)
-                    nargs = func.__code__.co_argcount - 1
-                    if nargs:
-                        args = self.pop(nargs)
-                        log.debug("exec: %s %r", name, args)
-                        if len(args) == nargs:
-                            func(*args)
-                    else:
-                        log.debug("exec: %s", name)
-                        func()
-                elif settings.STRICT:
-                    error_msg = "Unknown operator: %r" % name
-                    raise PDFInterpreterError(error_msg)
+                self._dispatch_operator(keyword_name(obj))
             else:
                 self.push(obj)

@@ -17,6 +17,120 @@ class ResultMerger:
     def __init__(self, translation_config: TranslationConfig):
         self.config = translation_config
 
+    def _build_overlap_pages_list(
+        self,
+        sorted_results: dict,
+        split_points: list[SplitPoint] | None,
+    ) -> list[int]:
+        """Build the per-part overlap page counts for merge skipping."""
+        overlap_pages_list: list[int] = []
+        for part_idx in sorted_results:
+            if split_points is not None and part_idx < len(split_points):
+                overlap_pages_list.append(split_points[part_idx].overlap_pages)
+            else:
+                overlap_pages_list.append(0)
+        return overlap_pages_list
+
+    def _try_merge_mono(
+        self,
+        results: dict,
+        sorted_results: dict,
+        mono_file_name: str,
+        overlap_pages_list: list[int],
+    ) -> Path | None:
+        """Attempt to merge monolingual PDFs; returns path or None on failure."""
+        try:
+            if any(r.mono_pdf_path for r in results.values()) and not self.config.no_mono:
+                return self._merge_pdfs(
+                    [r.mono_pdf_path for r in sorted_results.values() if r.mono_pdf_path],
+                    mono_file_name,
+                    tag="merged_mono",
+                    overlap_pages_list=overlap_pages_list,
+                )
+        except Exception as e:
+            logger.error(f"Error merging monolingual PDFs: {e}")
+        return None
+
+    def _try_merge_dual(
+        self,
+        results: dict,
+        sorted_results: dict,
+        dual_file_name: str,
+        overlap_pages_list: list[int],
+    ) -> Path | None:
+        """Attempt to merge dual-language PDFs; returns path or None on failure."""
+        try:
+            if any(r.dual_pdf_path for r in results.values()) and not self.config.no_dual:
+                return self._merge_pdfs(
+                    [r.dual_pdf_path for r in sorted_results.values() if r.dual_pdf_path],
+                    dual_file_name,
+                    tag="merged_dual",
+                    overlap_pages_list=overlap_pages_list,
+                )
+        except Exception as e:
+            logger.error(f"Error merging dual-language PDFs: {e}")
+        return None
+
+    def _try_merge_no_watermark_pdfs(
+        self,
+        results: dict,
+        sorted_results: dict,
+        mono_file_name_no_watermark: str,
+        overlap_pages_list: list[int],
+    ) -> tuple[Path | None, Path | None]:
+        """Attempt to merge no-watermark PDFs; returns (mono_path, dual_path)."""
+        has_watermark_variants = any(
+            r.dual_pdf_path != r.no_watermark_dual_pdf_path
+            or r.mono_pdf_path != r.no_watermark_mono_pdf_path
+            for r in results.values()
+        )
+        if not has_watermark_variants:
+            return None, None
+
+        merged_no_watermark_mono_path = None
+        merged_no_watermark_dual_path = None
+
+        try:
+            if any(r.no_watermark_mono_pdf_path for r in results.values()) and not self.config.no_mono:
+                merged_no_watermark_mono_path = self._merge_pdfs(
+                    [r.no_watermark_mono_pdf_path for r in sorted_results.values() if r.no_watermark_mono_pdf_path],
+                    mono_file_name_no_watermark,
+                    tag="merged_no_watermark_mono",
+                    overlap_pages_list=overlap_pages_list,
+                )
+        except Exception as e:
+            logger.error(f"Error merging no-watermark PDFs: {e}")
+
+        try:
+            if any(r.no_watermark_dual_pdf_path for r in results.values()) and not self.config.no_dual:
+                merged_no_watermark_dual_path = self._merge_pdfs(
+                    [r.no_watermark_dual_pdf_path for r in sorted_results.values() if r.no_watermark_dual_pdf_path],
+                    "merged_no_watermark_dual.pdf",
+                    tag="merged_no_watermark_dual",
+                    overlap_pages_list=overlap_pages_list,
+                )
+        except Exception as e:
+            logger.error(f"Error merging no-watermark PDFs: {e}")
+
+        return merged_no_watermark_mono_path, merged_no_watermark_dual_path
+
+    def _save_auto_extracted_glossary(self, basename: str, debug_suffix: str) -> Path | None:
+        """Save the auto-extracted glossary if configured; returns the path or None."""
+        if not (
+            self.config.save_auto_extracted_glossary
+            and self.config.shared_context_cross_split_part.auto_extracted_glossary
+        ):
+            return None
+        auto_extracted_glossary_path = self.config.get_output_file_path(
+            f"{basename}{debug_suffix}.{self.config.lang_out}.glossary.csv"
+        )
+        with auto_extracted_glossary_path.open("w", encoding="utf-8") as f:
+            logger.info(f"save auto extracted glossary to {auto_extracted_glossary_path}")
+            f.write(
+                self.config.shared_context_cross_split_part.auto_extracted_glossary.to_csv()
+            )
+        return auto_extracted_glossary_path
+
     def merge_results(
         self,
         results: dict[int, TranslateResult | None],
@@ -33,130 +147,28 @@ class ResultMerger:
         dual_file_name = f"{basename}{debug_suffix}.{self.config.lang_out}.dual.pdf"
 
         debug_suffix += ".no_watermark"
-
         mono_file_name_no_watermark = (
             f"{basename}{debug_suffix}.{self.config.lang_out}.mono.pdf"
         )
-        dual_file_name_no_watermark = (
-            f"{basename}{debug_suffix}.{self.config.lang_out}.dual.pdf"
-        )
+
         results = {k: v for k, v in results.items() if v is not None}
-        # Sort results by part index
         sorted_results = dict(sorted(results.items()))
+        overlap_pages_list = self._build_overlap_pages_list(sorted_results, split_points)
 
-        # Build per-part overlap counts so the merger can skip context pages
-        # that were only included for translation continuity.
-        overlap_pages_list: list[int] = []
-        for part_idx in sorted_results:
-            if split_points is not None and part_idx < len(split_points):
-                overlap_pages_list.append(split_points[part_idx].overlap_pages)
-            else:
-                overlap_pages_list.append(0)
-
-        # Initialize paths for merged files
-        merged_mono_path = None
-        merged_dual_path = None
-        merged_no_watermark_mono_path = None
-        merged_no_watermark_dual_path = None
-        try:
-            # Merge monolingual PDFs if they exist
-            if (
-                any(r.mono_pdf_path for r in results.values())
-                and not self.config.no_mono
-            ):
-                merged_mono_path = self._merge_pdfs(
-                    [
-                        r.mono_pdf_path
-                        for r in sorted_results.values()
-                        if r.mono_pdf_path
-                    ],
-                    mono_file_name,
-                    tag="merged_mono",
-                    overlap_pages_list=overlap_pages_list,
-                )
-        except Exception as e:
-            logger.error(f"Error merging monolingual PDFs: {e}")
-            merged_mono_path = None
-
-        try:
-            # Merge dual-language PDFs if they exist
-            if (
-                any(r.dual_pdf_path for r in results.values())
-                and not self.config.no_dual
-            ):
-                merged_dual_path = self._merge_pdfs(
-                    [
-                        r.dual_pdf_path
-                        for r in sorted_results.values()
-                        if r.dual_pdf_path
-                    ],
-                    dual_file_name,
-                    tag="merged_dual",
-                    overlap_pages_list=overlap_pages_list,
-                )
-        except Exception as e:
-            logger.error(f"Error merging dual-language PDFs: {e}")
-            merged_dual_path = None
-
-        if any(
-            r.dual_pdf_path != r.no_watermark_dual_pdf_path
-            or r.mono_pdf_path != r.no_watermark_mono_pdf_path
-            for r in results.values()
-        ):
-            try:
-                # Merge no-watermark PDFs if they exist
-                if (
-                    any(r.no_watermark_mono_pdf_path for r in results.values())
-                    and not self.config.no_mono
-                ):
-                    merged_no_watermark_mono_path = self._merge_pdfs(
-                        [
-                            r.no_watermark_mono_pdf_path
-                            for r in sorted_results.values()
-                            if r.no_watermark_mono_pdf_path
-                        ],
-                        mono_file_name_no_watermark,
-                        tag="merged_no_watermark_mono",
-                        overlap_pages_list=overlap_pages_list,
-                    )
-            except Exception as e:
-                logger.error(f"Error merging no-watermark PDFs: {e}")
-                merged_no_watermark_mono_path = None
-
-            try:
-                if (
-                    any(r.no_watermark_dual_pdf_path for r in results.values())
-                    and not self.config.no_dual
-                ):
-                    merged_no_watermark_dual_path = self._merge_pdfs(
-                        [
-                            r.no_watermark_dual_pdf_path
-                            for r in sorted_results.values()
-                            if r.no_watermark_dual_pdf_path
-                        ],
-                        "merged_no_watermark_dual.pdf",
-                        tag="merged_no_watermark_dual",
-                        overlap_pages_list=overlap_pages_list,
-                    )
-            except Exception as e:
-                logger.error(f"Error merging no-watermark PDFs: {e}")
-                merged_no_watermark_dual_path = None
-
-        auto_extracted_glossary_path = None
-        if (
-            self.config.save_auto_extracted_glossary
-            and self.config.shared_context_cross_split_part.auto_extracted_glossary
-        ):
-            auto_extracted_glossary_path = self.config.get_output_file_path(
-                f"{basename}{debug_suffix}.{self.config.lang_out}.glossary.csv"
+        merged_mono_path = self._try_merge_mono(
+            results, sorted_results, mono_file_name, overlap_pages_list
+        )
+        merged_dual_path = self._try_merge_dual(
+            results, sorted_results, dual_file_name, overlap_pages_list
+        )
+        merged_no_watermark_mono_path, merged_no_watermark_dual_path = (
+            self._try_merge_no_watermark_pdfs(
+                results, sorted_results, mono_file_name_no_watermark, overlap_pages_list
             )
-            with auto_extracted_glossary_path.open("w", encoding="utf-8") as f:
-                logger.info(
-                    f"save auto extracted glossary to {auto_extracted_glossary_path}"
-                )
-                f.write(
-                    self.config.shared_context_cross_split_part.auto_extracted_glossary.to_csv()
-                )
+        )
+        auto_extracted_glossary_path = self._save_auto_extracted_glossary(
+            basename, debug_suffix
+        )
 
         # Create merged result
         merged_result = TranslateResult(
@@ -191,7 +203,7 @@ class ResultMerger:
         output_name: str,
         tag: str,
         overlap_pages_list: list[int] | None = None,
-    ) -> Path:
+    ) -> Path | None:
         """Merge multiple PDFs into one, skipping overlap context pages per chunk."""
         if not pdf_paths:
             return None

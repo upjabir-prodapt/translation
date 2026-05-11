@@ -82,7 +82,6 @@ def parse_pdf(pdf_path, page_ranges=None) -> il_version_1.Document:
         return il
     finally:
         translation_config.cleanup_temp_files()
-    return None
 
 
 class Line:
@@ -146,7 +145,7 @@ def extract_paragraph_line(
 ) -> dict[int, list[tuple[il_version_1.Box, str, bool]]]:
     il = parse_pdf(pdf_path)
     if il is None:
-        return None
+        return None  # type: ignore[return-value]
     line_boxes = {}
     for page in il.page:
         line_boxes[page.page_number] = convert_page_to_char_boxes(page)
@@ -350,6 +349,113 @@ def _cluster_by_axis(chars: list[tuple[il_version_1.Box, str, bool]], orientatio
     return final_lines
 
 
+Bbox = tuple[float, float, float, float]
+
+
+def _compute_bbox(chars: list) -> Bbox:
+    """Return (x0, y0, x1, y1) bounding box for a list of character tuples."""
+    return (
+        min(c[0].x for c in chars),
+        min(c[0].y for c in chars),
+        max(c[0].x2 for c in chars),
+        max(c[0].y2 for c in chars),
+    )
+
+
+def _check_containment_merge(
+    line1: Line,
+    line2: Line,
+    bbox1: Bbox,
+    bbox2: Bbox,
+    inter_area: float,
+    area1: float,
+    area2: float,
+    page_lines: list,
+    i: int,
+    j: int,
+    lines_to_skip: set,
+) -> tuple[bool, Line, Bbox]:
+    """Try to merge line1 and line2 by containment. Returns (merged, new_line1, new_bbox1)."""
+    if area2 > 0 and area1 >= area2 and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD:
+        # line2 (smaller) absorbed into line1
+        line1.chars.extend(line2.chars)
+        lines_to_skip.add(j)
+        new_bbox = (
+            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+        )
+        return True, line1, new_bbox
+    if area1 > 0 and area2 > area1 and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD:
+        # line1 (smaller) absorbed into line2
+        line2.chars.extend(line1.chars)
+        page_lines[i], page_lines[j] = page_lines[j], page_lines[i]
+        line1 = page_lines[i]
+        lines_to_skip.add(j)
+        new_bbox = (
+            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+        )
+        return True, line1, new_bbox
+    return False, line1, bbox1
+
+
+def _check_adjacency_merge(
+    line1: Line,
+    line2: Line,
+    bbox1: Bbox,
+    bbox2: Bbox,
+    lines_to_skip: set,
+    j: int,
+) -> tuple[bool, Bbox]:
+    """Try to merge line1 and line2 by adjacency. Returns (merged, new_bbox1)."""
+    orientation = "horizontal" if not line1.chars[0][2] else "vertical"
+    if orientation == "horizontal":
+        height1 = bbox1[3] - bbox1[1]
+        height2 = bbox2[3] - bbox2[1]
+        if height1 > 0 and height2 > 0:
+            v_overlap = max(0, min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]))
+            if (
+                v_overlap / height1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+                and v_overlap / height2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+            ):
+                h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
+                if h_gap >= 0:
+                    avg_char_width = np.mean(
+                        [c[0].x2 - c[0].x for c in (line1.chars + line2.chars) if c[0].x2 > c[0].x] or [0]
+                    )
+                    if avg_char_width > 0 and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                        line1.chars.extend(line2.chars)
+                        lines_to_skip.add(j)
+                        new_bbox = (
+                            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
+                            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+                        )
+                        return True, new_bbox
+    else:  # vertical
+        width1 = bbox1[2] - bbox1[0]
+        width2 = bbox2[2] - bbox2[0]
+        if width1 > 0 and width2 > 0:
+            h_overlap = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]))
+            if (
+                h_overlap / width1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+                and h_overlap / width2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+            ):
+                v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
+                if v_gap >= 0:
+                    avg_char_height = np.mean(
+                        [c[0].y2 - c[0].y for c in (line1.chars + line2.chars) if c[0].y2 > c[0].y] or [0]
+                    )
+                    if avg_char_height > 0 and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                        line1.chars.extend(line2.chars)
+                        lines_to_skip.add(j)
+                        new_bbox = (
+                            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
+                            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+                        )
+                        return True, new_bbox
+    return False, bbox1
+
+
 def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
     """
     Merge lines on a page that are either contained within or adjacent to each other.
@@ -359,7 +465,7 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
         return []
 
     merged_lines = []
-    lines_to_skip = set()
+    lines_to_skip: set[int] = set()
 
     for i in range(len(page_lines)):
         if i in lines_to_skip:
@@ -370,15 +476,8 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
             merged_lines.append(line1)
             continue
 
-        bbox1 = (
-            min(c[0].x for c in line1.chars),
-            min(c[0].y for c in line1.chars),
-            max(c[0].x2 for c in line1.chars),
-            max(c[0].y2 for c in line1.chars),
-        )
+        bbox1 = _compute_bbox(line1.chars)
 
-        # Optimization: Calculate a vertical gap threshold to prune the search space.
-        # Based on the vertical adjacency merge condition.
         line1_avg_char_height = np.mean(
             [c[0].y2 - c[0].y for c in line1.chars if c[0].y2 > c[0].y] or [0]
         )
@@ -393,179 +492,43 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
             if not line2.chars:
                 continue
 
-            bbox2 = (
-                min(c[0].x for c in line2.chars),
-                min(c[0].y for c in line2.chars),
-                max(c[0].x2 for c in line2.chars),
-                max(c[0].y2 for c in line2.chars),
-            )
+            bbox2 = _compute_bbox(line2.chars)
 
-            # Optimization: if line2 is too far below line1, no more merges with line1 are possible.
-            # The list is sorted top-to-bottom, so we can break early.
-            v_gap = bbox1[1] - bbox2[3]  # y_min_1 - y_max_2
+            v_gap = bbox1[1] - bbox2[3]
             if v_gap > max_v_gap:
                 break
 
-            # Check for "mostly contained" by checking intersection over area
             inter_x0 = max(bbox1[0], bbox2[0])
             inter_y0 = max(bbox1[1], bbox2[1])
             inter_x1 = min(bbox1[2], bbox2[2])
             inter_y1 = min(bbox1[3], bbox2[3])
-
             inter_area = max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
+            area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1]) if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1]) else 0
+            area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1]) if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1]) else 0
 
-            area1 = (
-                (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-                if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1])
-                else 0
+            did_merge, line1, bbox1 = _check_containment_merge(
+                line1, line2, bbox1, bbox2, inter_area, area1, area2, page_lines, i, j, lines_to_skip
             )
-            area2 = (
-                (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-                if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1])
-                else 0
-            )
-
-            # Heuristic for merging:
-            # 1. By containment: if one line is mostly inside another.
-            # 2. By adjacency: if two lines are close and aligned.
-            if (
-                area2 > 0
-                and area1 >= area2
-                and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD
-            ):
-                # Case 1: Merge line2 (smaller) into line1 (larger) by containment
-                # logger.debug(
-                #     f"Merging line '{line2.text}' into '{line1.text}' (mostly contained)"
-                # )
-                line1.chars.extend(line2.chars)
-                lines_to_skip.add(j)
+            if did_merge:
                 merged = True
-                bbox1 = (
-                    min(bbox1[0], bbox2[0]),
-                    min(bbox1[1], bbox2[1]),
-                    max(bbox1[2], bbox2[2]),
-                    max(bbox1[3], bbox2[3]),
-                )
+                continue
 
-            elif (
-                area1 > 0
-                and area2 > area1
-                and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD
-            ):
-                # Case 2: Merge line1 (smaller) into line2 (larger) by containment
-                # logger.debug(
-                #     f"Merging line '{line1.text}' into '{line2.text}' (mostly contained)"
-                # )
-                line2.chars.extend(line1.chars)
-                page_lines[i], page_lines[j] = page_lines[j], page_lines[i]
-                line1 = page_lines[i]
-                lines_to_skip.add(j)
+            did_adj, bbox1 = _check_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+            if did_adj:
                 merged = True
-                bbox1 = (
-                    min(bbox1[0], bbox2[0]),
-                    min(bbox1[1], bbox2[1]),
-                    max(bbox1[2], bbox2[2]),
-                    max(bbox1[3], bbox2[3]),
-                )
-
-            else:
-                # Case 3: Merge by adjacency for lines that are close to each other
-                orientation = "horizontal" if not line1.chars[0][2] else "vertical"
-                if orientation == "horizontal":
-                    height1 = bbox1[3] - bbox1[1]
-                    height2 = bbox2[3] - bbox2[1]
-                    if height1 > 0 and height2 > 0:
-                        v_overlap = max(
-                            0,
-                            min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]),
-                        )
-                        if (
-                            v_overlap / height1
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD and (
-                            v_overlap / height2
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD:
-                            h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
-                            if h_gap >= 0:
-                                avg_char_width = np.mean(
-                                    [
-                                        c[0].x2 - c[0].x
-                                        for c in (line1.chars + line2.chars)
-                                        if c[0].x2 > c[0].x
-                                    ]
-                                    or [0]
-                                )
-                                if (
-                                    avg_char_width > 0
-                                    and h_gap
-                                    < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
-                                ):
-                                    # logger.debug(
-                                    #     f"Merging adjacent lines '{line1.text}' and '{line2.text}'"
-                                    # )
-                                    line1.chars.extend(line2.chars)
-                                    lines_to_skip.add(j)
-                                    merged = True
-                                    bbox1 = (
-                                        min(bbox1[0], bbox2[0]),
-                                        min(bbox1[1], bbox2[1]),
-                                        max(bbox1[2], bbox2[2]),
-                                        max(bbox1[3], bbox2[3]),
-                                    )
-                else:  # Vertical
-                    width1 = bbox1[2] - bbox1[0]
-                    width2 = bbox2[2] - bbox2[0]
-                    if width1 > 0 and width2 > 0:
-                        h_overlap = max(
-                            0,
-                            min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]),
-                        )
-                        if (
-                            h_overlap / width1
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD and (
-                            h_overlap / width2
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD:
-                            v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
-                            if v_gap >= 0:
-                                avg_char_height = np.mean(
-                                    [
-                                        c[0].y2 - c[0].y
-                                        for c in (line1.chars + line2.chars)
-                                        if c[0].y2 > c[0].y
-                                    ]
-                                    or [0]
-                                )
-                                if (
-                                    avg_char_height > 0
-                                    and v_gap
-                                    < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
-                                ):
-                                    # logger.debug(
-                                    #     f"Merging adjacent vertical lines '{line1.text}' and '{line2.text}'"
-                                    # )
-                                    line1.chars.extend(line2.chars)
-                                    lines_to_skip.add(j)
-                                    merged = True
-                                    bbox1 = (
-                                        min(bbox1[0], bbox2[0]),
-                                        min(bbox1[1], bbox2[1]),
-                                        max(bbox1[2], bbox2[2]),
-                                        max(bbox1[3], bbox2[3]),
-                                    )
 
         if merged:
-            # Re-sort and recalculate text for the merged line
-            orientation = (
-                "horizontal" if not line1.chars[0][2] else "vertical"
-            )  # Guess orientation from first char
+            orientation = "horizontal" if not line1.chars[0][2] else "vertical"
             if orientation == "horizontal":
                 line1.chars.sort(key=lambda c: c[0].x)
-            else:  # vertical
+            else:
                 line1.chars.sort(key=lambda c: c[0].y)
             _recalculate_line_text_with_spacing(line1, orientation)
 
         merged_lines.append(line1)
 
     return merged_lines
+
 
 
 def process_page_chars_to_lines(

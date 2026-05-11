@@ -193,7 +193,6 @@ def get_paragraph_length_except(
                 f"Composition: {composition}. "
                 f"Paragraph: {paragraph}. ",
             )
-            continue
     return length
 
 
@@ -216,7 +215,6 @@ def get_paragraph_unicode(paragraph: PdfParagraph) -> str:
                 f"Composition: {composition}. "
                 f"Paragraph: {paragraph}. ",
             )
-            continue
     return get_char_unicode_string(chars)
 
 
@@ -337,7 +335,6 @@ def get_paragraph_max_height(paragraph: PdfParagraph) -> float:
                 f"Composition: {composition}. "
                 f"Paragraph: {paragraph}. ",
             )
-            continue
     return max_height
 
 

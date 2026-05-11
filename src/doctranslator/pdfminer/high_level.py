@@ -44,7 +44,6 @@ def extract_text_to_fp(
     strip_control: bool = False,
     debug: bool = False,
     disable_caching: bool = False,
-    **kwargs: Any,
 ) -> None:
     """Parses text from inf-file and writes to outfp file-like object.
 

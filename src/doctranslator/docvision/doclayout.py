@@ -150,15 +150,12 @@ class OnnxModel(DocLayoutModel):
         boxes[..., :4] = (boxes[..., :4] - [pad_x, pad_y, pad_x, pad_y]) / gain
         return boxes
 
-    def predict(self, image, imgsz=800, batch_size=16, **kwargs):
+    def predict(self, image):
         """
         Predict the layout of document pages.
 
         Args:
             image: A single image or a list of images of document pages.
-            imgsz: Resize the image to this size. Must be a multiple of the stride.
-            batch_size: Number of images to process in one batch.
-            **kwargs: Additional arguments.
 
         Returns:
             A list of YoloResult objects, one for each input image.
@@ -177,7 +174,6 @@ class OnnxModel(DocLayoutModel):
             batch_size_actual = len(batch_images)
 
             # Calculate target size based on the maximum height in the batch
-            max_height = max(img.shape[0] for img in batch_images)
             target_imgsz = 1024
 
             # Preprocess batch
@@ -225,7 +221,6 @@ class OnnxModel(DocLayoutModel):
         for page in pages:
             translate_config.raise_if_cancelled()
             with self.lock:
-                # pix = mupdf_doc[page.page_number].get_pixmap(dpi=72)
                 pix = get_no_rotation_img(mupdf_doc[page.page_number])
             image = np.frombuffer(pix.samples, np.uint8).reshape(
                 pix.height,

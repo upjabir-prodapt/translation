@@ -14,8 +14,7 @@ def is_cid_paragraph(paragraph: il_version_1.PdfParagraph):
         elif composition.pdf_same_style_characters:
             chars.extend(composition.pdf_same_style_characters.pdf_character)
         elif composition.pdf_same_style_unicode_characters:
-            continue
-        #     chars.extend(composition.pdf_same_style_unicode_characters.unicode)
+            pass
         elif composition.pdf_formula:
             chars.extend(composition.pdf_formula.pdf_character)
         elif composition.pdf_character:
@@ -52,6 +51,28 @@ def is_pure_numeric_paragraph(paragraph) -> bool:
     return bool(NUMERIC_PATTERN.match(text))
 
 
+def _composition_is_whitespace_only(composition) -> bool:
+    """Return True if a paragraph composition contains only whitespace characters.
+
+    Returns False if the composition type is unknown or contains non-whitespace.
+    Returns None if the composition is a formula (which is always allowed).
+    """
+    if composition.pdf_formula:
+        return True
+    if composition.pdf_character:
+        return composition.pdf_character.char_unicode.isspace()
+    if composition.pdf_line:
+        return all(char.char_unicode.isspace() for char in composition.pdf_line.pdf_character)
+    if composition.pdf_same_style_characters:
+        return all(
+            char.char_unicode.isspace()
+            for char in composition.pdf_same_style_characters.pdf_character
+        )
+    if composition.pdf_same_style_unicode_characters:
+        return composition.pdf_same_style_unicode_characters.unicode.isspace()
+    return False
+
+
 def is_placeholder_only_paragraph(paragraph: il_version_1.PdfParagraph) -> bool:
     """Check if a paragraph contains only placeholders and whitespace.
 
@@ -65,30 +86,7 @@ def is_placeholder_only_paragraph(paragraph: il_version_1.PdfParagraph) -> bool:
     if not paragraph or not paragraph.unicode:
         return False
 
-    for composition in paragraph.pdf_paragraph_composition:
-        if composition.pdf_formula:
-            # Formula composition is allowed
-            continue
-        elif composition.pdf_character:
-            # Check if single character is whitespace
-            if not composition.pdf_character.char_unicode.isspace():
-                return False
-        elif composition.pdf_line:
-            # Check if all characters in the line are whitespace
-            for char in composition.pdf_line.pdf_character:
-                if not char.char_unicode.isspace():
-                    return False
-        elif composition.pdf_same_style_characters:
-            # Check if all characters in the group are whitespace
-            for char in composition.pdf_same_style_characters.pdf_character:
-                if not char.char_unicode.isspace():
-                    return False
-        elif composition.pdf_same_style_unicode_characters:
-            # Check if the unicode content is only whitespace
-            if not composition.pdf_same_style_unicode_characters.unicode.isspace():
-                return False
-        else:
-            # Unknown composition type, conservatively return False
-            return False
-
-    return True
+    return all(
+        _composition_is_whitespace_only(composition)
+        for composition in paragraph.pdf_paragraph_composition
+    )

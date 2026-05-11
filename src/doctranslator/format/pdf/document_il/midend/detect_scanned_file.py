@@ -126,7 +126,7 @@ class DetectScannedFile:
             if self.translation_config.auto_enable_ocr_workaround:
                 logger.warning(
                     f"Detected {scanned} scanned pages, which is more than 80% of the total pages. "
-                    "Turning on OCR workaround.",
+                    f"Turning on OCR workaround.",
                 )
                 self.translation_config.shared_context_cross_split_part.auto_enabled_ocr_workaround = True
                 self.translation_config.ocr_workaround = True
@@ -137,7 +137,7 @@ class DetectScannedFile:
             else:
                 logger.warning(
                     f"Detected {scanned} scanned pages, which is more than 80% of the total pages. "
-                    "Please check the input PDF file.",
+                    f"Please check the input PDF file.",
                 )
                 raise ScannedPDFError("Scanned PDF detected.")
 

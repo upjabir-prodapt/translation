@@ -63,3 +63,4 @@ deployment/terraform/*.tfstate
 deployment/terraform/*.tfstate.backup
 deployment/terraform/.terraform/
 deployment/terraform/terraform.tfvars
+service_account.json
