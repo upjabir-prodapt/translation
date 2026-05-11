@@ -30,6 +30,10 @@ class TestAsyncHelpers:
         async def coro():
             return "ok"
         
+        c = coro()
         # In an active loop, ensure_sync_result should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Cannot get sync result"):
-            AsyncBridge.ensure_sync_result(coro())
+        try:
+            with pytest.raises(RuntimeError, match="Cannot get sync result"):
+                AsyncBridge.ensure_sync_result(c)
+        finally:
+            c.close()

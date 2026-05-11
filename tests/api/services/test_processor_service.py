@@ -298,11 +298,47 @@ class TestJobProcessorLanguageDetection:
 
 
 
-    @patch("src.api.services.processor_service.pymupdf.open")
-    def test_prepend_cover_page_failure(self, mock_open, processor):
-        mock_open.side_effect = Exception("pymupdf fail")
-        processor._prepend_cover_page(Path("none.pdf"), MagicMock())
-        # Should catch exception and log warning
+    def test_write_quality_report(self, processor, tmp_path):
+        mock_qual = MagicMock(spec=QualityJudgeResult)
+        mock_qual.to_dict.return_value = {"score": 0.9}
+        p = tmp_path / "report.json"
+        processor._write_quality_report(p, mock_qual)
+        assert p.exists()
+        assert "score" in p.read_text()
+
+    def test_build_cover_page_metadata(self, processor):
+        config = {
+            "job_id": "j1",
+            "lang_in": "en",
+            "lang_out": "fr",
+            "domain": "legal"
+        }
+        mock_qual = MagicMock(final_score=0.9, judge_model="m1")
+        res = processor._build_cover_page_metadata(config, mock_qual, attempt_index=1, selected_model="m1")
+        assert res.job_id == "j1"
+        assert res.source_language == "en"
+        assert res.target_language == "fr"
+        assert res.confidence_score == "0.90"
+
+    @patch.object(JobProcessor, "_execute_attempt", new_callable=AsyncMock)
+    @patch("src.api.services.processor_service.Path.mkdir")
+    async def test_translate_max_retries_reached(self, mock_mkdir, mock_exec, processor, mock_config):
+        # All attempts fail or have low quality
+        mock_qual = MagicMock(final_score=0.5, pass_fail=False)
+        mock_exec.return_value = ({"status": "fail"}, {"attempt_index": 1}, MagicMock(), mock_qual, {})
+        mock_config["max_model_attempts"] = 1
+        
+        with pytest.raises(Exception, match="Maximum model attempts reached"):
+            await processor.translate(mock_config)
+
+    def test_detect_page_languages(self, processor):
+        mock_page = MagicMock()
+        mock_page.get_text.return_value = [(0,0,0,0,"This is a long enough English text for detection.",0,0)]
+        # We need to mock langdetect or just assume it works
+        with patch("src.api.services.processor_service.detect", return_value="en"):
+            counts, total = processor._detect_page_languages(mock_page)
+            assert counts["en"] == 1
+            assert total > 0
 
 
 

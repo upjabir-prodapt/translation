@@ -1,6 +1,8 @@
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from src.loaders.services.warmup_service import WarmupService, WarmupResult
+from src.loaders.exceptions import WarmupError
 from pathlib import Path
 import asyncio
 
@@ -21,10 +23,17 @@ class TestWarmupService:
         assert res.success is True
         mock_sync.assert_called_once()
 
+    @patch.object(WarmupService, "_bulk_sync_phased", side_effect=Exception("Crash"))
+    async def test_warmup_all_failure(self, mock_sync, service):
+        with pytest.raises(WarmupError, match="Asset warmup failed"):
+            await service.warmup_all()
+
     async def test_warmup_models(self, service):
         with patch("src.loaders.services.warmup_service.get_or_download_model_async", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [Path("/m1"), Exception("m2 fail")]
             await service._warmup_models()
-            assert mock_get.call_count == 2 # DocLayout and Table Detection
+            assert service._download_stats["verified"] == 1
+            assert len(service._download_stats["failed"]) == 1
 
     @patch("src.loaders.services.warmup_service.get_font_metadata")
     @patch("src.loaders.services.warmup_service.get_cache_file_path")
@@ -58,13 +67,12 @@ class TestWarmupService:
 
     async def test_bulk_sync_phased_with_repo(self, service):
         mock_repo = AsyncMock()
-        prefix = "assets" # Default prefix
+        prefix = "assets"
         m1 = MagicMock(); m1.name = f"{prefix}/fonts/file1"
         m2 = MagicMock(); m2.name = f"{prefix}/cmaps/file2"
         mock_repo.list_assets.return_value = [m1, m2]
         service.storage_repo = mock_repo
         
-        # We need to mock settings too
         with patch("src.loaders.services.warmup_service.settings") as mock_settings:
             mock_settings.GCS_ASSETS_PREFIX = prefix
             mock_settings.WARMUP_SYNC_CONCURRENCY = 1
@@ -77,11 +85,11 @@ class TestWarmupService:
     async def test_bulk_sync_group_success(self, service):
         mock_blob = MagicMock()
         mock_blob.name = "assets/fonts/f1"
-        mock_blob.sha3_256 = "abc"
+        mock_blob.size = 100
         
         with patch("src.loaders.services.warmup_service.get_cache_file_path", return_value=Path("/tmp/f1")), \
-             patch("src.loaders.services.warmup_service.verify_or_delete", return_value=False), \
-             patch("src.loaders.services.warmup_service.download_async", new_callable=AsyncMock) as mock_down:
+             patch("src.loaders.services.warmup_service.get_file_size", return_value=50), \
+             patch("src.loaders.services.warmup_service.Path.exists", return_value=True):
             mock_repo = AsyncMock()
             res = await service._bulk_sync_group(
                 group_name="fonts",
@@ -93,4 +101,20 @@ class TestWarmupService:
             assert res == 1
             mock_repo.download_asset.assert_called_once()
 
+    async def test_download_blob_if_needed_error(self, service):
+        mock_repo = AsyncMock()
+        mock_repo.download_asset.side_effect = Exception("Download Error")
+        
+        with patch("src.loaders.services.warmup_service.get_cache_file_path", return_value=Path("/tmp/f2")), \
+             patch("src.loaders.services.warmup_service.Path.exists", return_value=False):
+            res = await service._download_blob_if_needed(
+                rel_path="p", blob=MagicMock(), repo=mock_repo, semaphore=asyncio.Semaphore(1)
+            )
+            assert res is False
+            assert "p" in service._download_stats["failed"]
 
+    async def test_warmup_tiktoken(self, service):
+        with patch("src.loaders.services.warmup_service.get_subdir_path"), \
+             patch.object(service, "_init_tiktoken") as mock_init:
+            await service._warmup_tiktoken()
+            mock_init.assert_called_once()
