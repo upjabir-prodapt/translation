@@ -46,7 +46,7 @@ class TestJobService:
         }
         await service.cancel_job("job1", JobCancelRequest(reason="test"))
         # It calls patch_translation_job
-        mock_bq.patch_translation_job.assert_called_once()
+        mock_bq.patch_translation_job.assert_awaited_once()
         args, kwargs = mock_bq.patch_translation_job.call_args
         assert args[0] == "job1"
         assert args[1]["status"] == "cancelled"
