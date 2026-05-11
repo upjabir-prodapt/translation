@@ -1,0 +1,65 @@
+# Logs
+web/logs
+web/*.log
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+web/lerna-debug.log*
+
+web/node_modules
+web/dist
+web/dist-ssr
+web/*.local
+
+memray*
+**/*.so
+*.pdf
+*.docx
+**/*.pyc
+.venv
+.idea
+*.egg-info
+.DS_Store
+.vscode
+__pycache__
+.ipynb_checkpoints/
+.ruff_cache
+yadt.toml
+examples/
+/make_gif.py
+/dist
+.cache
+.coverage
+.cursor/rules/_*.mdc
+/.cursor
+/xnotes
+/docs/workflow-rules.md
+doctranslator/format/txt
+/profile.svg
+assets/
+
+
+# Claude Code memory file
+CLAUDE.md
+/.claude
+doctranslator/format/playground
+temp.jpg
+AGENTS.md
+
+# Service account keys (NEVER commit these!)
+*-sa-key.json
+*-service-account.json
+doctranslator-dev-sa-key.json
+*.key.json
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# Terraform state files
+deployment/terraform/*.tfstate
+deployment/terraform/*.tfstate.backup
+deployment/terraform/.terraform/
+deployment/terraform/terraform.tfvars

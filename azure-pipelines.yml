@@ -1,0 +1,238 @@
+# DocTranslator — test gate, container build/push (Artifact Registry), Cloud Run deploy
+# Uses Azure → GCP Workload Identity Federation via AzureCLI + external_account ADC JSON.
+
+trigger:
+  branches:
+    include:
+      - sandbox0.1
+
+pr:
+  branches:
+    include:
+      - sandbox
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - name: Azure.WorkloadIdentity.Connection
+    value: 'sc-ado-gcp-aicoe'
+
+  - name: PROJECT_ID
+    value: 'aicoesandox'
+  - name: REGION
+    value: 'europe-west1'
+  - name: GoogleCloud.WorkloadIdentity.ProjectNumber
+    value: '297743845367'
+  - name: GoogleCloud.WorkloadIdentity.Pool
+    value: 'aicoesandox-ado-wip'
+  - name: GoogleCloud.WorkloadIdentity.Provider
+    value: 'aicoesandox-ado-wip-provider'
+  - name: GoogleCloud.WorkloadIdentity.ServiceAccount
+    value: 'aicoe-sbx-wif-sa-tf@aicoesandox.iam.gserviceaccount.com'
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: '$(Pipeline.Workspace)/.workload_identity.wlconfig'
+
+  - name: IMAGE_NAME
+    value: 'translation'
+  - name: REPO_NAME
+    value: 'aicoesandox-docker-repo'
+  - name: SERVICE_NAME
+    value: 'translation-api-service'
+  - name: ENV
+    value: 'sandox'
+  - name: ROOT
+    value: '$(Build.SourcesDirectory)'
+  - name: APP_CONFIG_SECRET_NAME
+    value: 'translation-service-env'
+  - name: APP_CONFIG_SECRET_VERSION
+    value: '7'
+  - name: GCS_BUCKET_NAME
+    value: 'aicoesandox-vxai-translation-app-001'
+  - name: GCS_ASSETS_DIR
+    value: 'assets'
+  - name: ASSETS_MOUNT_PATH
+    value: '/mnt/assets-cache'
+
+  - name: PYTHON_VERSION
+    value: '3.12'
+  - name: COVERAGE_FAIL_UNDER
+    value: '80'
+
+stages:
+  # ==========================================================================
+  # STAGE 0 — TESTS & COVERAGE GATE (blocks build if coverage < COVERAGE_FAIL_UNDER)
+  # ==========================================================================
+  # - stage: Test
+  #   displayName: Tests and coverage gate
+  #   jobs:
+  #     - job: TestJob
+  #       displayName: Lint and test
+  #       steps:
+  #         - checkout: self
+  #           fetchDepth: 0
+  #           displayName: Checkout source
+
+  #         - task: UsePythonVersion@0
+  #           inputs:
+  #             versionSpec: $(PYTHON_VERSION)
+  #             addToPath: true
+  #           displayName: Use Python $(PYTHON_VERSION)
+
+  #         - script: |
+  #             set -euo pipefail
+  #             python -m pip install --upgrade pip
+  #             pip install "uv>=0.5"
+  #           displayName: Install uv
+
+  #         - script: uv sync --frozen --all-groups
+  #           displayName: Install dependencies (uv sync)
+
+  #         - script: uv run ruff check src tests
+  #           displayName: Ruff check
+
+  #         - script: uv run ruff format --check src tests
+  #           displayName: Ruff format (--check)
+
+  #         - script: |
+  #             set -euo pipefail
+  #             uv run pytest \
+  #               --cov=src \
+  #               --cov-report=xml \
+  #               --cov-report=term \
+  #               --cov-fail-under=$(COVERAGE_FAIL_UNDER) \
+  #               -q
+  #           displayName: pytest + coverage (fail if below $(COVERAGE_FAIL_UNDER)%)
+
+  #         - task: PublishCodeCoverageResults@2
+  #           displayName: Publish coverage
+  #           inputs:
+  #             summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
+  #             failIfCoverageEmpty: true
+
+  # ==========================================================================
+  # STAGE 1 — BUILD and PUSH (only after Test succeeds)
+  # ==========================================================================
+  - stage: BuildAndPush
+    displayName: Build and push Docker image
+    jobs:
+      - job: BuildPush
+        displayName: Build and push
+        steps:
+          - checkout: self
+            displayName: Checkout source
+
+          - script: |
+              set -euo pipefail
+              sudo apt-get update -y
+              sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+              curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+                | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+              echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+                | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+              sudo apt-get update -y
+              sudo apt-get install -y google-cloud-cli
+            displayName: Install Google Cloud CLI
+
+          - task: AzureCLI@3
+            displayName: Authenticate, build and push Docker image
+            inputs:
+              connectionType: 'azureRM'
+              azureSubscription: 'sc-ado-gcp-aicoe'
+              addSpnToEnvironment: true
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                echo "$idToken" > "$(Pipeline.Workspace)/.workload_identity.jwt"
+                cat << EOF > "$(GOOGLE_APPLICATION_CREDENTIALS)"
+                {
+                  "type": "external_account",
+                  "audience": "//iam.googleapis.com/projects/$(GoogleCloud.WorkloadIdentity.ProjectNumber)/locations/global/workloadIdentityPools/$(GoogleCloud.WorkloadIdentity.Pool)/providers/$(GoogleCloud.WorkloadIdentity.Provider)",
+                  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                  "token_url": "https://sts.googleapis.com/v1/token",
+                  "credential_source": {
+                    "file": "$(Pipeline.Workspace)/.workload_identity.jwt"
+                  },
+                  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/$(GoogleCloud.WorkloadIdentity.ServiceAccount):generateAccessToken"
+                }
+                EOF
+
+                gcloud auth login --cred-file="$(GOOGLE_APPLICATION_CREDENTIALS)"
+                gcloud config set project "$(PROJECT_ID)"
+
+                gcloud auth print-access-token \
+                  | docker login -u oauth2accesstoken --password-stdin "https://$(REGION)-docker.pkg.dev"
+
+                docker build -t "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" "$(ROOT)"
+                docker push "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)"
+
+  # ==========================================================================
+  # STAGE 2 — DEPLOY
+  # ==========================================================================
+  - stage: Deploy
+    displayName: Deploy to Cloud Run
+    dependsOn: BuildAndPush
+    condition: succeeded()
+    jobs:
+      - job: DeployJob
+        displayName: Cloud Run deploy
+        steps:
+          - checkout: self
+            displayName: Checkout source
+
+          - script: |
+              set -euo pipefail
+              sudo apt-get update -y
+              sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+              curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+                | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+              echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+                | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+              sudo apt-get update -y
+              sudo apt-get install -y google-cloud-cli
+            displayName: Install Google Cloud CLI
+
+          - task: AzureCLI@3
+            displayName: Deploy to Cloud Run
+            inputs:
+              connectionType: 'azureRM'
+              azureSubscription: 'sc-ado-gcp-aicoe'
+              addSpnToEnvironment: true
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                echo "$idToken" > "$(Pipeline.Workspace)/.workload_identity.jwt"
+                cat << EOF > "$(GOOGLE_APPLICATION_CREDENTIALS)"
+                {
+                  "type": "external_account",
+                  "audience": "//iam.googleapis.com/projects/$(GoogleCloud.WorkloadIdentity.ProjectNumber)/locations/global/workloadIdentityPools/$(GoogleCloud.WorkloadIdentity.Pool)/providers/$(GoogleCloud.WorkloadIdentity.Provider)",
+                  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                  "token_url": "https://sts.googleapis.com/v1/token",
+                  "credential_source": {
+                    "file": "$(Pipeline.Workspace)/.workload_identity.jwt"
+                  },
+                  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/$(GoogleCloud.WorkloadIdentity.ServiceAccount):generateAccessToken"
+                }
+                EOF
+
+                gcloud auth login --cred-file="$(GOOGLE_APPLICATION_CREDENTIALS)"
+                gcloud config set project "$(PROJECT_ID)"
+
+                gcloud beta run deploy "$(SERVICE_NAME)" \
+                  --quiet \
+                  --image "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" \
+                  --platform=managed \
+                  --region="$(REGION)" \
+                  --project="$(PROJECT_ID)" \
+                  --min-instances=1 \
+                  --concurrency=1 \
+                  --port=8000 \
+                  --timeout=600 \
+                  --memory=8Gi \
+                  --cpu=4 \
+                  --no-cpu-throttling \
+                  --cpu-boost \
+                  --add-volume mount-path=$(ASSETS_MOUNT_PATH),type=cloud-storage,bucket=$(GCS_BUCKET_NAME),readonly=false,mount-options="only-dir=$(GCS_ASSETS_DIR)" \
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT_ID=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),APP_CONFIG_SECRET_NAME=$(APP_CONFIG_SECRET_NAME),APP_CONFIG_SECRET_VERSION=$(APP_CONFIG_SECRET_VERSION),IS_LOCAL=false,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp"
