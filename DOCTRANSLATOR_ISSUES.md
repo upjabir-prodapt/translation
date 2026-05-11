@@ -85,7 +85,8 @@
 | MAJOR | 399 | Rename this variable; it shadows a builtin. | CODE_SMELL |
 | MAJOR | 439 | Rename this variable; it shadows a builtin. | CODE_SMELL |
 | MAJOR | 461 | Remove the unused function parameter "attrs". | CODE_SMELL |
-| MAJOR | 468 | Rename this variable; it shadows a builtin. | CODE_SMELL |
+| MAJOR | 468 | Rename this variable; it shadows a builtin
+. | CODE_SMELL |
 | MAJOR | 533 | Rename this variable; it shadows a builtin. | CODE_SMELL |
 | CRITICAL | 539 | Use secure mode and padding scheme. | VULNERABILITY |
 | MAJOR | 568 | Rename this variable; it shadows a builtin. | CODE_SMELL |

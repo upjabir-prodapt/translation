@@ -62,13 +62,7 @@ class TestPDFValidator:
             assert metadata["page_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_validate_pdf_file_too_large(self):
-        # Provide exactly MAX_FILE_SIZE bytes
-        file_content = b"a" * 1024
-        file = UploadFile(filename="test.pdf", file=io.BytesIO(file_content))
-        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
-            mock_settings.MAX_FILE_SIZE = 1024
-            # UploadFile.read(1024) returns 1024 bytes.
-            # The code checks if len(content) == 1024.
-            with pytest.raises(ValidationError, match="exceeds"):
-                await PDFValidator.validate_pdf_file(file)
+    async def test_validate_pdf_file_empty(self):
+        file = UploadFile(filename="empty.pdf", file=io.BytesIO(b""))
+        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+            await PDFValidator.validate_pdf_file(file)

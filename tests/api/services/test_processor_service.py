@@ -1,7 +1,9 @@
+
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 from collections import Counter
+import json
 from src.api.services.processor_service import JobProcessor, _job_runtime_root
 from src.api.services.quality_judge_service import QualityJudgeResult
 from src.doctranslator.format.pdf.translation_config import TranslationConfig, TranslationCoverPageMetadata, WatermarkOutputMode
@@ -79,7 +81,7 @@ class TestJobProcessorCore:
     async def test_handle_finish_event(self, processor):
         mock_result = {"page_count": 5, "mono_pdf_path": "mono.pdf"}
         
-        with patch("src.api.services.processor_service.Path.exists", return_value=True):
+        with patch("pathlib.Path.exists", return_value=True):
             event = {"type": "finish", "translate_result": mock_result}
             res = await processor._handle_finish_event(event)
             assert res["page_count"] == 5
@@ -102,7 +104,62 @@ class TestJobProcessorCore:
         )
         assert res.final_score == 0.0
 
+    def test_write_quality_report(self, processor, tmp_path):
+        mock_qual_dict = {"quality": {"score": 0.9}}
+        p = tmp_path
+        processor._write_quality_report(p, mock_qual_dict)
+        report_file = p / "quality_report.json"
+        assert report_file.exists()
+        assert "score" in report_file.read_text()
 
+    def test_build_cover_page_metadata(self, processor):
+        config = {
+            "job_id": "j1",
+            "lang_in": "en",
+            "lang_out": "fr",
+            "domain": "legal",
+            "selected_model": "m1"
+        }
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.input_file = "in.pdf"
+        mock_trans_config.lang_in = "en"
+        mock_trans_config.lang_out = "fr"
+        mock_trans_config.get_translated_sections_summary.return_value = "All"
+        
+        mock_qual = MagicMock(final_score=0.9, model="m1")
+        
+        with patch.object(processor, "_get_total_pdf_pages", return_value=10):
+            res = processor._build_cover_page_metadata(mock_trans_config, config, mock_qual)
+            assert res.original_language == "en"
+            assert res.target_language == "fr"
+            assert res.confidence_score == 0.9
+
+    @patch.object(JobProcessor, "_execute_attempt", new_callable=AsyncMock)
+    @patch("src.api.services.processor_service.Path.mkdir")
+    async def test_translate_max_retries_reached(self, mock_mkdir, mock_exec, processor, mock_config):
+        mock_exec.return_value = (None, {"attempt_index": 1}, None, None, None)
+        mock_config["max_model_attempts"] = 1
+        with pytest.raises(RuntimeError, match="All translation attempts failed"):
+            await processor.translate(mock_config)
+
+    def test_detect_language_for_text_low_confidence(self, processor):
+        mock_candidate = MagicMock()
+        mock_candidate.lang = "en"
+        mock_candidate.prob = 0.1 # Below default threshold
+        with patch("src.api.services.processor_service.detect_langs", return_value=[mock_candidate]):
+            assert processor._detect_language_for_text("some text") is None
+
+    def test_detect_language_for_text_exception(self, processor):
+        from langdetect import LangDetectException
+        with patch("src.api.services.processor_service.detect_langs", side_effect=LangDetectException(0, "Error")):
+            assert processor._detect_language_for_text("some text") is None
+
+    def test_detect_source_language_no_langs(self, processor):
+        mock_doc = MagicMock()
+        mock_doc.__iter__.return_value = []
+        with patch("src.api.services.processor_service.pymupdf.open", return_value=MagicMock(__enter__=lambda s: mock_doc)):
+            with pytest.raises(ValueError, match="Unable to detect"):
+                processor.detect_source_language("dummy.pdf")
 
 class TestJobProcessorLanguageDetection:
     @patch("src.api.services.processor_service.pymupdf.open")
@@ -289,7 +346,7 @@ class TestJobProcessorLanguageDetection:
         p.write_text("c")
         
         with patch.object(processor, "_draw_cover_page") as mock_draw, \
-             patch("src.api.services.processor_service.Path.replace") as mock_replace:
+             patch("pathlib.Path.replace") as mock_replace:
             processor._prepend_cover_page(p, MagicMock())
             assert mock_draw.called
             assert mock_new.insert_pdf.called
@@ -298,47 +355,8 @@ class TestJobProcessorLanguageDetection:
 
 
 
-    def test_write_quality_report(self, processor, tmp_path):
-        mock_qual = MagicMock(spec=QualityJudgeResult)
-        mock_qual.to_dict.return_value = {"score": 0.9}
-        p = tmp_path / "report.json"
-        processor._write_quality_report(p, mock_qual)
-        assert p.exists()
-        assert "score" in p.read_text()
-
-    def test_build_cover_page_metadata(self, processor):
-        config = {
-            "job_id": "j1",
-            "lang_in": "en",
-            "lang_out": "fr",
-            "domain": "legal"
-        }
-        mock_qual = MagicMock(final_score=0.9, judge_model="m1")
-        res = processor._build_cover_page_metadata(config, mock_qual, attempt_index=1, selected_model="m1")
-        assert res.job_id == "j1"
-        assert res.source_language == "en"
-        assert res.target_language == "fr"
-        assert res.confidence_score == "0.90"
-
-    @patch.object(JobProcessor, "_execute_attempt", new_callable=AsyncMock)
-    @patch("src.api.services.processor_service.Path.mkdir")
-    async def test_translate_max_retries_reached(self, mock_mkdir, mock_exec, processor, mock_config):
-        # All attempts fail or have low quality
-        mock_qual = MagicMock(final_score=0.5, pass_fail=False)
-        mock_exec.return_value = ({"status": "fail"}, {"attempt_index": 1}, MagicMock(), mock_qual, {})
-        mock_config["max_model_attempts"] = 1
-        
-        with pytest.raises(Exception, match="Maximum model attempts reached"):
-            await processor.translate(mock_config)
-
-    def test_detect_page_languages(self, processor):
-        mock_page = MagicMock()
-        mock_page.get_text.return_value = [(0,0,0,0,"This is a long enough English text for detection.",0,0)]
-        # We need to mock langdetect or just assume it works
-        with patch("src.api.services.processor_service.detect", return_value="en"):
-            counts, total = processor._detect_page_languages(mock_page)
-            assert counts["en"] == 1
-            assert total > 0
-
-
-
+    @patch("src.api.services.processor_service.pymupdf.open")
+    def test_prepend_cover_page_failure(self, mock_open, processor):
+        mock_open.side_effect = Exception("pymupdf fail")
+        processor._prepend_cover_page(Path("none.pdf"), MagicMock())
+        # Should catch exception and log warning

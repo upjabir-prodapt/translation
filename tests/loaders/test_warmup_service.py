@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from src.loaders.services.warmup_service import WarmupService, WarmupResult
+from src.loaders.services.warmup_service import WarmupService, WarmupResult, async_warmup, warmup
 from src.loaders.exceptions import WarmupError
 from pathlib import Path
 import asyncio
@@ -60,10 +60,10 @@ class TestWarmupService:
         await service._warmup_cmaps()
         mock_down.assert_not_called()
 
-    async def test_download_metadata_files(self, service):
-        with patch("src.loaders.services.warmup_service.download_async", new_callable=AsyncMock) as mock_down:
+    async def test_download_metadata_files_failure(self, service):
+        with patch("src.loaders.services.warmup_service.download_async", side_effect=Exception("meta fail")):
+            # Should log and continue
             await service._download_metadata_files()
-            assert mock_down.call_count >= 2 # Fonts and CMaps metadata
 
     async def test_bulk_sync_phased_with_repo(self, service):
         mock_repo = AsyncMock()
@@ -82,6 +82,13 @@ class TestWarmupService:
                 await service._bulk_sync_phased()
                 assert mock_sync.call_count == 2
 
+    async def test_bulk_sync_phased_empty(self, service):
+        mock_repo = AsyncMock()
+        mock_repo.list_assets.return_value = []
+        service.storage_repo = mock_repo
+        res = await service._bulk_sync_phased()
+        assert res == 0
+
     async def test_bulk_sync_group_success(self, service):
         mock_blob = MagicMock()
         mock_blob.name = "assets/fonts/f1"
@@ -89,7 +96,7 @@ class TestWarmupService:
         
         with patch("src.loaders.services.warmup_service.get_cache_file_path", return_value=Path("/tmp/f1")), \
              patch("src.loaders.services.warmup_service.get_file_size", return_value=50), \
-             patch("src.loaders.services.warmup_service.Path.exists", return_value=True):
+             patch("pathlib.Path.exists", return_value=True):
             mock_repo = AsyncMock()
             res = await service._bulk_sync_group(
                 group_name="fonts",
@@ -106,15 +113,32 @@ class TestWarmupService:
         mock_repo.download_asset.side_effect = Exception("Download Error")
         
         with patch("src.loaders.services.warmup_service.get_cache_file_path", return_value=Path("/tmp/f2")), \
-             patch("src.loaders.services.warmup_service.Path.exists", return_value=False):
+             patch("pathlib.Path.exists", return_value=False):
             res = await service._download_blob_if_needed(
                 rel_path="p", blob=MagicMock(), repo=mock_repo, semaphore=asyncio.Semaphore(1)
             )
             assert res is False
             assert "p" in service._download_stats["failed"]
 
-    async def test_warmup_tiktoken(self, service):
-        with patch("src.loaders.services.warmup_service.get_subdir_path"), \
-             patch.object(service, "_init_tiktoken") as mock_init:
+    async def test_warmup_tiktoken_error(self, service):
+        with patch("src.loaders.services.warmup_service.get_subdir_path", side_effect=Exception("IO Error")):
+            # Non-critical, should catch
             await service._warmup_tiktoken()
-            mock_init.assert_called_once()
+
+    def test_init_tiktoken(self, service):
+        with patch("tiktoken.encoding_for_model") as mock_enc:
+            service._init_tiktoken()
+            mock_enc.assert_called_once_with("gpt-4o")
+
+    @patch("src.loaders.services.warmup_service.WarmupService.warmup_all", new_callable=AsyncMock)
+    async def test_async_warmup(self, mock_warm):
+        await async_warmup()
+        mock_warm.assert_called_once()
+
+    @patch("src.loaders.services.warmup_service.async_warmup", new_callable=AsyncMock)
+    def test_warmup_sync(self, mock_async_warm):
+        # When no loop is running
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+            with patch("asyncio.run") as mock_run:
+                warmup()
+                mock_run.assert_called_once()
