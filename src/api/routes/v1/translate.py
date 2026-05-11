@@ -69,4 +69,14 @@ async def submit_translation(
     return await handler.submit_translation(request)
 
 
+@router.get("/translate/{job_id}", response_model=JobDetailResponse, tags=["translation"])
+async def get_translation_status(
+    job_id: str,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user_context)] = None,  # noqa: B008
+    handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
+):
+    """Get the status of a translation job."""
+    return await handler.get_translation_status(job_id)
+
+
 

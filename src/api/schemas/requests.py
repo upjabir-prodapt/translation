@@ -82,6 +82,10 @@ class TranslationConfigInput(BaseModel):
         """Validate and normalize domain."""
         normalized = v.strip().lower()
 
+        # Handle legacy alias
+        if normalized == "oprations":
+            normalized = "operations"
+
         if normalized not in cls.VALID_DOMAINS:
             raise ValueError(
                 f"Invalid domain. Allowed: {', '.join(sorted(cls.VALID_DOMAINS))}"

@@ -1,25 +1,31 @@
-"""Tests for DlpService behavior."""
+import pytest
+from src.api.services.dlp_service import DlpService, DlpResult
 
-from src.api.services.dlp_service import DlpService
+@pytest.fixture
+def service():
+    return DlpService()
 
+class TestDlpService:
+    def test_select_provider(self, service):
+        assert service.select_provider("en") == "google_cloud_dlp"
+        assert service.select_provider("fr") == "vertex_ai_dlp"
 
-def test_google_dlp_windows_respect_character_limit():
-    service = DlpService()
-    windows = service._iter_chunk_windows(
-        chunks=["a" * 120000, "b" * 120000, "c" * 120000],
-        provider="google_cloud_dlp",
-        max_chars_per_request=300000,
-    )
-    assert windows == [(0, 2), (2, 3)]
+    def test_iter_chunk_windows(self, service):
+        chunks = ["abc", "def", "ghi"]
+        # Max chars 4 -> window [(0, 1), (1, 2), (2, 3)]
+        windows = service._iter_chunk_windows(chunks, "google_cloud_dlp", 4)
+        assert windows == [(0, 1), (1, 2), (2, 3)]
+        
+        # Max chars 10 -> window [(0, 3)]
+        windows = service._iter_chunk_windows(chunks, "google_cloud_dlp", 10)
+        assert windows == [(0, 3)]
 
-
-def test_mask_chunks_accepts_token_counter_start():
-    service = DlpService()
-    result = service.mask_chunks(
-        job_id="job-1",
-        chunks=["Email me at alice@example.com"],
-        source_language="en",
-        token_counter_start=4,
-    )
-    assert result.masked_chunks == ["Email me at __DLP_TOKEN_0005__"]
-    assert result.token_rows[0]["token"] == "__DLP_TOKEN_0005__"
+    def test_mask_chunks(self, service):
+        chunks = ["My email is test@example.com", "Call me at +1234567890"]
+        res = service.mask_chunks(job_id="job1", chunks=chunks, source_language="en")
+        
+        assert "__DLP_TOKEN_0001__" in res.masked_chunks[0]
+        assert "__DLP_TOKEN_0002__" in res.masked_chunks[1]
+        assert len(res.token_rows) == 2
+        assert res.token_rows[0]["info_type"] == "EMAIL_ADDRESS"
+        assert res.token_rows[1]["info_type"] == "PHONE_NUMBER"

@@ -1,0 +1,1 @@
+{"component":{"key":"Translation","name":"Translation Project","qualifier":"TRK","measures":[{"metric":"bugs","value":"0","bestValue":true},{"metric":"coverage","value":"18.0","bestValue":false},{"metric":"duplicated_lines_density","value":"0.0","bestValue":true},{"metric":"vulnerabilities","value":"0","bestValue":true},{"metric":"code_smells","value":"0","bestValue":true}]}}

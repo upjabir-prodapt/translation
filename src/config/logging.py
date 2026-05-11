@@ -25,8 +25,9 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
+        message = record.getMessage().replace("\n", " ").replace("\r", " ")
         logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
+            level, message
         )
 
 

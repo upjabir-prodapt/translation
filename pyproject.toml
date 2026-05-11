@@ -159,13 +159,11 @@ addopts = "--import-mode=importlib"
 source = ["src"]
 omit = [
     "src/doctranslator/*",
-    "src/loaders/*",
 ]
 
 [tool.coverage.report]
 omit = [
     "src/doctranslator/*",
-    "src/loaders/*",
 ]
 exclude_lines = [
     "pragma: no cover",

@@ -36,7 +36,7 @@ def _jwt_secret() -> str:
     if settings.JWT_SECRET_KEY:
         return settings.JWT_SECRET_KEY
     if settings.IS_LOCAL:
-        return "local-dev-insecure-jwt-secret"
+        return "local-dev-insecure-jwt-secret-that-is-at-least-32-bytes-long"
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="JWT secret is not configured",
