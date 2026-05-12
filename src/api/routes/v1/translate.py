@@ -24,17 +24,19 @@ from src.api.schemas.responses import JobDetailResponse
 router = APIRouter()
 
 
+from typing import Annotated
+
 @router.post("/translate", response_model=TranslateResponse, tags=["translation"])
 async def submit_translation(
-    file: UploadFile = File(...),
-    target_language: str = Form(...),
-    domain: str = Form(...),
-    source_language: str | None = Form(None),
-    enable_dlp: bool = Form(True),
-    enable_chunking: bool = Form(True),
-    priority: str = Form("standard"),
-    current_user: AuthenticatedUser = Depends(get_current_user_context),  # noqa: B008
-    handler: TranslationHandler = Depends(get_translation_handler),  # noqa: B008
+    file: Annotated[UploadFile, File(...)],
+    target_language: Annotated[str, Form(...)],
+    domain: Annotated[str, Form(...)],
+    source_language: Annotated[str | None, Form()] = None,
+    enable_dlp: Annotated[bool, Form()] = True,
+    enable_chunking: Annotated[bool, Form()] = True,
+    priority: Annotated[str, Form()] = "standard",
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user_context)] = None,  # noqa: B008
+    handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
 ):
     """Submit a document for translation via multipart upload and bearer auth."""
     content = await file.read()
@@ -65,6 +67,16 @@ async def submit_translation(
         ),
     )
     return await handler.submit_translation(request)
+
+
+@router.get("/translate/{job_id}", response_model=JobDetailResponse, tags=["translation"])
+async def get_translation_status(
+    job_id: str,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user_context)] = None,  # noqa: B008
+    handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
+):
+    """Get the status of a translation job."""
+    return await handler.get_translation_status(job_id)
 
 
 

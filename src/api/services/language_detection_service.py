@@ -6,9 +6,13 @@ from src.api.services.processor_service import JobProcessor
 from src.api.services.progress_tracker import ProgressTracker
 
 
+from typing import Any
+
+
 class _NoopUpdater:
-    async def update_job(self, job_id: str, updates: dict) -> None:  # pragma: no cover
-        return None
+    async def update_job(self, *_args: Any, **_kwargs: Any) -> None:  # pragma: no cover
+        import asyncio
+        await asyncio.sleep(0)
 
 
 class LanguageDetectionService:

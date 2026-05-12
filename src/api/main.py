@@ -83,6 +83,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add global exception handling middleware
+app.add_middleware(BaseHTTPMiddleware, dispatch=exception_handler_middleware)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -91,9 +94,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Add global exception handling middleware
-app.add_middleware(BaseHTTPMiddleware, dispatch=exception_handler_middleware)
 
 # Include API routes
 app.include_router(api_router, prefix=settings.API_PREFIX)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "src.api.main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=True,
     )  # noqa: S104

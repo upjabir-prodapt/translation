@@ -530,7 +530,6 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
     return merged_lines
 
 
-
 def process_page_chars_to_lines(
     chars: list[tuple[il_version_1.Box, str, bool]],
 ) -> list[Line]:

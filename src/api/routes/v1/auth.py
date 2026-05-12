@@ -14,7 +14,7 @@ from src.config.constants import settings
 router = APIRouter()
 
 
-@router.post("/auth/token", response_model=AuthTokenResponse, tags=["auth"])
+@router.post("/auth/token", tags=["auth"])
 async def create_auth_token(request: AuthTokenRequest) -> AuthTokenResponse:
     """Issue JWT for users with `@colt.net` email addresses."""
     normalized_email = request.email.strip().lower()

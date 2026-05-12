@@ -586,7 +586,6 @@ class StylesAndFormulas:
                     composition,
                     current_formula_font_ids,
                     first_is_bullet,
-
                 )
 
                 if not tagged_chars:

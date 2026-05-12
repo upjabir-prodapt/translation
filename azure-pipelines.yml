@@ -1,6 +1,5 @@
 # DocTranslator — test gate, container build/push (Artifact Registry), Cloud Run deploy
 # Uses Azure → GCP Workload Identity Federation via AzureCLI + external_account ADC JSON.
-
 trigger:
   branches:
     include:
@@ -226,11 +225,11 @@ stages:
                   --platform=managed \
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
-                  --min-instances=1 \
+                  --min-instances=0 \
                   --concurrency=1 \
                   --port=8000 \
                   --timeout=600 \
-                  --memory=8Gi \
+                  --memory=4Gi \
                   --cpu=4 \
                   --no-cpu-throttling \
                   --cpu-boost \

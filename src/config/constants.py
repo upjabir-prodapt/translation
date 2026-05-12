@@ -286,10 +286,16 @@ class Settings(BaseSettings):
     def temp_root_path(self) -> Path:
         """Canonical root for runtime temporary/job execution files."""
         if self.TEMP_DIR:
-            return Path(self.TEMP_DIR)
-        if self.IS_LOCAL:
-            return self.PROJECT_ROOT / "tmp"
-        return Path("/tmp")
+            path = Path(self.TEMP_DIR)
+        elif self.IS_LOCAL:
+            path = self.PROJECT_ROOT / "tmp"
+        else:
+            path = Path("/tmp/translation-api")
+        
+        # Ensure the directory exists with restricted permissions (owner only)
+        if not path.exists():
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return path
 
     # --------------------------------------------------
     # Post Initialization

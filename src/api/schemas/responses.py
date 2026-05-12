@@ -7,11 +7,13 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+JOB_ID_DESCRIPTION = "Unique job identifier"
+
 
 class TranslateResponse(BaseModel):
     """Response model for translation submission (POST /translate)."""
 
-    job_id: str = Field(..., description="Unique job identifier")
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
     status: str = Field(..., description="Initial job status (always 'queued')")
     status_url: str = Field(..., description="URL to poll for job status")
 
@@ -84,7 +86,7 @@ class TranslationResult(BaseModel):
 class JobDetailResponse(BaseModel):
     """Response model for GET /translate/{job_id}."""
 
-    job_id: str = Field(..., description="Unique job identifier")
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
     status: str = Field(..., description="Current job status")
     submitted_at: datetime | None = Field(None, description="Job submission timestamp")
     completed_at: datetime | None = Field(None, description="Job completion timestamp")
@@ -104,7 +106,7 @@ class JobDetailResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     """Response model for job status (legacy /jobs/{job_id} endpoint)."""
 
-    job_id: str = Field(..., description="Unique job identifier")
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
     status: str = Field(..., description="Current job status")
     progress: float = Field(..., description="Progress percentage (0.0 - 1.0)")
     current_stage: str | None = Field(None, description="Current processing stage")

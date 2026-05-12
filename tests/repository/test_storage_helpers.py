@@ -312,21 +312,25 @@ class TestDownloadFromGcs:
         dest = tmp_path / "model.onnx"
         client, bucket, blob = _make_mock_client()
 
-        with patch("repository.storage_repository.storage.Client", return_value=client):
+        with patch("src.repository.storage_repository.storage.Client", return_value=client):
             # Call with mocked client injected via download_blob_sync's client param
-            with patch("repository.storage_repository.download_blob_sync") as mock_dl:
+            with patch("src.repository.storage_repository.download_blob_sync") as mock_dl:
                 mock_dl.return_value = dest
                 download_from_gcs_sync("models/model.onnx", dest)
                 mock_dl.assert_called_once()
 
     async def test_async_delegates_to_download_blob_async(self, tmp_path):
         dest = tmp_path / "model.onnx"
-        with patch("repository.storage_repository.download_blob_async", new_callable=lambda: lambda *a, **kw: __import__('asyncio').coroutine(lambda: dest)()):
-            # Simpler: just call it and verify it doesn't raise (uses underlying download_blob_sync)
-            pass
-        # Test that download_from_gcs_async is callable and delegates correctly
-        assert callable(download_from_gcs_async)
 
+        async def fake_download_blob_async(*args, **kwargs):
+            return dest
+
+        with patch(
+            "src.repository.storage_repository.download_blob_async",
+            new=fake_download_blob_async,
+        ):
+            result = await download_from_gcs_async("models/model.onnx", dest)
+            assert result == dest
 
 # ---------------------------------------------------------------------------
 # list_gcs_blobs
@@ -335,7 +339,7 @@ class TestDownloadFromGcs:
 
 class TestListGcsBlobs:
     def test_calls_list_blobs_with_assets_prefix(self):
-        with patch("repository.storage_repository.list_blobs") as mock_lb:
+        with patch("src.repository.storage_repository.list_blobs") as mock_lb:
             mock_lb.return_value = []
             result = list_gcs_blobs()
             mock_lb.assert_called_once()
