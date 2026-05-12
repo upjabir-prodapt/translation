@@ -45,6 +45,10 @@ variables:
     value: '$(Build.SourcesDirectory)'
   - name: APP_CONFIG_SECRET_NAME
     value: 'translation-service-env'
+  - name: NETWORK
+    value: 'aicoesandox-vpc'
+  - name: SUBNET
+    value: 'aicoesandox-subnet'
   - name: APP_CONFIG_SECRET_VERSION
     value: '7'
   - name: GCS_BUCKET_NAME
@@ -226,6 +230,8 @@ stages:
                   --platform=managed \
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
+                  --network="$(NETWORK)"  \
+                  --subnet="$(SUBNET)"  \
                   --min-instances=0 \
                   --concurrency=1 \
                   --port=8000 \
