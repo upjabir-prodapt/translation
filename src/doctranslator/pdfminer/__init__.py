@@ -16,13 +16,13 @@ def __getattr__(name: str) -> Any:
     try:
         return importlib.import_module(f"{__name__}.{name}")
     except ModuleNotFoundError as exc:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}"
-        ) from exc
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals().keys(), "utils", "settings", "pdfexceptions", "psexceptions"})
+    return sorted(
+        {*globals().keys(), "utils", "settings", "pdfexceptions", "psexceptions"}
+    )
 
 
 if __name__ == "__main__":

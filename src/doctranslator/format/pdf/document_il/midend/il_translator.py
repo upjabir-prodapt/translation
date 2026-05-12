@@ -12,7 +12,9 @@ import tiktoken
 from tqdm import tqdm
 
 import src.doctranslator.format.pdf.document_il.il_version_1 as il_version_1
-from src.doctranslator.doctranslator_exception.DocTranslatorException import ContentFilterError
+from src.doctranslator.doctranslator_exception.DocTranslatorException import (
+    ContentFilterError,
+)
 from src.doctranslator.format.pdf.document_il import Document
 from src.doctranslator.format.pdf.document_il import GraphicState
 from src.doctranslator.format.pdf.document_il import Page
@@ -24,8 +26,12 @@ from src.doctranslator.format.pdf.document_il import PdfSameStyleCharacters
 from src.doctranslator.format.pdf.document_il import PdfSameStyleUnicodeCharacters
 from src.doctranslator.format.pdf.document_il import PdfStyle
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.doctranslator.format.pdf.document_il.utils.layout_helper import get_char_unicode_string
-from src.doctranslator.format.pdf.document_il.utils.layout_helper import get_paragraph_unicode
+from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    get_char_unicode_string,
+)
+from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    get_paragraph_unicode,
+)
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import is_same_style
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
     is_same_style_except_font,
@@ -42,7 +48,9 @@ from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
 from src.doctranslator.format.pdf.document_il.utils.style_helper import GRAY80
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.translator.translator import BaseTranslator
-from src.doctranslator.utils.priority_thread_pool_executor import PriorityThreadPoolExecutor
+from src.doctranslator.utils.priority_thread_pool_executor import (
+    PriorityThreadPoolExecutor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -606,7 +614,9 @@ class ILTranslator:
             if disable_rich_text_translate:
                 chars.extend(composition.pdf_same_style_characters.pdf_character)
                 return placeholder_id
-            if not self._needs_rich_text_placeholder(composition, paragraph, page_font_map):
+            if not self._needs_rich_text_placeholder(
+                composition, paragraph, page_font_map
+            ):
                 chars.extend(composition.pdf_same_style_characters.pdf_character)
                 return placeholder_id
             placeholder = self.create_rich_text_placeholder(
@@ -639,8 +649,13 @@ class ILTranslator:
     ):
         """Process a single composition item, returning updated placeholder_id or None on error."""
         return self._extract_composition_chars(
-            composition, paragraph, page_font_map, disable_rich_text_translate,
-            placeholder_id, placeholders, chars
+            composition,
+            paragraph,
+            page_font_map,
+            disable_rich_text_translate,
+            placeholder_id,
+            placeholders,
+            chars,
         )
 
     def _handle_single_composition(
@@ -691,14 +706,20 @@ class ILTranslator:
             "1",
         )
         # 样式和段落基准样式一致，无需占位符
-        if is_same_style(composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style):
+        if is_same_style(
+            composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style
+        ):
             return False
         # 字号差异在 0.7-1.3 之间，可能是首字母变大效果，无需占位符
-        if is_same_style_except_size(composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style):
+        if is_same_style_except_size(
+            composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style
+        ):
             return False
         # 除了字体以外样式都和基准一样，并且字体都映射到同一个字体。无需占位符
         if (
-            is_same_style_except_font(composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style)
+            is_same_style_except_font(
+                composition.pdf_same_style_characters.pdf_style, paragraph.pdf_style
+            )
             and fonta
             and fontb
             and fonta.font_id == fontb.font_id
@@ -724,12 +745,16 @@ class ILTranslator:
             return None
 
         original_placeholder_tokens = (
-            self._scan_placeholder_tokens(paragraph.unicode) if paragraph.unicode else {}
+            self._scan_placeholder_tokens(paragraph.unicode)
+            if paragraph.unicode
+            else {}
         )
 
         if len(paragraph.pdf_paragraph_composition) == 1:
             # 如果整个段落只有一个组成部分，那么直接返回，不需要套占位符等
-            return self._handle_single_composition(paragraph, original_placeholder_tokens)
+            return self._handle_single_composition(
+                paragraph, original_placeholder_tokens
+            )
 
         # 如果没有指定 disable_rich_text_translate，使用配置中的值
         if disable_rich_text_translate is None:
@@ -742,8 +767,13 @@ class ILTranslator:
         chars = []
         for composition in paragraph.pdf_paragraph_composition:
             result = self._process_composition_for_translation(
-                composition, paragraph, page_font_map,
-                disable_rich_text_translate, placeholder_id, placeholders, chars,
+                composition,
+                paragraph,
+                page_font_map,
+                disable_rich_text_translate,
+                placeholder_id,
+                placeholders,
+                chars,
             )
             if result is None:
                 return None
@@ -827,11 +857,19 @@ class ILTranslator:
                 allowed.add(placeholder.right_placeholder)
         return allowed
 
-    def _make_remove_placeholder_fn(self, combined_placeholder_pattern: str, allowed_placeholder_tokens: set, tracker):
+    def _make_remove_placeholder_fn(
+        self,
+        combined_placeholder_pattern: str,
+        allowed_placeholder_tokens: set,
+        tracker,
+    ):
         """Return a closure that removes leftover/hallucinated placeholders from text."""
+
         def remove_placeholder(text: str) -> str:
             if combined_placeholder_pattern:
-                text = re.sub(combined_placeholder_pattern, "", text, flags=re.IGNORECASE)
+                text = re.sub(
+                    combined_placeholder_pattern, "", text, flags=re.IGNORECASE
+                )
 
             def _replace_token(match: re.Match) -> str:
                 token = match.group(0)
@@ -848,7 +886,9 @@ class ILTranslator:
 
         return remove_placeholder
 
-    def _make_plain_text_comp(self, text: str, style, remove_placeholder_fn) -> PdfParagraphComposition:
+    def _make_plain_text_comp(
+        self, text: str, style, remove_placeholder_fn
+    ) -> PdfParagraphComposition:
         """Create a PdfParagraphComposition for plain (non-placeholder) text."""
         comp = PdfParagraphComposition()
         comp.pdf_same_style_unicode_characters = PdfSameStyleUnicodeCharacters()
@@ -856,18 +896,23 @@ class ILTranslator:
         comp.pdf_same_style_unicode_characters.pdf_style = style
         return comp
 
-    def _resolve_matched_placeholder(self, matched_text: str, placeholders, remove_placeholder_fn) -> PdfParagraphComposition:
+    def _resolve_matched_placeholder(
+        self, matched_text: str, placeholders, remove_placeholder_fn
+    ) -> PdfParagraphComposition:
         """Resolve a regex match to the correct formula or rich-text composition."""
         # 处理公式占位符
         for p in placeholders:
-            if isinstance(p, FormulaPlaceholder) and re.match(f"^{p.regex_pattern}$", matched_text, re.IGNORECASE):
+            if isinstance(p, FormulaPlaceholder) and re.match(
+                f"^{p.regex_pattern}$", matched_text, re.IGNORECASE
+            ):
                 comp = PdfParagraphComposition()
                 comp.pdf_formula = p.formula
                 return comp
 
         # 处理富文本占位符
         placeholder = next(
-            p for p in placeholders
+            p
+            for p in placeholders
             if not isinstance(p, FormulaPlaceholder)
             and re.match(f"^{p.left_regex_pattern}", matched_text, re.IGNORECASE)
         )
@@ -877,15 +922,23 @@ class ILTranslator:
             re.IGNORECASE,
         ).group(1)
 
-        if isinstance(placeholder.composition, PdfSameStyleCharacters) and inner_text.replace(" ", "") == "".join(
+        if isinstance(
+            placeholder.composition, PdfSameStyleCharacters
+        ) and inner_text.replace(" ", "") == "".join(
             x.char_unicode for x in placeholder.composition.pdf_character
         ).replace(" ", ""):
-            return PdfParagraphComposition(pdf_same_style_characters=placeholder.composition)
+            return PdfParagraphComposition(
+                pdf_same_style_characters=placeholder.composition
+            )
 
         comp = PdfParagraphComposition()
         comp.pdf_same_style_unicode_characters = PdfSameStyleUnicodeCharacters()
-        comp.pdf_same_style_unicode_characters.pdf_style = placeholder.composition.pdf_style
-        comp.pdf_same_style_unicode_characters.unicode = remove_placeholder_fn(inner_text)
+        comp.pdf_same_style_unicode_characters.pdf_style = (
+            placeholder.composition.pdf_style
+        )
+        comp.pdf_same_style_unicode_characters.unicode = remove_placeholder_fn(
+            inner_text
+        )
         return comp
 
     def parse_translate_output(
@@ -908,7 +961,9 @@ class ILTranslator:
             return [comp]
 
         # 构建正则表达式模式
-        patterns, placeholder_patterns = self._build_placeholder_patterns(input_text.placeholders)
+        patterns, placeholder_patterns = self._build_placeholder_patterns(
+            input_text.placeholders
+        )
 
         all_match = all(re.search(p, output, flags=re.IGNORECASE) for p in patterns)
         if all_match:
@@ -933,10 +988,16 @@ class ILTranslator:
             if match.start() > last_end:
                 text = output[last_end : match.start()]
                 if text:
-                    result.append(self._make_plain_text_comp(text, input_text.base_style, remove_placeholder))
+                    result.append(
+                        self._make_plain_text_comp(
+                            text, input_text.base_style, remove_placeholder
+                        )
+                    )
 
             result.append(
-                self._resolve_matched_placeholder(match.group(0), input_text.placeholders, remove_placeholder)
+                self._resolve_matched_placeholder(
+                    match.group(0), input_text.placeholders, remove_placeholder
+                )
             )
             last_end = match.end()
 
@@ -944,7 +1005,11 @@ class ILTranslator:
         if last_end < len(output):
             text = output[last_end:]
             if text:
-                result.append(self._make_plain_text_comp(text, input_text.base_style, remove_placeholder))
+                result.append(
+                    self._make_plain_text_comp(
+                        text, input_text.base_style, remove_placeholder
+                    )
+                )
 
         return result
 

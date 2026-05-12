@@ -1,14 +1,20 @@
-import pytest
-from src.api.core.security import create_access_token, decode_and_verify_token, get_current_user_context, AuthenticatedUser
-from src.config.constants import settings
-from fastapi import HTTPException, status
 from datetime import timedelta
+
+import pytest
+from fastapi import HTTPException
+from src.api.core.security import create_access_token
+from src.api.core.security import decode_and_verify_token
+
 
 class TestSecurity:
     def test_create_and_verify_token_success(self):
-        claims = {"sub": "user@test.com", "business_unit": "bu1", "organization": "org1"}
+        claims = {
+            "sub": "user@test.com",
+            "business_unit": "bu1",
+            "organization": "org1",
+        }
         token = create_access_token(claims)
-        
+
         payload = decode_and_verify_token(token)
         assert payload["sub"] == "user@test.com"
         assert payload["business_unit"] == "bu1"
@@ -19,7 +25,7 @@ class TestSecurity:
         assert exc.value.status_code == 401
 
     def test_decode_missing_claims(self):
-        claims = {"sub": "user@test.com"} # missing bu and org
+        claims = {"sub": "user@test.com"}  # missing bu and org
         token = create_access_token(claims)
         with pytest.raises(HTTPException) as exc:
             decode_and_verify_token(token)

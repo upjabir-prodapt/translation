@@ -9,10 +9,10 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from src.config.constants import settings
+from src.config.logging_config import logger
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.glossary import GlossaryEntry
-from src.config.constants import settings
-from src.config.logging import logger
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.repository import get_storage_client
 
@@ -28,9 +28,8 @@ class GlossaryService:
             mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=UTC)
         except OSError:
             return False
-        return (
-            datetime.now(UTC) - mtime
-            < timedelta(seconds=settings.GLOSSARY_CACHE_TTL_SECONDS)
+        return datetime.now(UTC) - mtime < timedelta(
+            seconds=settings.GLOSSARY_CACHE_TTL_SECONDS
         )
 
     def _load_local_glossary_json(self, domain: str) -> dict[str, Any] | None:
@@ -45,7 +44,9 @@ class GlossaryService:
             logger.warning(f"Invalid local glossary cache '{local_path}': {e}")
             return None
 
-    def _download_glossary_json(self, domain: str, refresh: bool = False) -> dict[str, Any]:
+    def _download_glossary_json(
+        self, domain: str, refresh: bool = False
+    ) -> dict[str, Any]:
         if not refresh:
             local_data = self._load_local_glossary_json(domain)
             if local_data is not None:
@@ -53,9 +54,7 @@ class GlossaryService:
 
         client = get_storage_client()
         bucket = client.bucket(settings.GCS_BUCKET_NAME)
-        blob_path = (
-            f"{settings.GCS_ASSETS_PREFIX}/{settings.GCS_GLOSSARIES_PREFIX}/{domain}.json"
-        )
+        blob_path = f"{settings.GCS_ASSETS_PREFIX}/{settings.GCS_GLOSSARIES_PREFIX}/{domain}.json"
         blob = bucket.blob(blob_path)
         raw = blob.download_as_text()
         data = json.loads(raw)
@@ -103,4 +102,3 @@ class GlossaryService:
         if not entries:
             return []
         return [Glossary(name=f"{domain}-json-glossary", entries=entries)]
-

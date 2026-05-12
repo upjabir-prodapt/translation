@@ -162,7 +162,9 @@ def _worker(executor_reference, work_queue, initializer, initargs):
         while True:
             work_item = work_queue.get(block=True)
             try:
-                should_exit = _process_work_item(work_item, executor_reference, work_queue)
+                should_exit = _process_work_item(
+                    work_item, executor_reference, work_queue
+                )
                 if should_exit:
                     return
             finally:
@@ -271,7 +273,9 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
     def shutdown(self, wait=True, *, cancel_futures=False):
         logger.debug(f"Shutting down executor {self._thread_name_prefix or self}")
         if wait:
-            logger.debug(f"Waiting for all tasks done {self._thread_name_prefix or self}")
+            logger.debug(
+                f"Waiting for all tasks done {self._thread_name_prefix or self}"
+            )
             self._work_queue.join()
             logger.debug(f"All tasks done {self._thread_name_prefix or self}")
 

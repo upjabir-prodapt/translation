@@ -6,7 +6,6 @@ from datetime import datetime
 from src.api.exceptions import JobNotFoundError
 from src.api.schemas.responses import JobDetailResponse
 
-
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
@@ -132,10 +131,18 @@ class TestGetTranslationStatus:
     def test_response_has_status(self, api_client):
         resp = api_client.get("/api/v1/translate/test-job-id-001")
         body = resp.json()
-        assert body["status"] in ("queued", "processing", "completed", "failed", "cancelled")
+        assert body["status"] in (
+            "queued",
+            "processing",
+            "completed",
+            "failed",
+            "cancelled",
+        )
 
     def test_returns_404_for_missing_job(self, api_client, mock_job_service):
-        mock_job_service.get_translation_status.side_effect = JobNotFoundError("ghost-job")
+        mock_job_service.get_translation_status.side_effect = JobNotFoundError(
+            "ghost-job"
+        )
         resp = api_client.get("/api/v1/translate/ghost-job")
         assert resp.status_code == 404
         # Reset
@@ -151,12 +158,10 @@ class TestGetTranslationStatus:
 
     def test_completed_job_has_result_field(self, api_client, mock_job_service):
         """When job is completed, result field is populated."""
-        from src.api.schemas.responses import (
-            TranslatedDocumentResult,
-            TranslationLabels,
-            TranslationMetadata,
-            TranslationResult,
-        )
+        from src.api.schemas.responses import TranslatedDocumentResult
+        from src.api.schemas.responses import TranslationLabels
+        from src.api.schemas.responses import TranslationMetadata
+        from src.api.schemas.responses import TranslationResult
 
         now = datetime.now(UTC)
         mock_job_service.get_translation_status.return_value = JobDetailResponse(

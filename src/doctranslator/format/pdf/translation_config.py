@@ -7,13 +7,13 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.config.constants import settings
 from src.doctranslator.format.pdf.split_manager import BaseSplitStrategy
 from src.doctranslator.format.pdf.split_manager import PageCountStrategy
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.glossary import GlossaryEntry
 from src.doctranslator.progress_monitor import ProgressMonitor
 from src.doctranslator.translator.translator import BaseTranslator
-from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +220,9 @@ class TranslationConfig:
         """Set OCR / compatibility flag overrides in correct priority order."""
         self.skip_clean = self.skip_clean or enhance_compatibility
         self.dual_translate_first = self.dual_translate_first or enhance_compatibility
-        self.disable_rich_text_translate = self.disable_rich_text_translate or enhance_compatibility
+        self.disable_rich_text_translate = (
+            self.disable_rich_text_translate or enhance_compatibility
+        )
 
         if ocr_workaround:
             self.skip_scanned_detection = True
@@ -344,8 +346,11 @@ class TranslationConfig:
         self.merge_alternating_line_numbers = merge_alternating_line_numbers
         self.remove_non_formula_lines = remove_non_formula_lines
         self._init_ocr_flags(
-            ocr_workaround, enhance_compatibility, auto_enable_ocr_workaround,
-            use_side_by_side_dual, use_alternating_pages_dual
+            ocr_workaround,
+            enhance_compatibility,
+            auto_enable_ocr_workaround,
+            use_side_by_side_dual,
+            use_alternating_pages_dual,
         )
 
         if progress_monitor and progress_monitor.cancel_event is None:
@@ -368,7 +373,9 @@ class TranslationConfig:
         self.doc_layout_model = doc_layout_model
 
         self.shared_context_cross_split_part = SharedContextCrossSplitPart()
-        self.shared_context_cross_split_part.initialize_glossaries(initial_user_glossaries)
+        self.shared_context_cross_split_part.initialize_glossaries(
+            initial_user_glossaries
+        )
 
         self.split_strategy = split_strategy
         self._part_working_dirs: dict[int, Path] = {}
@@ -389,7 +396,11 @@ class TranslationConfig:
         assert primary_font_family in [None, "serif", "sans-serif", "script"]
         self.primary_font_family = primary_font_family
 
-        self.only_include_translated_page = bool(only_include_translated_page) if only_include_translated_page else False
+        self.only_include_translated_page = (
+            bool(only_include_translated_page)
+            if only_include_translated_page
+            else False
+        )
         self.save_auto_extracted_glossary = save_auto_extracted_glossary
 
         # force disable table translate until the new model is ready
@@ -424,11 +435,15 @@ class TranslationConfig:
         }
         self.disable_same_text_fallback = disable_same_text_fallback
         token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
-        self.llm_translation_batch_max_tokens = int(settings.LLM_TRANSLATION_BATCH_MAX_TOKENS)
+        self.llm_translation_batch_max_tokens = int(
+            settings.LLM_TRANSLATION_BATCH_MAX_TOKENS
+        )
         self.llm_translation_batch_max_paragraphs = max(
             int(settings.LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS * token_multiplier), 1
         )
-        self.llm_term_extraction_batch_max_tokens = int(settings.LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS)
+        self.llm_term_extraction_batch_max_tokens = int(
+            settings.LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS
+        )
         self.llm_term_extraction_batch_max_paragraphs = max(
             int(settings.LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS * token_multiplier), 1
         )

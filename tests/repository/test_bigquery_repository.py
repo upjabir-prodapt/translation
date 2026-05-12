@@ -1,10 +1,13 @@
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from google.api_core.exceptions import GoogleAPIError
 from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import StorageError
-from datetime import datetime, UTC
-from google.api_core.exceptions import GoogleAPIError
+
 
 @pytest.fixture
 def mock_bq_client():
@@ -12,9 +15,13 @@ def mock_bq_client():
     client.project = "test-project"
     return client
 
+
 @pytest.fixture
 def repo(mock_bq_client):
-    with patch("src.repository.bigquery_repository.bigquery.Client", return_value=mock_bq_client):
+    with patch(
+        "src.repository.bigquery_repository.bigquery.Client",
+        return_value=mock_bq_client,
+    ):
         with patch("src.repository.bigquery_repository.settings") as mock_settings:
             mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
             mock_settings.BIGQUERY_DATASET = "test_dataset"
@@ -22,6 +29,7 @@ def repo(mock_bq_client):
             mock_settings.BIGQUERY_COST_TABLE = "cost"
             mock_settings.BIGQUERY_DLP_TABLE = "dlp"
             return BigQueryRepository()
+
 
 class TestBigQueryRepository:
     def test_to_json_string(self, repo):
@@ -57,7 +65,7 @@ class TestBigQueryRepository:
         mock_job = {
             "job_id": "job1",
             "status": "processing",
-            "submitted_at": datetime.now(UTC).isoformat()
+            "submitted_at": datetime.now(UTC).isoformat(),
         }
         mock_query_job = MagicMock()
         mock_bq_client.query.return_value = mock_query_job
@@ -67,12 +75,14 @@ class TestBigQueryRepository:
     @pytest.mark.asyncio
     async def test_get_translation_job_found(self, repo, mock_bq_client):
         mock_row = MagicMock()
-        mock_row.get = lambda k, d=None: {"job_id": "job1", "status": "completed"}.get(k, d)
-        
+        mock_row.get = lambda k, d=None: {"job_id": "job1", "status": "completed"}.get(
+            k, d
+        )
+
         mock_query_job = MagicMock()
         mock_query_job.result.return_value = [mock_row]
         mock_bq_client.query.return_value = mock_query_job
-        
+
         res = await repo.get_translation_job("job1")
         assert res["job_id"] == "job1"
 
@@ -80,18 +90,20 @@ class TestBigQueryRepository:
     async def test_list_translation_jobs(self, repo, mock_bq_client):
         mock_row = MagicMock()
         mock_row.get = lambda k, d=None: {"job_id": "1", "status": "queued"}.get(k, d)
-        
+
         mock_query_job = MagicMock()
         mock_query_job.result.return_value = [mock_row]
         mock_bq_client.query.return_value = mock_query_job
-        
+
         res = await repo.list_translation_jobs(status="queued", limit=10, offset=0)
         assert len(res) == 1
         assert res[0]["job_id"] == "1"
 
     @pytest.mark.asyncio
     async def test_patch_translation_job(self, repo, mock_bq_client):
-        with patch.object(repo, "get_translation_job", return_value={"job_id": "j1", "status": "q"}):
+        with patch.object(
+            repo, "get_translation_job", return_value={"job_id": "j1", "status": "q"}
+        ):
             with patch.object(repo, "upsert_translation_job") as mock_upsert:
                 await repo.patch_translation_job("j1", {"status": "p"})
                 mock_upsert.assert_called_once()
@@ -101,7 +113,7 @@ class TestBigQueryRepository:
     def test_deserialize_json(self, repo):
         assert repo._deserialize_json(None) is None
         assert repo._deserialize_json('{"a": 1}') == {"a": 1}
-        assert repo._deserialize_json('not json') == 'not json'
+        assert repo._deserialize_json("not json") == "not json"
         assert repo._deserialize_json({"already": "dict"}) == {"already": "dict"}
 
     @pytest.mark.asyncio
@@ -114,16 +126,21 @@ class TestBigQueryRepository:
     @pytest.mark.asyncio
     async def test_read_dlp_tokens(self, repo, mock_bq_client):
         mock_row = MagicMock()
-        mock_data = {"job_id": "j1", "chunk_index": 0, "token": "t", "original_value": "o"}
+        mock_data = {
+            "job_id": "j1",
+            "chunk_index": 0,
+            "token": "t",
+            "original_value": "o",
+        }
         mock_row.get = lambda k, d=None: mock_data.get(k, d)
-        
+
         mock_query_job = MagicMock()
         mock_query_job.result.return_value = [mock_row]
         mock_bq_client.query.return_value = mock_query_job
-        
+
         res = await repo.read_dlp_tokens("j1")
         assert len(res) == 1
-        assert res[0]["token"] == "t"
+        assert res[0]["token"] == "t"  # noqa: S105
 
     @pytest.mark.asyncio
     async def test_write_cost_attribution(self, repo, mock_bq_client):

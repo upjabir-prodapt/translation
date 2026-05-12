@@ -14,7 +14,9 @@ from src.doctranslator.format.pdf.document_il.il_version_1 import Page
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfCurve
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfForm
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfFormula
-from src.doctranslator.format.pdf.document_il.utils.layout_helper import calculate_iou_for_boxes
+from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    calculate_iou_for_boxes,
+)
 
 
 def is_element_contained_in_formula(

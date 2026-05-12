@@ -1,15 +1,18 @@
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from src.api.services.progress_tracker import ProgressTracker
-from datetime import datetime, timedelta, UTC
+
 
 @pytest.fixture
 def mock_updater():
     return AsyncMock()
 
+
 @pytest.fixture
 def tracker(mock_updater):
     return ProgressTracker(updater=mock_updater, job_id="job1", min_update_interval=0.1)
+
 
 class TestProgressTracker:
     async def test_update_success(self, tracker, mock_updater):
@@ -20,7 +23,7 @@ class TestProgressTracker:
 
     async def test_update_rate_limit(self, tracker, mock_updater):
         await tracker.update(0.1)
-        res = await tracker.update(0.2) # Too soon
+        res = await tracker.update(0.2)  # Too soon
         assert res is False
         assert mock_updater.update_job.call_count == 1
 

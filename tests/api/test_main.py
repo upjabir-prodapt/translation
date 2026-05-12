@@ -1,7 +1,6 @@
-import pytest
 from fastapi.testclient import TestClient
 from src.api.main import app
-from unittest.mock import MagicMock, AsyncMock, patch
+
 
 class TestMainApp:
     def test_health_check(self):

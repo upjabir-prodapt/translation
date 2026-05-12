@@ -322,7 +322,9 @@ class PDFStream(PDFObject):
             error_msg = "Unsupported predictor: %r" % pred
             raise PDFNotImplementedError(error_msg)
 
-    def _apply_single_stream_filter(self, data: bytes, f: object, params: object) -> bytes:
+    def _apply_single_stream_filter(
+        self, data: bytes, f: object, params: object
+    ) -> bytes:
         """Apply one filter to stream data and return the decoded bytes."""
         if f in LITERALS_FLATE_DECODE:
             # will get errors if the document is encrypted.

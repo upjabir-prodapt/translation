@@ -172,7 +172,9 @@ class TranslationService:
     ) -> None:
         """Schedule API-local background translation pipeline."""
         if settings.API_USE_BACKGROUND_PIPELINE:
-            task = asyncio.create_task(self.orchestrator.run(job_id=job_id, job_data=job_data))
+            task = asyncio.create_task(
+                self.orchestrator.run(job_id=job_id, job_data=job_data)
+            )
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
             logger.info(f"Scheduled in-process translation pipeline for job {job_id}")

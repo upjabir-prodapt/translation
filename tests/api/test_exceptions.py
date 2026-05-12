@@ -1,9 +1,12 @@
-import pytest
-from src.api.exceptions import (
-    BabelDocError, ValidationError, FileProcessingError, JobNotFoundError,
-    JobAlreadyCompletedError, TranslationError, StorageError, ConfigurationError,
-    create_http_exception, not_found_error, validation_error, internal_error
-)
+from src.api.exceptions import BabelDocError
+from src.api.exceptions import JobAlreadyCompletedError
+from src.api.exceptions import JobNotFoundError
+from src.api.exceptions import StorageError
+from src.api.exceptions import ValidationError
+from src.api.exceptions import internal_error
+from src.api.exceptions import not_found_error
+from src.api.exceptions import validation_error
+
 
 class TestExceptions:
     def test_babel_doc_error(self):
@@ -31,9 +34,9 @@ class TestExceptions:
         exc = validation_error("bad", field="f")
         assert exc.status_code == 400
         assert exc.detail["error"]["code"] == "VALIDATION_ERROR"
-        
+
         exc = not_found_error("User", "1")
         assert exc.status_code == 404
-        
+
         exc = internal_error("boom")
         assert exc.status_code == 500

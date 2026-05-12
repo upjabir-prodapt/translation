@@ -2,11 +2,12 @@
 
 import json
 
+import src.doctranslator.tools.italic_assistance as italic_assistance
 from rich.console import Console
 from rich.table import Table
-
-import src.doctranslator.tools.italic_assistance as italic_assistance
-from src.doctranslator.format.pdf.document_il.midend.styles_and_formulas import StylesAndFormulas
+from src.doctranslator.format.pdf.document_il.midend.styles_and_formulas import (
+    StylesAndFormulas,
+)
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 
 console = Console()

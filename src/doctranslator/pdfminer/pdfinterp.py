@@ -799,7 +799,9 @@ class PDFPageInterpreter:
             self.graphicstate.ncolor = rgb
             self.ncs = self.csmap["DeviceRGB"]
 
-    def do_k_upper(self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT) -> None:
+    def do_k_upper(
+        self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT
+    ) -> None:
         """Set CMYK color for stroking operations (PDF operator K, uppercase)"""
         cmyk = safe_cmyk(c, m, y, k)
 
@@ -832,7 +834,9 @@ class PDFPageInterpreter:
             gray = self.pop(1)[0]
             gray_f = safe_float(gray)
             if gray_f is None:
-                log.warning(f"Cannot set gray {label} color because {gray!r} is an invalid float value")
+                log.warning(
+                    f"Cannot set gray {label} color because {gray!r} is an invalid float value"
+                )
             elif is_stroke:
                 self.graphicstate.scolor = gray_f
             else:
@@ -841,7 +845,9 @@ class PDFPageInterpreter:
             values = self.pop(3)
             rgb = safe_rgb(*values)
             if rgb is None:
-                log.warning(f"Cannot set RGB {label} color because not all values in {values!r} can be parsed as floats")
+                log.warning(
+                    f"Cannot set RGB {label} color because not all values in {values!r} can be parsed as floats"
+                )
             elif is_stroke:
                 self.graphicstate.scolor = rgb
             else:
@@ -850,7 +856,9 @@ class PDFPageInterpreter:
             values = self.pop(4)
             cmyk = safe_cmyk(*values)
             if cmyk is None:
-                log.warning(f"Cannot set CMYK {label} color because not all values in {values!r} can be parsed as floats")
+                log.warning(
+                    f"Cannot set CMYK {label} color because not all values in {values!r} can be parsed as floats"
+                )
             elif is_stroke:
                 self.graphicstate.scolor = cmyk
             else:

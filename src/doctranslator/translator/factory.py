@@ -1,9 +1,9 @@
 """Factory helpers for selecting translation engines by model."""
 
+from src.config.constants import settings
 from src.doctranslator.translator.translator import BaseTranslator
 from src.doctranslator.translator.translator import GeminiVertexAITranslator
 from src.doctranslator.translator.translator import set_translate_rate_limiter
-from src.config.constants import settings
 
 
 def _infer_provider(model_name: str) -> str:
@@ -33,15 +33,13 @@ def create_translator(
             model=settings.GEMINI_MODEL,
             temperature=settings.LLM_TEMPERATURE,
         )
-    
+
     return GeminiVertexAITranslator(
-            lang_in=lang_in,
-            lang_out=lang_out,
-            model=settings.GEMINI_MODEL,
-            temperature=settings.LLM_TEMPERATURE,
-        )
-
-
+        lang_in=lang_in,
+        lang_out=lang_out,
+        model=settings.GEMINI_MODEL,
+        temperature=settings.LLM_TEMPERATURE,
+    )
 
 
 def create_translator_from_model_list(

@@ -1,14 +1,21 @@
-import pytest
+import tempfile
 from pathlib import Path
-from src.loaders.assets import get_doclayout_onnx_model_path, get_font_and_metadata
-from src.loaders.exceptions import AssetIntegrityError, MetadataNotFoundError
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+from src.loaders.assets import get_doclayout_onnx_model_path
+from src.loaders.assets import get_font_and_metadata
+from src.loaders.exceptions import AssetIntegrityError
+from src.loaders.exceptions import MetadataNotFoundError
+
 
 class TestAssets:
     @patch("src.loaders.assets.get_or_download_model")
     def test_get_doclayout_onnx_model_path_success(self, mock_get):
-        mock_get.return_value = Path("/tmp/model.onnx")
-        assert get_doclayout_onnx_model_path() == Path("/tmp/model.onnx")
+        path = Path(tempfile.gettempdir()) / "model.onnx"
+        mock_get.return_value = path
+        assert get_doclayout_onnx_model_path() == path
 
     @patch("src.loaders.assets.get_or_download_model")
     def test_get_doclayout_onnx_model_path_failure(self, mock_get):
@@ -29,8 +36,9 @@ class TestAssets:
         mock_meta = MagicMock()
         mock_meta.sha3_256 = "abc"
         mock_get.return_value = mock_meta
-        mock_path.return_value = Path("/tmp/font.ttf")
-        
-        path, meta = get_font_and_metadata("arial.ttf")
-        assert path == Path("/tmp/font.ttf")
+        path = Path(tempfile.gettempdir()) / "font.ttf"
+        mock_path.return_value = path
+
+        path_result, meta = get_font_and_metadata("arial.ttf")
+        assert path_result == path
         assert meta is not None

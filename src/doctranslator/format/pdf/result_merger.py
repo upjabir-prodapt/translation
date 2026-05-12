@@ -40,9 +40,16 @@ class ResultMerger:
     ) -> Path | None:
         """Attempt to merge monolingual PDFs; returns path or None on failure."""
         try:
-            if any(r.mono_pdf_path for r in results.values()) and not self.config.no_mono:
+            if (
+                any(r.mono_pdf_path for r in results.values())
+                and not self.config.no_mono
+            ):
                 return self._merge_pdfs(
-                    [r.mono_pdf_path for r in sorted_results.values() if r.mono_pdf_path],
+                    [
+                        r.mono_pdf_path
+                        for r in sorted_results.values()
+                        if r.mono_pdf_path
+                    ],
                     mono_file_name,
                     tag="merged_mono",
                     overlap_pages_list=overlap_pages_list,
@@ -60,9 +67,16 @@ class ResultMerger:
     ) -> Path | None:
         """Attempt to merge dual-language PDFs; returns path or None on failure."""
         try:
-            if any(r.dual_pdf_path for r in results.values()) and not self.config.no_dual:
+            if (
+                any(r.dual_pdf_path for r in results.values())
+                and not self.config.no_dual
+            ):
                 return self._merge_pdfs(
-                    [r.dual_pdf_path for r in sorted_results.values() if r.dual_pdf_path],
+                    [
+                        r.dual_pdf_path
+                        for r in sorted_results.values()
+                        if r.dual_pdf_path
+                    ],
                     dual_file_name,
                     tag="merged_dual",
                     overlap_pages_list=overlap_pages_list,
@@ -91,9 +105,16 @@ class ResultMerger:
         merged_no_watermark_dual_path = None
 
         try:
-            if any(r.no_watermark_mono_pdf_path for r in results.values()) and not self.config.no_mono:
+            if (
+                any(r.no_watermark_mono_pdf_path for r in results.values())
+                and not self.config.no_mono
+            ):
                 merged_no_watermark_mono_path = self._merge_pdfs(
-                    [r.no_watermark_mono_pdf_path for r in sorted_results.values() if r.no_watermark_mono_pdf_path],
+                    [
+                        r.no_watermark_mono_pdf_path
+                        for r in sorted_results.values()
+                        if r.no_watermark_mono_pdf_path
+                    ],
                     mono_file_name_no_watermark,
                     tag="merged_no_watermark_mono",
                     overlap_pages_list=overlap_pages_list,
@@ -102,9 +123,16 @@ class ResultMerger:
             logger.error(f"Error merging no-watermark PDFs: {e}")
 
         try:
-            if any(r.no_watermark_dual_pdf_path for r in results.values()) and not self.config.no_dual:
+            if (
+                any(r.no_watermark_dual_pdf_path for r in results.values())
+                and not self.config.no_dual
+            ):
                 merged_no_watermark_dual_path = self._merge_pdfs(
-                    [r.no_watermark_dual_pdf_path for r in sorted_results.values() if r.no_watermark_dual_pdf_path],
+                    [
+                        r.no_watermark_dual_pdf_path
+                        for r in sorted_results.values()
+                        if r.no_watermark_dual_pdf_path
+                    ],
                     "merged_no_watermark_dual.pdf",
                     tag="merged_no_watermark_dual",
                     overlap_pages_list=overlap_pages_list,
@@ -114,7 +142,9 @@ class ResultMerger:
 
         return merged_no_watermark_mono_path, merged_no_watermark_dual_path
 
-    def _save_auto_extracted_glossary(self, basename: str, debug_suffix: str) -> Path | None:
+    def _save_auto_extracted_glossary(
+        self, basename: str, debug_suffix: str
+    ) -> Path | None:
         """Save the auto-extracted glossary if configured; returns the path or None."""
         if not (
             self.config.save_auto_extracted_glossary
@@ -125,7 +155,9 @@ class ResultMerger:
             f"{basename}{debug_suffix}.{self.config.lang_out}.glossary.csv"
         )
         with auto_extracted_glossary_path.open("w", encoding="utf-8") as f:
-            logger.info(f"save auto extracted glossary to {auto_extracted_glossary_path}")
+            logger.info(
+                f"save auto extracted glossary to {auto_extracted_glossary_path}"
+            )
             f.write(
                 self.config.shared_context_cross_split_part.auto_extracted_glossary.to_csv()
             )
@@ -153,7 +185,9 @@ class ResultMerger:
 
         results = {k: v for k, v in results.items() if v is not None}
         sorted_results = dict(sorted(results.items()))
-        overlap_pages_list = self._build_overlap_pages_list(sorted_results, split_points)
+        overlap_pages_list = self._build_overlap_pages_list(
+            sorted_results, split_points
+        )
 
         merged_mono_path = self._try_merge_mono(
             results, sorted_results, mono_file_name, overlap_pages_list

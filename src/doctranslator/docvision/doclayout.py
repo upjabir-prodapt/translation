@@ -10,7 +10,9 @@ import numpy as np
 
 from src.doctranslator.docvision.base_doclayout import DocLayoutModel
 from src.doctranslator.docvision.base_doclayout import YoloResult
-from src.doctranslator.format.pdf.document_il.utils.mupdf_helper import get_no_rotation_img
+from src.doctranslator.format.pdf.document_il.utils.mupdf_helper import (
+    get_no_rotation_img,
+)
 
 try:
     import onnx
@@ -216,7 +218,9 @@ class OnnxModel(DocLayoutModel):
         translate_config,
         save_debug_image,
     ) -> Generator[
-        tuple[src.doctranslator.format.pdf.document_il.il_version_1.Page, YoloResult], None, None
+        tuple[src.doctranslator.format.pdf.document_il.il_version_1.Page, YoloResult],
+        None,
+        None,
     ]:
         for page in pages:
             translate_config.raise_if_cancelled()

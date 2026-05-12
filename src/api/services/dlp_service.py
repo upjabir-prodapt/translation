@@ -25,7 +25,11 @@ class DlpService:
 
     def select_provider(self, source_language: str) -> str:
         normalized = (source_language or "").lower()
-        return "google_cloud_dlp" if normalized in {"en", "eng", "english"} else "vertex_ai_dlp"
+        return (
+            "google_cloud_dlp"
+            if normalized in {"en", "eng", "english"}
+            else "vertex_ai_dlp"
+        )
 
     def _iter_chunk_windows(
         self, chunks: list[str], provider: str, max_chars_per_request: int
@@ -89,5 +93,6 @@ class DlpService:
                         )
                 masked_chunks[chunk_index] = masked_text
 
-        return DlpResult(masked_chunks=masked_chunks, token_rows=token_rows, dlp_provider=provider)
-
+        return DlpResult(
+            masked_chunks=masked_chunks, token_rows=token_rows, dlp_provider=provider
+        )

@@ -595,11 +595,7 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
             if len(objs) % 2 != 0:
                 error_msg = "Invalid dictionary construct: %r" % objs
                 raise PSSyntaxError(error_msg)
-            d = {
-                literal_name(k): v
-                for (k, v) in choplist(2, objs)
-                if v is not None
-            }
+            d = {literal_name(k): v for (k, v) in choplist(2, objs) if v is not None}
             self.push((pos, d))
         except PSTypeError:
             if settings.STRICT:

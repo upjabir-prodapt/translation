@@ -8,17 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from src.api.services.assembly_service import AssemblyService
-from src.api.services.confidence_service import ConfidenceService
 from src.api.services.cover_page_service import CoverPageService
 from src.api.services.glossary_service import GlossaryService
 from src.api.services.intent_router_service import IntentRouterService
 from src.api.services.language_detection_service import LanguageDetectionService
 from src.api.services.processor_service import JobProcessor
-from src.api.services.quality_judge_service import extract_attempt_text
 from src.api.services.temp_workspace_service import TempWorkspaceService
-from src.api.services.verification_service import VerificationService
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -43,6 +40,7 @@ class _PipelineProgressTracker:
                 f"job_id={self.job_id} progress={progress} stage={current_stage}"
             )
         import asyncio
+
         await asyncio.sleep(0)
         return True
 
@@ -172,14 +170,16 @@ class PipelineOrchestrator:
                     (attempt_result.get("token_usage") or {}).get("total_tokens", 0)
                 ),
                 "cost_usd": float(
-                    (attempt_result.get("token_usage") or {}).get("estimated_cost_usd", 0.0)
+                    (attempt_result.get("token_usage") or {}).get(
+                        "estimated_cost_usd", 0.0
+                    )
                 ),
                 "intent": intent,
                 "model_used": attempt_result.get("model_id"),
                 "retry_count": max(0, attempt_result.get("attempt_index")),
                 "quality_report": attempt_result.get("quality_report"),
                 "dlp_provider": attempt_result.get("dlp_provider"),
-                "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode")
+                "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode"),
             }
 
             completed_at = datetime.now(UTC)
@@ -200,7 +200,9 @@ class PipelineOrchestrator:
                     "model_id": attempt_result.get("model_id"),
                     "intent": intent,
                     "input_tokens": int(
-                        (attempt_result.get("token_usage") or {}).get("prompt_tokens", 0)
+                        (attempt_result.get("token_usage") or {}).get(
+                            "prompt_tokens", 0
+                        )
                     ),
                     "output_tokens": int(
                         (attempt_result.get("token_usage") or {}).get(
@@ -227,4 +229,3 @@ class PipelineOrchestrator:
             )
         finally:
             self.temp_workspace_service.cleanup(job_id)
-

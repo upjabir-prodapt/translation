@@ -79,7 +79,9 @@ class CharacterRenderUnit(RenderUnit):
             return font_id in context.xobj_available_fonts[self.xobj_id]
         return font_id in context.available_font_list
 
-    def _resolve_encoding_length(self, font_id: str, encoding_length_map: dict, context: "RenderContext"):
+    def _resolve_encoding_length(
+        self, font_id: str, encoding_length_map: dict, context: "RenderContext"
+    ):
         """Resolve encoding length for a font, falling back to all_encoding_length_map."""
         length = encoding_length_map.get(font_id)
         if length is not None:
@@ -122,7 +124,9 @@ class CharacterRenderUnit(RenderUnit):
                 f"BT /{font_id} {char_size:f} Tf 1 0 0 1 {char.box.x:f} {char.box.y:f} Tm ".encode(),
             )
 
-        encoding_length = self._resolve_encoding_length(font_id, encoding_length_map, context)
+        encoding_length = self._resolve_encoding_length(
+            font_id, encoding_length_map, context
+        )
         if encoding_length is None:
             return
 
@@ -147,6 +151,7 @@ class FormRenderUnit(RenderUnit):
     def _append_inline_image_params(self, draw_op: BitStream, image_parameters: str):
         """Append inline image parameters to the draw stream."""
         import json
+
         try:
             params = json.loads(image_parameters)
             for key, value in params.items():
@@ -162,6 +167,7 @@ class FormRenderUnit(RenderUnit):
     def _append_inline_form(self, draw_op: BitStream, inline_form):
         """Append an inline image (BI...ID...EI) to the draw stream."""
         import base64
+
         draw_op.append(b" BI ")
         if inline_form.image_parameters:
             self._append_inline_image_params(draw_op, inline_form.image_parameters)
@@ -259,7 +265,9 @@ class CurveRenderUnit(RenderUnit):
         """Build path drawing operations from curve paths."""
         path_op = BitStream(b" ")
         path_to_use = (
-            curve.pdf_original_path if curve.pdf_original_path is not None else curve.pdf_path
+            curve.pdf_original_path
+            if curve.pdf_original_path is not None
+            else curve.pdf_path
         )
         for path in path_to_use:
             if isinstance(path, PdfOriginalPath):
@@ -589,43 +597,68 @@ class PDFCreater:
         for paragraph in page.pdf_paragraph:
             chars.extend(self.render_paragraph_to_char(paragraph))
         return [
-            CharacterRenderUnit(char, getattr(char, "render_order", 100), getattr(char, "sub_render_order", i))
+            CharacterRenderUnit(
+                char,
+                getattr(char, "render_order", 100),
+                getattr(char, "sub_render_order", i),
+            )
             for i, char in enumerate(chars)
         ]
 
-    def _form_render_units(self, page: il_version_1.Page, translation_config: TranslationConfig) -> list[RenderUnit]:
+    def _form_render_units(
+        self, page: il_version_1.Page, translation_config: TranslationConfig
+    ) -> list[RenderUnit]:
         """Build form render units if form rendering is not skipped."""
         if translation_config.skip_form_render:
             return []
         all_forms = list(page.pdf_form) + self._collect_formula_items(page, "pdf_form")
         return [
-            FormRenderUnit(form, getattr(form, "render_order", 50), getattr(form, "sub_render_order", i))
+            FormRenderUnit(
+                form,
+                getattr(form, "render_order", 50),
+                getattr(form, "sub_render_order", i),
+            )
             for i, form in enumerate(all_forms)
         ]
 
-    def _rect_render_units(self, page: il_version_1.Page, translation_config: TranslationConfig) -> list[RenderUnit]:
+    def _rect_render_units(
+        self, page: il_version_1.Page, translation_config: TranslationConfig
+    ) -> list[RenderUnit]:
         """Build rectangle render units for OCR workaround or debug mode."""
         units = []
         line_width = 0.1 if translation_config.ocr_workaround else 0.4
         for i, rect in enumerate(page.pdf_rectangle):
             include = (
-                translation_config.ocr_workaround and not rect.debug_info and rect.fill_background
+                translation_config.ocr_workaround
+                and not rect.debug_info
+                and rect.fill_background
             ) or (translation_config.debug and rect.debug_info)
             if include:
                 units.append(
                     RectangleRenderUnit(
-                        rect, getattr(rect, "render_order", 10), getattr(rect, "sub_render_order", i), line_width
+                        rect,
+                        getattr(rect, "render_order", 10),
+                        getattr(rect, "sub_render_order", i),
+                        line_width,
                     )
                 )
         return units
 
-    def _curve_render_units(self, page: il_version_1.Page, translation_config: TranslationConfig) -> list[RenderUnit]:
+    def _curve_render_units(
+        self, page: il_version_1.Page, translation_config: TranslationConfig
+    ) -> list[RenderUnit]:
         """Build curve render units if curve rendering is not skipped."""
         if translation_config.skip_curve_render:
             return []
-        all_curves = list(page.pdf_curve) + self._collect_formula_items(page, "pdf_curve")
+        all_curves = list(page.pdf_curve) + self._collect_formula_items(
+            page, "pdf_curve"
+        )
         return [
-            CurveRenderUnit(curve, getattr(curve, "render_order", 20), getattr(curve, "sub_render_order", i))
+            CurveRenderUnit(
+                curve,
+                getattr(curve, "render_order", 20),
+                getattr(curve, "sub_render_order", i),
+            )
             for i, curve in enumerate(all_curves)
             if curve.debug_info or translation_config.debug
         ]
@@ -871,7 +904,9 @@ class PDFCreater:
             chars = list(page.pdf_character) if page.pdf_character else []
             for paragraph in page.pdf_paragraph:
                 chars.extend(self.render_paragraph_to_char(paragraph))
-            self._render_debug_chars(chars, page_op, available_font_list, page_encoding_length_map)
+            self._render_debug_chars(
+                chars, page_op, available_font_list, page_encoding_length_map
+            )
             for rect in page.pdf_rectangle:
                 if rect.debug_info:
                     self._render_rectangle(page_op, rect)
@@ -882,7 +917,9 @@ class PDFCreater:
             pdf = self.subset_fonts_in_subprocess(pdf, translation_config, tag="debug")
         return pdf
 
-    def _render_debug_chars(self, chars, page_op, available_font_list, encoding_length_map):
+    def _render_debug_chars(
+        self, chars, page_op, available_font_list, encoding_length_map
+    ):
         """Render characters marked for debug output into page_op."""
         for char in chars:
             if not getattr(char, "debug_info", False):
@@ -1053,7 +1090,15 @@ class PDFCreater:
         pdf.save(temp_input)
         process = Process(
             target=_save_pdf_clean_process,
-            args=(temp_input, temp_output, garbage, deflate, clean, deflate_fonts, linear),
+            args=(
+                temp_input,
+                temp_output,
+                garbage,
+                deflate,
+                clean,
+                deflate_fonts,
+                linear,
+            ),
         )
         process.start()
 
@@ -1066,15 +1111,22 @@ class PDFCreater:
                 process.terminate()
                 PDFCreater._terminate_subprocess(process)
                 logger.info("Falling back to save with clean=False")
-                PDFCreater._save_pdf_fallback(pdf, output_path, garbage, deflate, deflate_fonts, linear)
+                PDFCreater._save_pdf_fallback(
+                    pdf, output_path, garbage, deflate, deflate_fonts, linear
+                )
                 return False
             time.sleep(0.5)
 
         exit_code = process.exitcode
-        if exit_code == 0 and Path(temp_output).exists() and Path(temp_output).stat().st_size > 0:
+        if (
+            exit_code == 0
+            and Path(temp_output).exists()
+            and Path(temp_output).stat().st_size > 0
+        ):
             logger.info(f"PDF save with clean={clean} completed successfully")
             try:
                 import shutil
+
                 shutil.copy2(temp_output, output_path)
                 return True
             except Exception as e:
@@ -1088,7 +1140,9 @@ class PDFCreater:
         logger.warning(
             f"PDF save with clean={clean} failed with exit code {exit_code} or produced empty file"
         )
-        PDFCreater._save_pdf_fallback(pdf, output_path, garbage, deflate, deflate_fonts, linear)
+        PDFCreater._save_pdf_fallback(
+            pdf, output_path, garbage, deflate, deflate_fonts, linear
+        )
         return False
 
     def restore_media_box(self, doc: pymupdf.Document, mediabox_data: dict) -> None:
@@ -1106,13 +1160,26 @@ class PDFCreater:
             pdf.save(f"{mono_out_path}.decompressed.pdf", expand=True, pretty=True)
         translation_config.raise_if_cancelled()
         self.save_pdf_with_timeout(
-            pdf, mono_out_path, translation_config,
-            garbage=gc_level, deflate=True,
+            pdf,
+            mono_out_path,
+            translation_config,
+            garbage=gc_level,
+            deflate=True,
             clean=not translation_config.skip_clean,
-            deflate_fonts=True, linear=False, tag="mono",
+            deflate_fonts=True,
+            linear=False,
+            tag="mono",
         )
 
-    def _build_dual_pdf(self, pdf, translation_config, basename, debug_suffix, gc_level, should_removed_page):
+    def _build_dual_pdf(
+        self,
+        pdf,
+        translation_config,
+        basename,
+        debug_suffix,
+        gc_level,
+        should_removed_page,
+    ):
         """Create and save the dual (side-by-side or alternating) PDF."""
         dual_out_path = translation_config.get_output_file_path(
             f"{basename}{debug_suffix}.{translation_config.lang_out}.dual.pdf",
@@ -1128,14 +1195,23 @@ class PDFCreater:
         if self.translation_config.only_include_translated_page and should_removed_page:
             original_pdf.delete_pages(should_removed_page)
         if translation_config.use_alternating_pages_dual:
-            dual = self.create_alternating_pages_dual_pdf(original_pdf, pdf, translation_config)
+            dual = self.create_alternating_pages_dual_pdf(
+                original_pdf, pdf, translation_config
+            )
         else:
-            dual = self.create_side_by_side_dual_pdf(original_pdf, pdf, translation_config)
+            dual = self.create_side_by_side_dual_pdf(
+                original_pdf, pdf, translation_config
+            )
         self.save_pdf_with_timeout(
-            dual, dual_out_path, translation_config,
-            garbage=gc_level, deflate=True,
+            dual,
+            dual_out_path,
+            translation_config,
+            garbage=gc_level,
+            deflate=True,
             clean=not translation_config.skip_clean,
-            deflate_fonts=True, linear=False, tag="dual",
+            deflate_fonts=True,
+            linear=False,
+            tag="dual",
         )
         if translation_config.debug:
             translation_config.raise_if_cancelled()
@@ -1167,7 +1243,10 @@ class PDFCreater:
         try:
             basename = Path(translation_config.input_file).stem
             debug_suffix = ".debug" if translation_config.debug else ""
-            if translation_config.watermark_output_mode != WatermarkOutputMode.Watermarked:
+            if (
+                translation_config.watermark_output_mode
+                != WatermarkOutputMode.Watermarked
+            ):
                 debug_suffix += ".no_watermark"
             mono_out_path = translation_config.get_output_file_path(
                 f"{basename}{debug_suffix}.{translation_config.lang_out}.mono.pdf",
@@ -1175,16 +1254,23 @@ class PDFCreater:
             pdf = pymupdf.open(self.original_pdf_path)
             self.font_mapper.add_font(pdf, self.docs)
             with self.translation_config.progress_monitor.stage_start(
-                self.stage_name, len(self.docs.page),
+                self.stage_name,
+                len(self.docs.page),
             ) as pbar:
                 for page in self.docs.page:
-                    self.update_page_content_stream(check_font_exists, page, pdf, translation_config)
+                    self.update_page_content_stream(
+                        check_font_exists, page, pdf, translation_config
+                    )
                     pbar.advance()
             translation_config.raise_if_cancelled()
             gc_level = 4 if self.translation_config.ocr_workaround else 1
-            with self.translation_config.progress_monitor.stage_start(SUBSET_FONT_STAGE_NAME, 1) as pbar:
+            with self.translation_config.progress_monitor.stage_start(
+                SUBSET_FONT_STAGE_NAME, 1
+            ) as pbar:
                 if not translation_config.skip_clean:
-                    pdf = self.subset_fonts_in_subprocess(pdf, translation_config, tag="mono")
+                    pdf = self.subset_fonts_in_subprocess(
+                        pdf, translation_config, tag="mono"
+                    )
                 pbar.advance()
             try:
                 self.restore_media_box(pdf, self.mediabox_data)
@@ -1194,28 +1280,44 @@ class PDFCreater:
             should_removed_page = []
             if translation_config.only_include_translated_page:
                 pages_to_translate = {
-                    page.page_number for page in self.docs.page
-                    if self.translation_config.should_translate_page(page.page_number + 1)
+                    page.page_number
+                    for page in self.docs.page
+                    if self.translation_config.should_translate_page(
+                        page.page_number + 1
+                    )
                 }
                 should_removed_page = list(set(range(len(pdf))) - pages_to_translate)
                 pdf.delete_pages(should_removed_page)
 
-            with self.translation_config.progress_monitor.stage_start(SAVE_PDF_STAGE_NAME, 2) as pbar:
+            with self.translation_config.progress_monitor.stage_start(
+                SAVE_PDF_STAGE_NAME, 2
+            ) as pbar:
                 if not translation_config.no_mono:
-                    self._save_mono_pdf(pdf, mono_out_path, gc_level, translation_config)
+                    self._save_mono_pdf(
+                        pdf, mono_out_path, gc_level, translation_config
+                    )
                 pbar.advance()
                 dual_out_path = None
                 if not translation_config.no_dual:
                     dual_out_path = self._build_dual_pdf(
-                        pdf, translation_config, basename, debug_suffix, gc_level, should_removed_page
+                        pdf,
+                        translation_config,
+                        basename,
+                        debug_suffix,
+                        gc_level,
+                        should_removed_page,
                     )
                 pbar.advance()
             if self.translation_config.no_mono:
                 mono_out_path = None
             if self.translation_config.no_dual:
                 dual_out_path = None
-            auto_extracted_glossary_path = self._save_glossary(basename, debug_suffix, translation_config)
-            return TranslateResult(mono_out_path, dual_out_path, auto_extracted_glossary_path)
+            auto_extracted_glossary_path = self._save_glossary(
+                basename, debug_suffix, translation_config
+            )
+            return TranslateResult(
+                mono_out_path, dual_out_path, auto_extracted_glossary_path
+            )
         except Exception:
             logger.exception("Failed to create PDF: %s", translation_config.input_file)
             if not check_font_exists:

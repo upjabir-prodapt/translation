@@ -1,5 +1,6 @@
 import logging
 
+from ...translation_config import TranslationConfig
 from .. import GraphicState
 from .. import il_version_1
 from ..utils.style_helper import BLUE
@@ -7,7 +8,6 @@ from ..utils.style_helper import ORANGE
 from ..utils.style_helper import PINK
 from ..utils.style_helper import TEAL
 from ..utils.style_helper import YELLOW
-from ...translation_config import TranslationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,10 @@ class AddDebugInformation:
             )
 
     def _add_paragraph_debug_info(
-        self, paragraph: il_version_1.PdfParagraph, page: il_version_1.Page, new_paragraphs: list
+        self,
+        paragraph: il_version_1.PdfParagraph,
+        page: il_version_1.Page,
+        new_paragraphs: list,
     ):
         """Add debug rectangle and label for a single paragraph."""
         page.pdf_rectangle.append(self._create_rectangle(paragraph.box, BLUE))
@@ -141,7 +144,9 @@ class AddDebugInformation:
             x2=page.cropbox.box.x2,
             y2=page.cropbox.box.y2 - page_height * 0.02,
         )
-        page.pdf_paragraph.append(self._create_text(page_number_text, BLUE, page_number_box))
+        page.pdf_paragraph.append(
+            self._create_text(page_number_text, BLUE, page_number_box)
+        )
 
         new_paragraphs = []
 

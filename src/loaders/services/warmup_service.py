@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 
 from src.config.constants import settings
@@ -389,7 +390,9 @@ async def async_warmup(
     return await service.warmup_all()
 
 
-def warmup(storage_repo: TranslationStorageRepository | None = None) -> WarmupResult | Any:
+def warmup(
+    storage_repo: TranslationStorageRepository | None = None,
+) -> WarmupResult | Any:
     """Run complete asset warmup synchronously.
 
     Args:

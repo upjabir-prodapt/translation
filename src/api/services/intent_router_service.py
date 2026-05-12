@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.config.translation_routing import select_model_list
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.repository import get_storage_client
@@ -78,13 +78,19 @@ class IntentRouterService:
             if local_config:
                 self._config = local_config
                 self._last_loaded = datetime.now(UTC)
-                logger.warning(f"Using stale local model selection cache from {local_path}")
+                logger.warning(
+                    f"Using stale local model selection cache from {local_path}"
+                )
                 return local_config
             raise
 
     def _get_config(self) -> dict[str, Any] | list[dict[str, Any]]:
         now = datetime.now(UTC)
-        if self._config and self._last_loaded and (now - self._last_loaded) < self._cache_ttl:
+        if (
+            self._config
+            and self._last_loaded
+            and (now - self._last_loaded) < self._cache_ttl
+        ):
             return self._config
         try:
             self._config = self.sync_model_selection_cache()
@@ -94,7 +100,8 @@ class IntentRouterService:
         self._last_loaded = now
         return self._config or {}
 
-    def get_model_chain(self, *, domain: str, source_lang: str, target_lang: str) -> list[str]:
+    def get_model_chain(
+        self, *, domain: str, source_lang: str, target_lang: str
+    ) -> list[str]:
         # model_selection.json is authoritative and uses source/target/domain matching.
         return select_model_list(source_lang, target_lang, domain)
-

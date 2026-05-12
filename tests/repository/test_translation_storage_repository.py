@@ -1,17 +1,24 @@
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from src.repository.translation_storage_repository import TranslationStorageRepository
-from pathlib import Path
 from src.repository.storage_repository import StorageError
+from src.repository.translation_storage_repository import TranslationStorageRepository
+
 
 @pytest.fixture
 def mock_storage_client():
     return MagicMock()
 
+
 @pytest.fixture
 def repo(mock_storage_client):
-    with patch("src.repository.storage_repository.storage.Client", return_value=mock_storage_client):
+    with patch(
+        "src.repository.storage_repository.storage.Client",
+        return_value=mock_storage_client,
+    ):
         with patch("src.repository.storage_repository.settings") as mock_settings:
             mock_settings.GCS_BUCKET_NAME = "test-bucket"
             mock_settings.GCS_TRANSLATION_PREFIX = "translation"
@@ -20,11 +27,16 @@ def repo(mock_storage_client):
             mock_settings.GCS_ASSETS_PREFIX = "assets"
             return TranslationStorageRepository()
 
+
 class TestTranslationStorageRepository:
     @pytest.mark.asyncio
     async def test_download_input_pdf(self, repo, mock_storage_client):
-        with patch.object(repo, "download_file", return_value=Path("/tmp/ok")) as mock_down:
-            await repo.download_input_pdf("job1", Path("/tmp/input.pdf"))
+        with patch.object(
+            repo, "download_file", return_value=Path(tempfile.gettempdir()) / "ok"
+        ) as mock_down:
+            await repo.download_input_pdf(
+                "job1", Path(tempfile.gettempdir()) / "input.pdf"
+            )
             mock_down.assert_called_once()
 
     @pytest.mark.asyncio
@@ -50,8 +62,10 @@ class TestTranslationStorageRepository:
 
     @pytest.mark.asyncio
     async def test_download_asset(self, repo):
-        with patch.object(repo, "download_file", return_value=Path("/tmp/a")) as mock_down:
-            await repo.download_asset("path", Path("/tmp/dest"))
+        with patch.object(
+            repo, "download_file", return_value=Path(tempfile.gettempdir()) / "a"
+        ) as mock_down:
+            await repo.download_asset("path", Path(tempfile.gettempdir()) / "dest")
             mock_down.assert_called_once()
 
     @pytest.mark.asyncio
@@ -62,8 +76,12 @@ class TestTranslationStorageRepository:
 
     @pytest.mark.asyncio
     async def test_download_glossary(self, repo):
-        with patch.object(repo, "download_file", return_value=Path("/tmp/g")) as mock_down:
-            await repo.download_glossary("job1", Path("/tmp/d"), "g.json")
+        with patch.object(
+            repo, "download_file", return_value=Path(tempfile.gettempdir()) / "g"
+        ) as mock_down:
+            await repo.download_glossary(
+                "job1", Path(tempfile.gettempdir()) / "d", "g.json"
+            )
             mock_down.assert_called_once()
 
     @pytest.mark.asyncio

@@ -136,10 +136,15 @@ def _apply_png_filter_sub(line_encoded: bytes, bpp: int) -> list[int]:
 
 def _apply_png_filter_up(line_encoded: bytes, line_above: list[int]) -> list[int]:
     """Filter type 2: Up — Raw(x) = Up(x) + Prior(x) mod 256."""
-    return [(up_x + prior_x) & 255 for up_x, prior_x in zip(line_encoded, line_above, strict=False)]
+    return [
+        (up_x + prior_x) & 255
+        for up_x, prior_x in zip(line_encoded, line_above, strict=False)
+    ]
 
 
-def _apply_png_filter_average(line_encoded: bytes, line_above: list[int], bpp: int) -> list[int]:
+def _apply_png_filter_average(
+    line_encoded: bytes, line_above: list[int], bpp: int
+) -> list[int]:
     """Filter type 3: Average — Raw(x) = Average(x) + floor((Raw(x-bpp)+Prior(x))/2) mod 256."""
     raw: list[int] = []
     for j, average_x in enumerate(line_encoded):
@@ -149,7 +154,9 @@ def _apply_png_filter_average(line_encoded: bytes, line_above: list[int], bpp: i
     return raw
 
 
-def _apply_png_filter_paeth(line_encoded: bytes, line_above: list[int], bpp: int) -> list[int]:
+def _apply_png_filter_paeth(
+    line_encoded: bytes, line_above: list[int], bpp: int
+) -> list[int]:
     """Filter type 4: Paeth — Raw(x) = Paeth(x) + PaethPredictor(...) mod 256."""
     raw: list[int] = []
     for j, paeth_x in enumerate(line_encoded):

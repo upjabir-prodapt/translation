@@ -13,17 +13,17 @@ from src.doctranslator.format.pdf.document_il import Document
 from src.doctranslator.format.pdf.document_il import Page
 from src.doctranslator.format.pdf.document_il import PdfFont
 from src.doctranslator.format.pdf.document_il import PdfParagraph
-from src.doctranslator.format.pdf.document_il.midend import il_translator
 from src.doctranslator.format.pdf.document_il.midend.il_translator import (
     DocumentTranslateTracker,
 )
 from src.doctranslator.format.pdf.document_il.midend.il_translator import ILTranslator
-from src.doctranslator.format.pdf.document_il.midend.il_translator import PageTranslateTracker
 from src.doctranslator.format.pdf.document_il.midend.il_translator import (
-    ParagraphTranslateTracker,
+    PageTranslateTracker,
 )
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import is_cid_paragraph
+from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
+    is_cid_paragraph,
+)
 from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_placeholder_only_paragraph,
 )
@@ -32,7 +32,9 @@ from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
 )
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.translator.translator import BaseTranslator
-from src.doctranslator.utils.priority_thread_pool_executor import PriorityThreadPoolExecutor
+from src.doctranslator.utils.priority_thread_pool_executor import (
+    PriorityThreadPoolExecutor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -554,8 +556,14 @@ class ILTranslatorLLMOnly:
 
     def _handle_skipped_paragraph(self, paragraph: PdfParagraph, pbar):
         """Handle a skipped paragraph by advancing progress bar."""
-        if pbar and not is_cid_paragraph(paragraph) and len(paragraph.unicode) >= self.translation_config.min_text_length:
-            if not is_pure_numeric_paragraph(paragraph) and not is_placeholder_only_paragraph(paragraph):
+        if (
+            pbar
+            and not is_cid_paragraph(paragraph)
+            and len(paragraph.unicode) >= self.translation_config.min_text_length
+        ):
+            if not is_pure_numeric_paragraph(
+                paragraph
+            ) and not is_placeholder_only_paragraph(paragraph):
                 return
         if pbar:
             pbar.advance(1)
@@ -619,18 +627,30 @@ class ILTranslatorLLMOnly:
 
             if total_token_count > max_tokens or len(paragraphs) > max_paragraphs:
                 self._submit_batch(
-                    paragraphs, page, tracker, pbar,
-                    page_font_map, page_xobj_font_map,
-                    executor, executor2, total_token_count,
+                    paragraphs,
+                    page,
+                    tracker,
+                    pbar,
+                    page_font_map,
+                    page_xobj_font_map,
+                    executor,
+                    executor2,
+                    total_token_count,
                 )
                 paragraphs = []
                 total_token_count = 0
 
         if paragraphs:
             self._submit_batch(
-                paragraphs, page, tracker, pbar,
-                page_font_map, page_xobj_font_map,
-                executor, executor2, total_token_count,
+                paragraphs,
+                page,
+                tracker,
+                pbar,
+                page_font_map,
+                page_xobj_font_map,
+                executor,
+                executor2,
+                total_token_count,
             )
 
     def _build_batch_inputs(
@@ -659,7 +679,16 @@ class ILTranslatorLLMOnly:
             tracker.record_multi_paragraph_id(mp_id)
             llm_translate_tracker = tracker.new_llm_translate_tracker()
             llm_translate_trackers.append(llm_translate_tracker)
-            inputs.append((text, translate_input, paragraph, tracker, llm_translate_tracker, paragraph_unicodes))
+            inputs.append(
+                (
+                    text,
+                    translate_input,
+                    paragraph,
+                    tracker,
+                    llm_translate_tracker,
+                    paragraph_unicodes,
+                )
+            )
             paragraph_unicodes.append(paragraph.unicode)
         return inputs, llm_translate_trackers, paragraph_unicodes
 
@@ -681,13 +710,19 @@ class ILTranslatorLLMOnly:
                     raise ValueError(
                         "LLM output contains a single translation string while multiple inputs were provided"
                     )
-            raise ValueError("LLM output JSON object is missing expected translation fields")
+            raise ValueError(
+                "LLM output JSON object is missing expected translation fields"
+            )
         elif isinstance(parsed_output, str):
             if n_inputs == 1:
                 return [{"id": 0, "output": parsed_output}]
-            raise ValueError("LLM output JSON is a string while multiple inputs were provided")
+            raise ValueError(
+                "LLM output JSON is a string while multiple inputs were provided"
+            )
         elif not isinstance(parsed_output, list):
-            raise ValueError(f"Unexpected LLM output JSON type: {type(parsed_output).__name__}")
+            raise ValueError(
+                f"Unexpected LLM output JSON type: {type(parsed_output).__name__}"
+            )
         return parsed_output
 
     def _apply_single_translation(
@@ -724,8 +759,14 @@ class ILTranslatorLLMOnly:
             input_token_count = self.calc_token_count(trimed_input)
             output_token_count = self.calc_token_count(output_unicode)
             same_as_input = trimed_input == output_unicode
-            if same_as_input and input_token_count > 10 and not self.translation_config.disable_same_text_fallback:
-                llm_translate_tracker.set_error_message("Translation result is the same as input, fallback.")
+            if (
+                same_as_input
+                and input_token_count > 10
+                and not self.translation_config.disable_same_text_fallback
+            ):
+                llm_translate_tracker.set_error_message(
+                    "Translation result is the same as input, fallback."
+                )
                 llm_translate_tracker.set_placeholder_full_match()
                 logger.warning("Translation result is the same as input, fallback.")
                 return should_fallback
@@ -733,7 +774,9 @@ class ILTranslatorLLMOnly:
                 llm_translate_tracker.set_error_message(
                     f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
                 )
-                logger.warning(f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}")
+                logger.warning(
+                    f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
+                )
                 llm_translate_tracker.set_placeholder_full_match()
                 return should_fallback
             if not self.translation_config.disable_same_text_fallback:
@@ -742,11 +785,16 @@ class ILTranslatorLLMOnly:
                     llm_translate_tracker.set_error_message(
                         f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
                     )
-                    logger.warning(f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}")
+                    logger.warning(
+                        f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
+                    )
                     llm_translate_tracker.set_placeholder_full_match()
                     return should_fallback
             self.il_translator.post_translate_paragraph(
-                inputs[id_][2], inputs[id_][3], translate_input, translated_text,
+                inputs[id_][2],
+                inputs[id_][3],
+                translate_input,
+                translated_text,
             )
             should_fallback = False
             if pbar:
@@ -761,7 +809,9 @@ class ILTranslatorLLMOnly:
             if should_fallback:
                 self.fallback_count += 1
                 inputs[id_][4].set_fallback_to_translate()
-                logger.warning(f"Fallback to simple translation. paragraph id: {inputs[id_][2].debug_id}")
+                logger.warning(
+                    f"Fallback to simple translation. paragraph id: {inputs[id_][2].debug_id}"
+                )
                 para_token_count = self.calc_token_count(inputs[id_][2].unicode)
                 paragraph_unicodes = inputs[id_][5]
                 inputs[id_][2].unicode = paragraph_unicodes[id_]
@@ -798,8 +848,10 @@ class ILTranslatorLLMOnly:
         self.translation_config.raise_if_cancelled()
         should_translate_paragraph = []
         try:
-            inputs, llm_translate_trackers, paragraph_unicodes = self._build_batch_inputs(
-                batch_paragraph, pbar, page_font_map, xobj_font_map, mp_id
+            inputs, llm_translate_trackers, paragraph_unicodes = (
+                self._build_batch_inputs(
+                    batch_paragraph, pbar, page_font_map, xobj_font_map, mp_id
+                )
             )
             if not inputs:
                 return
@@ -810,14 +862,25 @@ class ILTranslatorLLMOnly:
                 tracker = input_text[3]
                 tracker.record_multi_paragraph_index(id_)
                 placeholders_hint = ti.get_placeholders_hint()
-                obj = {"id": id_, "input": input_text[0], "layout_label": input_text[2].layout_label}
-                if placeholders_hint and self.translation_config.add_formula_placehold_hint:
+                obj = {
+                    "id": id_,
+                    "input": input_text[0],
+                    "layout_label": input_text[2].layout_label,
+                }
+                if (
+                    placeholders_hint
+                    and self.translation_config.add_formula_placehold_hint
+                ):
                     obj["formula_placeholders_hint"] = placeholders_hint
                 json_format_input.append(obj)
                 should_translate_paragraph.append(id_)
 
-            json_format_input_str = json.dumps(json_format_input, ensure_ascii=False, indent=2)
-            batch_text_for_glossary_matching = "\n".join(item.get("input", "") for item in json_format_input)
+            json_format_input_str = json.dumps(
+                json_format_input, ensure_ascii=False, indent=2
+            )
+            batch_text_for_glossary_matching = "\n".join(
+                item.get("input", "") for item in json_format_input
+            )
             final_input = self._build_llm_prompt(
                 json_input_str=json_format_input_str,
                 title_paragraph=title_paragraph,
@@ -828,7 +891,10 @@ class ILTranslatorLLMOnly:
                 llm_translate_tracker.set_input(final_input)
             llm_output = self.translate_engine.llm_translate(
                 final_input,
-                rate_limit_params={"paragraph_token_count": paragraph_token_count, "request_json_mode": True},
+                rate_limit_params={
+                    "paragraph_token_count": paragraph_token_count,
+                    "request_json_mode": True,
+                },
             )
             for llm_translate_tracker in llm_translate_trackers:
                 llm_translate_tracker.set_output(llm_output)
@@ -839,7 +905,9 @@ class ILTranslatorLLMOnly:
             translation_results = {}
             for item in parsed_output:
                 if not isinstance(item, dict):
-                    raise ValueError(f"Invalid translation item type: {type(item).__name__}")
+                    raise ValueError(
+                        f"Invalid translation item type: {type(item).__name__}"
+                    )
                 if "id" not in item:
                     raise ValueError("Translation item missing id field")
                 translation_results[item["id"]] = item.get("output", item.get("input"))
@@ -849,11 +917,26 @@ class ILTranslatorLLMOnly:
                 )
             for id_, output in translation_results.items():
                 self._apply_single_translation(
-                    id_, output, inputs, batch_paragraph, llm_translate_trackers,
-                    pbar, page_font_map, xobj_font_map,
-                    title_paragraph, local_title_paragraph, executor, paragraph_token_count,
+                    id_,
+                    output,
+                    inputs,
+                    batch_paragraph,
+                    llm_translate_trackers,
+                    pbar,
+                    page_font_map,
+                    xobj_font_map,
+                    title_paragraph,
+                    local_title_paragraph,
+                    executor,
+                    paragraph_token_count,
                 )
-        except (json.JSONDecodeError, ValueError, TypeError, KeyError, RuntimeError) as e:
+        except (
+            json.JSONDecodeError,
+            ValueError,
+            TypeError,
+            KeyError,
+            RuntimeError,
+        ) as e:
             error_message = f"Error {e} during translation. try fallback"
             logger.warning(error_message)
             for llm_translate_tracker in llm_translate_trackers:
@@ -864,7 +947,9 @@ class ILTranslatorLLMOnly:
             for i, input_ in enumerate(inputs):
                 input_[2].unicode = input_[5][i]
             if not should_translate_paragraph:
-                should_translate_paragraph = list(range(len(batch_paragraph.paragraphs)))
+                should_translate_paragraph = list(
+                    range(len(batch_paragraph.paragraphs))
+                )
             for i in should_translate_paragraph:
                 paragraph = batch_paragraph.paragraphs[i]
                 tracker = batch_paragraph.trackers[i]

@@ -56,7 +56,9 @@ def parse_pdf(pdf_path, page_ranges=None) -> il_version_1.Document:
     # Late-import: high_level pulls layout_parser → this module; avoid circular import at load time.
     import src.doctranslator.format.pdf.high_level as pdf_high_level
 
-    translation_config = TranslationConfig(*[None for _ in range(4)], doc_layout_model=None)
+    translation_config = TranslationConfig(
+        *[None for _ in range(4)], doc_layout_model=None
+    )
     if page_ranges:
         translation_config.page_ranges = [page_ranges]
     translation_config.progress_monitor = pdf_high_level.ProgressMonitor(
@@ -376,24 +378,36 @@ def _check_containment_merge(
     lines_to_skip: set,
 ) -> tuple[bool, Line, Bbox]:
     """Try to merge line1 and line2 by containment. Returns (merged, new_line1, new_bbox1)."""
-    if area2 > 0 and area1 >= area2 and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD:
+    if (
+        area2 > 0
+        and area1 >= area2
+        and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD
+    ):
         # line2 (smaller) absorbed into line1
         line1.chars.extend(line2.chars)
         lines_to_skip.add(j)
         new_bbox = (
-            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
-            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+            min(bbox1[0], bbox2[0]),
+            min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]),
+            max(bbox1[3], bbox2[3]),
         )
         return True, line1, new_bbox
-    if area1 > 0 and area2 > area1 and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD:
+    if (
+        area1 > 0
+        and area2 > area1
+        and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD
+    ):
         # line1 (smaller) absorbed into line2
         line2.chars.extend(line1.chars)
         page_lines[i], page_lines[j] = page_lines[j], page_lines[i]
         line1 = page_lines[i]
         lines_to_skip.add(j)
         new_bbox = (
-            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
-            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+            min(bbox1[0], bbox2[0]),
+            min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]),
+            max(bbox1[3], bbox2[3]),
         )
         return True, line1, new_bbox
     return False, line1, bbox1
@@ -421,14 +435,24 @@ def _check_adjacency_merge(
                 h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
                 if h_gap >= 0:
                     avg_char_width = np.mean(
-                        [c[0].x2 - c[0].x for c in (line1.chars + line2.chars) if c[0].x2 > c[0].x] or [0]
+                        [
+                            c[0].x2 - c[0].x
+                            for c in (line1.chars + line2.chars)
+                            if c[0].x2 > c[0].x
+                        ]
+                        or [0]
                     )
-                    if avg_char_width > 0 and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                    if (
+                        avg_char_width > 0
+                        and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
+                    ):
                         line1.chars.extend(line2.chars)
                         lines_to_skip.add(j)
                         new_bbox = (
-                            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
-                            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+                            min(bbox1[0], bbox2[0]),
+                            min(bbox1[1], bbox2[1]),
+                            max(bbox1[2], bbox2[2]),
+                            max(bbox1[3], bbox2[3]),
                         )
                         return True, new_bbox
     else:  # vertical
@@ -443,14 +467,24 @@ def _check_adjacency_merge(
                 v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
                 if v_gap >= 0:
                     avg_char_height = np.mean(
-                        [c[0].y2 - c[0].y for c in (line1.chars + line2.chars) if c[0].y2 > c[0].y] or [0]
+                        [
+                            c[0].y2 - c[0].y
+                            for c in (line1.chars + line2.chars)
+                            if c[0].y2 > c[0].y
+                        ]
+                        or [0]
                     )
-                    if avg_char_height > 0 and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                    if (
+                        avg_char_height > 0
+                        and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
+                    ):
                         line1.chars.extend(line2.chars)
                         lines_to_skip.add(j)
                         new_bbox = (
-                            min(bbox1[0], bbox2[0]), min(bbox1[1], bbox2[1]),
-                            max(bbox1[2], bbox2[2]), max(bbox1[3], bbox2[3]),
+                            min(bbox1[0], bbox2[0]),
+                            min(bbox1[1], bbox2[1]),
+                            max(bbox1[2], bbox2[2]),
+                            max(bbox1[3], bbox2[3]),
                         )
                         return True, new_bbox
     return False, bbox1
@@ -503,17 +537,37 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
             inter_x1 = min(bbox1[2], bbox2[2])
             inter_y1 = min(bbox1[3], bbox2[3])
             inter_area = max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
-            area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1]) if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1]) else 0
-            area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1]) if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1]) else 0
+            area1 = (
+                (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+                if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1])
+                else 0
+            )
+            area2 = (
+                (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+                if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1])
+                else 0
+            )
 
             did_merge, line1, bbox1 = _check_containment_merge(
-                line1, line2, bbox1, bbox2, inter_area, area1, area2, page_lines, i, j, lines_to_skip
+                line1,
+                line2,
+                bbox1,
+                bbox2,
+                inter_area,
+                area1,
+                area2,
+                page_lines,
+                i,
+                j,
+                lines_to_skip,
             )
             if did_merge:
                 merged = True
                 continue
 
-            did_adj, bbox1 = _check_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+            did_adj, bbox1 = _check_adjacency_merge(
+                line1, line2, bbox1, bbox2, lines_to_skip, j
+            )
             if did_adj:
                 merged = True
 

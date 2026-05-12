@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 from src.api.services.temp_workspace_service import TempWorkspaceService
 
@@ -68,7 +67,9 @@ async def test_pipeline_orchestrator_passes_enable_dlp_and_persists_il_tokens(
         write_cost_attribution=AsyncMock(),
     )
     storage = SimpleNamespace(
-        download_file=AsyncMock(side_effect=lambda _blob, path: path.write_bytes(b"%PDF"))
+        download_file=AsyncMock(
+            side_effect=lambda _blob, path: path.write_bytes(b"%PDF")
+        )
     )
 
     orchestrator = PipelineOrchestrator(
@@ -83,9 +84,13 @@ async def test_pipeline_orchestrator_passes_enable_dlp_and_persists_il_tokens(
     orchestrator.glossary_service = SimpleNamespace(
         load_domain_glossary=lambda **_kwargs: []
     )
-    orchestrator.cover_page_service = SimpleNamespace(build=lambda **_kwargs: {"cover": True})
+    orchestrator.cover_page_service = SimpleNamespace(
+        build=lambda **_kwargs: {"cover": True}
+    )
     orchestrator.assembly_service = SimpleNamespace(
-        upload_outputs=AsyncMock(return_value={"mono_pdf_path": "gs://bucket/output.pdf"})
+        upload_outputs=AsyncMock(
+            return_value={"mono_pdf_path": "gs://bucket/output.pdf"}
+        )
     )
 
     await orchestrator.run(
@@ -123,4 +128,3 @@ async def test_pipeline_orchestrator_passes_enable_dlp_and_persists_il_tokens(
             }
         ]
     )
-

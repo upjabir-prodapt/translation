@@ -14,17 +14,15 @@ import argparse
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+from google.cloud import bigquery
+from src.config.constants import settings
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dotenv import load_dotenv
-
 load_dotenv()
-
-from google.cloud import bigquery
-
-from src.config.constants import settings
 
 
 def create_dataset(client: bigquery.Client, dataset_id: str, location: str = "US"):

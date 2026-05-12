@@ -1,7 +1,6 @@
 """Tests for `POST /api/v1/auth/token`."""
 
 from fastapi.testclient import TestClient
-
 from src.api.main import app
 
 
@@ -18,7 +17,7 @@ class TestAuthTokenRoute:
             )
         assert response.status_code == 200
         body = response.json()
-        assert body["token_type"] == "bearer"
+        assert body["token_type"] == "bearer"  # noqa: S105
         assert "access_token" in body
         assert body["expires_in"] > 0
 

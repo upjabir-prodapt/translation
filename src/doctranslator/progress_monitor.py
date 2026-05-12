@@ -117,7 +117,6 @@ class ProgressMonitor:
             if part_index is not None:
                 self.part_results[part_index] = kwargs["translate_result"]
 
-
     def stage_start(self, stage_name: str, total: int):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             logger.debug(
@@ -153,7 +152,7 @@ class ProgressMonitor:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        logger.debug(f"ProgressMonitor __exit__")
+        logger.debug("ProgressMonitor __exit__")
 
     def on_finish(self):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
@@ -280,7 +279,7 @@ class ProgressMonitor:
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             return
         if self.cancel_event:
-            logger.info(f"Translation canceled")
+            logger.info("Translation canceled")
             self.cancel_event.set()
 
 

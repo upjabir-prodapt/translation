@@ -23,4 +23,3 @@ class TranslationHandler:
 
     async def get_translation_status(self, job_id: str) -> JobDetailResponse:
         return await self.job_service.get_translation_status(job_id)
-

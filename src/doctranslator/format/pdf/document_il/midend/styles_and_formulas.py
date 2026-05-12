@@ -8,7 +8,9 @@ from src.doctranslator.format.pdf.document_il.il_version_1 import Page
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfCharacter
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfFormula
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfLine
-from src.doctranslator.format.pdf.document_il.il_version_1 import PdfParagraphComposition
+from src.doctranslator.format.pdf.document_il.il_version_1 import (
+    PdfParagraphComposition,
+)
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfSameStyleCharacters
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfStyle
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
@@ -18,12 +20,20 @@ from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
 from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
     is_formulas_middle_char,
 )
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import is_formulas_start_char
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import update_formula_data
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
+    is_formulas_start_char,
+)
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
+    update_formula_data,
+)
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import LEFT_BRACKET
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import RIGHT_BRACKET
-from src.doctranslator.format.pdf.document_il.utils.layout_helper import build_layout_index
-from src.doctranslator.format.pdf.document_il.utils.layout_helper import calculate_iou_for_boxes
+from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    build_layout_index,
+)
+from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    calculate_iou_for_boxes,
+)
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import (
     calculate_y_true_iou_for_boxes,
 )
@@ -398,11 +408,15 @@ class StylesAndFormulas:
         return (
             char.formula_layout_id
             or (
-                is_formulas_start_char(char.char_unicode, self.font_mapper, self.translation_config)
+                is_formulas_start_char(
+                    char.char_unicode, self.font_mapper, self.translation_config
+                )
                 and not in_formula_state
             )
             or (
-                is_formulas_middle_char(char.char_unicode, self.font_mapper, self.translation_config)
+                is_formulas_middle_char(
+                    char.char_unicode, self.font_mapper, self.translation_config
+                )
                 and in_formula_state
             )
             or char.pdf_style.font_id in formula_font_ids
@@ -427,10 +441,21 @@ class StylesAndFormulas:
         in_corner_mark_state: bool,
     ) -> bool:
         """Return True if `char` is a superscript/subscript corner mark."""
-        if previous_char is not None and not isspace and not prev_is_space and not first_is_bullet:
-            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 0.79 and not in_corner_mark_state:
+        if (
+            previous_char is not None
+            and not isspace
+            and not prev_is_space
+            and not first_is_bullet
+        ):
+            if (
+                char.pdf_style.font_size < previous_char.pdf_style.font_size * 0.79
+                and not in_corner_mark_state
+            ):
                 return True
-            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 1.1 and in_corner_mark_state:
+            if (
+                char.pdf_style.font_size < previous_char.pdf_style.font_size * 1.1
+                and in_corner_mark_state
+            ):
                 return True
         if (
             previous_char is None
@@ -476,7 +501,9 @@ class StylesAndFormulas:
             is_formula = self._is_formula_char(char, in_formula_state, formula_font_ids)
 
             previous_char = line.pdf_character[i - 1] if i > 0 else None
-            next_char = line.pdf_character[i + 1] if i < len(line.pdf_character) - 1 else None
+            next_char = (
+                line.pdf_character[i + 1] if i < len(line.pdf_character) - 1 else None
+            )
             isspace = char.char_unicode.isspace() if char.char_unicode else False
             prev_is_space = (
                 previous_char.char_unicode.isspace()
@@ -485,7 +512,13 @@ class StylesAndFormulas:
             )
 
             is_corner_mark = self._is_corner_mark(
-                char, previous_char, next_char, isspace, prev_is_space, first_is_bullet, in_corner_mark_state
+                char,
+                previous_char,
+                next_char,
+                isspace,
+                prev_is_space,
+                first_is_bullet,
+                in_corner_mark_state,
             )
 
             is_formula = is_formula or is_corner_mark
@@ -542,9 +575,7 @@ class StylesAndFormulas:
             # Check if any character in final group is a corner mark
             has_corner_mark = any(current_corner_mark_flags)
             new_compositions.append(
-                self.create_composition(
-                    current_chars, current_tag, has_corner_mark
-                ),
+                self.create_composition(current_chars, current_tag, has_corner_mark),
             )
 
         return new_compositions
@@ -592,9 +623,7 @@ class StylesAndFormulas:
                     new_paragraph_compositions.append(composition)
                     continue
 
-                grouped_compositions = self._group_classified_characters(
-                    tagged_chars
-                )
+                grouped_compositions = self._group_classified_characters(tagged_chars)
                 new_paragraph_compositions.extend(grouped_compositions)
 
             paragraph.pdf_paragraph_composition = new_paragraph_compositions

@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +19,8 @@ from src.api.services.quality_judge_service import GoogleADKJudgeAgent
 from src.api.services.quality_judge_service import QualityJudgeResult
 from src.api.services.quality_judge_service import extract_attempt_text
 from src.api.services.task_models import DocTranslatorTranslationConfig
+from src.config.constants import settings
+from src.config.logging_config import logger
 from src.doctranslator import async_translate
 from src.doctranslator.docvision.doclayout import OnnxModel
 from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
@@ -27,10 +29,10 @@ from src.doctranslator.format.pdf.translation_config import TranslationCoverPage
 from src.doctranslator.format.pdf.translation_config import WatermarkOutputMode
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.translator.factory import create_translator
-from src.config.constants import settings
-from src.config.logging import logger
 from src.loaders.assets import get_doclayout_onnx_model_path
-from src.repository.translation_storage_repository import get_translation_storage_repository
+from src.repository.translation_storage_repository import (
+    get_translation_storage_repository,
+)
 
 DetectorFactory.seed = 0
 
@@ -179,7 +181,7 @@ class JobProcessor:
                 best_attempt_result,
                 cover_page_metadata,
             )
-        
+
         return best_attempt_result
 
     async def _execute_attempt(
@@ -191,7 +193,13 @@ class JobProcessor:
         output_base_dir: Path,
         max_attempts: int,
         judge: GoogleADKJudgeAgent,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any], TranslationConfig | None, QualityJudgeResult | None, dict[str, Any] | None]:
+    ) -> tuple[
+        dict[str, Any] | None,
+        dict[str, Any],
+        TranslationConfig | None,
+        QualityJudgeResult | None,
+        dict[str, Any] | None,
+    ]:
         attempt_index = model_index + 1
         selected_model = model_list[model_index]
         attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
@@ -201,7 +209,9 @@ class JobProcessor:
             "selected_model": selected_model,
             "attempt_index": attempt_index,
         }
-        logger.info(f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}")
+        logger.info(
+            f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}"
+        )
         translation_config = self._build_translation_config(
             attempt_config, attempt_output_dir
         )
@@ -242,7 +252,13 @@ class JobProcessor:
         self._write_quality_report(
             Path(str(translation_config.working_dir)), attempt_report
         )
-        return attempt_result, attempt_config, translation_config, quality_result, attempt_report
+        return (
+            attempt_result,
+            attempt_config,
+            translation_config,
+            quality_result,
+            attempt_report,
+        )
 
     async def _run_single_attempt(
         self, translation_config: TranslationConfig, config: dict[str, Any]
@@ -278,7 +294,9 @@ class JobProcessor:
         self, translation_config: TranslationConfig, selected_model: str
     ) -> dict[str, Any]:
         translator = translation_config.translator
-        prompt_tokens = self._counter_value(getattr(translator, "prompt_token_count", 0))
+        prompt_tokens = self._counter_value(
+            getattr(translator, "prompt_token_count", 0)
+        )
         completion_tokens = self._counter_value(
             getattr(translator, "completion_token_count", 0)
         )
@@ -421,7 +439,9 @@ class JobProcessor:
         subtitle_rect = pymupdf.Rect(margin, 104, page_rect.width - margin, 130)
         divider_y = 145
 
-        page.insert_textbox(title_rect, "AI Translated Document", fontsize=24, fontname="helv")
+        page.insert_textbox(
+            title_rect, "AI Translated Document", fontsize=24, fontname="helv"
+        )
         page.insert_textbox(
             subtitle_rect,
             "This cover page summarizes the generated translation output.",
@@ -542,7 +562,9 @@ class JobProcessor:
         doc_layout_model = self._get_doc_layout_model()
         job_id = config.get("job_id", str(uuid.uuid4()))
         attempt_index = int(config.get("attempt_index", 1))
-        working_dir = _job_runtime_root(str(job_id)) / "working" / f"iter_{attempt_index}"
+        working_dir = (
+            _job_runtime_root(str(job_id)) / "working" / f"iter_{attempt_index}"
+        )
         working_dir.mkdir(parents=True, exist_ok=True)
 
         base_config = DocTranslatorTranslationConfig.model_validate(
@@ -619,7 +641,9 @@ class JobProcessor:
         elif event_type == "finish":
             return await self._handle_finish_event(event)
         elif event_type == "error":
-            raise RuntimeError(f"Translation failed: {event.get('error', 'Unknown error')}")
+            raise RuntimeError(
+                f"Translation failed: {event.get('error', 'Unknown error')}"
+            )
         return None
 
     async def _handle_progress_update(self, event: dict[str, Any]) -> None:
@@ -633,7 +657,9 @@ class JobProcessor:
         )
 
     async def _handle_finish_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        await self.progress_tracker.update(self.PROGRESS_COMPLETE, "Translation complete")
+        await self.progress_tracker.update(
+            self.PROGRESS_COMPLETE, "Translation complete"
+        )
         result = event.get("translate_result")
         output_files = {}
         for file_type in [
@@ -646,9 +672,10 @@ class JobProcessor:
             if isinstance(result, dict):
                 file_path = result.get(attr_name) or result.get(file_type)
             else:
-                file_path = getattr(result, attr_name, None) if result is not None else None
+                file_path = (
+                    getattr(result, attr_name, None) if result is not None else None
+                )
             if file_path and Path(file_path).exists():
                 output_files[f"{file_type}_path"] = Path(file_path)
         page_count = result.get("page_count", 0) if isinstance(result, dict) else 0
         return {**output_files, "page_count": page_count}
-

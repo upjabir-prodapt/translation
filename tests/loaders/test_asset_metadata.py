@@ -1,5 +1,8 @@
-import pytest
-from src.loaders.models.asset_metadata import AssetMetadata, FontMetadata, CMapMetadata, ModelMetadata
+from src.loaders.models.asset_metadata import AssetMetadata
+from src.loaders.models.asset_metadata import CMapMetadata
+from src.loaders.models.asset_metadata import FontMetadata
+from src.loaders.models.asset_metadata import ModelMetadata
+
 
 class TestAssetMetadata:
     def test_asset_metadata_from_dict(self):

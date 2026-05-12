@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import copy
 import concurrent.futures
+import copy
 import logging
 import re
 import statistics
@@ -13,6 +13,7 @@ import pymupdf
 import regex
 from rtree import index
 
+from src.config.constants import settings
 from src.doctranslator.format.pdf.document_il import Box
 from src.doctranslator.format.pdf.document_il import PdfCharacter
 from src.doctranslator.format.pdf.document_il import PdfCurve
@@ -22,11 +23,12 @@ from src.doctranslator.format.pdf.document_il import PdfParagraphComposition
 from src.doctranslator.format.pdf.document_il import PdfStyle
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import update_formula_data
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
+    update_formula_data,
+)
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import box_to_tuple
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.format.pdf.translation_config import WatermarkOutputMode
-from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -1020,7 +1022,12 @@ class Typesetting:
         """Attempt a single layout pass. Returns (typeset_units, all_fit) or (None, False)."""
         try:
             return self._layout_typesetting_units(
-                typesetting_units, box, scale, line_skip, paragraph, use_english_line_break
+                typesetting_units,
+                box,
+                scale,
+                line_skip,
+                paragraph,
+                use_english_line_break,
             )
         except Exception:
             return None, False
@@ -1059,7 +1066,12 @@ class Typesetting:
 
         while scale >= min_scale:
             typeset_units, all_units_fit = self._try_layout_at_scale(
-                typesetting_units, box, scale, line_skip, paragraph, use_english_line_break
+                typesetting_units,
+                box,
+                scale,
+                line_skip,
+                paragraph,
+                use_english_line_break,
             )
 
             if all_units_fit and typeset_units is not None:
@@ -1076,12 +1088,16 @@ class Typesetting:
 
             if scale < 0.7:
                 if expand_space_flag == 0:
-                    box, expanded = self._try_expand_box_downward(box, page, paragraph, apply_layout)
+                    box, expanded = self._try_expand_box_downward(
+                        box, page, paragraph, apply_layout
+                    )
                     expand_space_flag = 1
                     if expanded:
                         continue
                 elif expand_space_flag == 1:
-                    box, expanded = self._try_expand_box_rightward(box, page, paragraph, apply_layout)
+                    box, expanded = self._try_expand_box_rightward(
+                        box, page, paragraph, apply_layout
+                    )
                     expand_space_flag = 2
                     if expanded:
                         continue
@@ -1157,7 +1173,10 @@ class Typesetting:
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
-                    futures = [executor.submit(self.render_page, page) for page in document.page]
+                    futures = [
+                        executor.submit(self.render_page, page)
+                        for page in document.page
+                    ]
                     for future in concurrent.futures.as_completed(futures):
                         self.translation_config.raise_if_cancelled()
                         future.result()
@@ -1165,8 +1184,12 @@ class Typesetting:
                             pbar.advance()
         else:
             max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(self.render_page, page) for page in document.page]
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                futures = [
+                    executor.submit(self.render_page, page) for page in document.page
+                ]
                 for future in concurrent.futures.as_completed(futures):
                     self.translation_config.raise_if_cancelled()
                     future.result()
@@ -1190,9 +1213,13 @@ class Typesetting:
                 continue
             para_height = p_upper.box.y2 - p_upper.box.y
             required_gap = 0.5 if para_height < 36 else 3
-            self._resolve_paragraph_overlap(i, p_upper, required_gap, para_index, para_map)
+            self._resolve_paragraph_overlap(
+                i, p_upper, required_gap, para_index, para_map
+            )
 
-    def _resolve_paragraph_overlap(self, idx, p_upper, required_gap, para_index, para_map):
+    def _resolve_paragraph_overlap(
+        self, idx, p_upper, required_gap, para_index, para_map
+    ):
         """Shift p_upper down if any lower paragraph overlaps within required_gap."""
         check_area = il_version_1.Box(
             x=p_upper.box.x,
@@ -1204,7 +1231,8 @@ class Typesetting:
         conflicting_paras = [
             para_map[pid]
             for pid in candidate_ids
-            if pid != idx and not (
+            if pid != idx
+            and not (
                 para_map[pid].box
                 and p_upper.box
                 and para_map[pid].box.x2 < p_upper.box.x
@@ -1316,7 +1344,9 @@ class Typesetting:
             total_width += unit.width
         return total_width * scale
 
-    def _collect_font_sizes(self, typesetting_units: list[TypesettingUnit]) -> list[float]:
+    def _collect_font_sizes(
+        self, typesetting_units: list[TypesettingUnit]
+    ) -> list[float]:
         """Gather all font sizes referenced by the given typesetting units."""
         font_sizes = []
         for unit in typesetting_units:
@@ -1327,9 +1357,13 @@ class Typesetting:
         font_sizes.sort()
         return font_sizes
 
-    def _calc_avg_height(self, typesetting_units: list[TypesettingUnit], scale: float) -> float:
+    def _calc_avg_height(
+        self, typesetting_units: list[TypesettingUnit], scale: float
+    ) -> float:
         """Return the modal (or average) unit height scaled by *scale*."""
-        unit_heights = [unit.height for unit in typesetting_units] if typesetting_units else []
+        unit_heights = (
+            [unit.height for unit in typesetting_units] if typesetting_units else []
+        )
         if not unit_heights:
             return 0.0
         if len(unit_heights) == 1:
@@ -1349,7 +1383,7 @@ class Typesetting:
         box: Box,
     ) -> bool:
         """Return True when a half-width space should be injected at a CJK/Latin boundary."""
-        CJK_END_PUNCTS = {"。", "！", "？", "；", "：", "，"}
+        cjk_end_puncts = {"。", "！", "？", "；", "：", "，"}
         return (
             last_unit is not None
             and last_unit.is_cjk_char ^ unit.is_cjk_char
@@ -1361,7 +1395,7 @@ class Typesetting:
             and current_x > box.x
             and unit.try_get_unicode() != " "
             and last_unit.try_get_unicode() != " "
-            and last_unit.try_get_unicode() not in CJK_END_PUNCTS
+            and last_unit.try_get_unicode() not in cjk_end_puncts
         )
 
     def _unit_overflows_line(
@@ -1378,9 +1412,15 @@ class Typesetting:
             return False
         if current_x + unit_width > box.x2:
             return True
-        if use_english_line_break and current_x + unit_width + width_before_next_break_point > box.x2:
+        if (
+            use_english_line_break
+            and current_x + unit_width + width_before_next_break_point > box.x2
+        ):
             return True
-        if unit.is_cannot_appear_in_line_end_punctuation and current_x + unit_width * 2 > box.x2:
+        if (
+            unit.is_cannot_appear_in_line_end_punctuation
+            and current_x + unit_width * 2 > box.x2
+        ):
             return True
         return False
 
@@ -1445,7 +1485,9 @@ class Typesetting:
             if current_x == box.x and unit.is_space:
                 continue
 
-            if self._needs_cjk_mixed_space(last_unit, unit, current_x, current_y, line_height, box):
+            if self._needs_cjk_mixed_space(
+                last_unit, unit, current_x, current_y, line_height, box
+            ):
                 current_x += space_width * 0.5
 
             width_before_next_break_point = (
@@ -1455,13 +1497,20 @@ class Typesetting:
             )
 
             if self._unit_overflows_line(
-                unit, unit_width, current_x, box, use_english_line_break, width_before_next_break_point
+                unit,
+                unit_width,
+                current_x,
+                box,
+                use_english_line_break,
+                width_before_next_break_point,
             ):
                 current_x = box.x
                 if not current_line_heights:
                     return [], False
-                current_y, line_all_fit, current_line_heights = self._advance_to_next_line(
-                    current_line_heights, line_skip, current_y, line_ys, box
+                current_y, line_all_fit, current_line_heights = (
+                    self._advance_to_next_line(
+                        current_line_heights, line_skip, current_y, line_ys, box
+                    )
                 )
                 line_height = 0.0
                 if not line_all_fit:
@@ -1547,18 +1596,28 @@ class Typesetting:
                 continue
             if composition.pdf_line:
                 result.extend(
-                    [TypesettingUnit(char=char) for char in composition.pdf_line.pdf_character],
+                    [
+                        TypesettingUnit(char=char)
+                        for char in composition.pdf_line.pdf_character
+                    ],
                 )
             elif composition.pdf_character:
                 result.append(
-                    TypesettingUnit(char=composition.pdf_character, debug_info=paragraph.debug_info),
+                    TypesettingUnit(
+                        char=composition.pdf_character, debug_info=paragraph.debug_info
+                    ),
                 )
             elif composition.pdf_same_style_characters:
                 result.extend(
-                    [TypesettingUnit(char=char) for char in composition.pdf_same_style_characters.pdf_character],
+                    [
+                        TypesettingUnit(char=char)
+                        for char in composition.pdf_same_style_characters.pdf_character
+                    ],
                 )
             elif composition.pdf_same_style_unicode_characters:
-                units = self._units_from_unicode_composition(composition, paragraph, get_font)
+                units = self._units_from_unicode_composition(
+                    composition, paragraph, get_font
+                )
                 if units is not None:
                     result.extend(units)
             elif composition.pdf_formula:
@@ -1614,13 +1673,19 @@ class Typesetting:
         for para in page.pdf_paragraph:
             if para.box is None or para.box == current_box:
                 continue
-            if para.box.x > current_box.x and self._boxes_overlap_vertically(para.box, current_box):
+            if para.box.x > current_box.x and self._boxes_overlap_vertically(
+                para.box, current_box
+            ):
                 yield para.box.x
         for char in page.pdf_character:
-            if char.box.x > current_box.x and self._boxes_overlap_vertically(char.box, current_box):
+            if char.box.x > current_box.x and self._boxes_overlap_vertically(
+                char.box, current_box
+            ):
                 yield char.box.x
         for figure in page.pdf_figure:
-            if figure.box.x > current_box.x and self._boxes_overlap_vertically(figure.box, current_box):
+            if figure.box.x > current_box.x and self._boxes_overlap_vertically(
+                figure.box, current_box
+            ):
                 yield figure.box.x
 
     def _iter_blocker_boxes_below(self, current_box: Box, page):
@@ -1629,13 +1694,19 @@ class Typesetting:
         for para in page.pdf_paragraph:
             if para.box is None or para.box == current_box:
                 continue
-            if para.box.y2 < current_box.y and self._boxes_overlap_horizontally(para.box, current_box):
+            if para.box.y2 < current_box.y and self._boxes_overlap_horizontally(
+                para.box, current_box
+            ):
                 yield para.box.y2
         for char in page.pdf_character:
-            if char.box.y2 < current_box.y and self._boxes_overlap_horizontally(char.box, current_box):
+            if char.box.y2 < current_box.y and self._boxes_overlap_horizontally(
+                char.box, current_box
+            ):
                 yield char.box.y2
         for figure in page.pdf_figure:
-            if figure.box.y2 < current_box.y and self._boxes_overlap_horizontally(figure.box, current_box):
+            if figure.box.y2 < current_box.y and self._boxes_overlap_horizontally(
+                figure.box, current_box
+            ):
                 yield figure.box.y2
 
     def get_max_right_space(self, current_box: Box, page) -> float:

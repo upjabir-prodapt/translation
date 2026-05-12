@@ -11,16 +11,22 @@ from tqdm import tqdm
 from src.doctranslator.format.pdf.document_il import (
     Document as ILDocument,  # Renamed to avoid conflict
 )
-from src.doctranslator.format.pdf.document_il import PdfParagraph  # Renamed to avoid conflict
+from src.doctranslator.format.pdf.document_il import (
+    PdfParagraph,  # Renamed to avoid conflict
+)
 from src.doctranslator.format.pdf.document_il.midend.il_translator import Page
-from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import is_cid_paragraph
+from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
+    is_cid_paragraph,
+)
 from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_placeholder_only_paragraph,
 )
 from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_pure_numeric_paragraph,
 )
-from src.doctranslator.utils.priority_thread_pool_executor import PriorityThreadPoolExecutor
+from src.doctranslator.utils.priority_thread_pool_executor import (
+    PriorityThreadPoolExecutor,
+)
 
 if TYPE_CHECKING:
     from src.doctranslator.format.pdf.translation_config import TranslationConfig

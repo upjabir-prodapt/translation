@@ -1,8 +1,9 @@
-
-import pytest
 import logging
+
 import httpx
-from src.config.retry import is_retryable_llm_exception, llm_retry
+from src.config.retry import is_retryable_llm_exception
+from src.config.retry import llm_retry
+
 
 class TestRetryPolicy:
     def test_is_retryable_llm_exception_types(self):
@@ -12,13 +13,13 @@ class TestRetryPolicy:
         assert is_retryable_llm_exception(ValueError("permanent")) is False
 
     def test_is_retryable_llm_exception_status_codes(self):
-        class MockExc(Exception):
+        class MockError(Exception):
             def __init__(self, status_code):
                 self.status_code = status_code
-        
-        assert is_retryable_llm_exception(MockExc(429)) is True
-        assert is_retryable_llm_exception(MockExc(500)) is True
-        assert is_retryable_llm_exception(MockExc(404)) is False
+
+        assert is_retryable_llm_exception(MockError(429)) is True
+        assert is_retryable_llm_exception(MockError(500)) is True
+        assert is_retryable_llm_exception(MockError(404)) is False
 
     def test_is_retryable_llm_exception_substrings(self):
         assert is_retryable_llm_exception(Exception("Rate limit exceeded")) is True
@@ -28,7 +29,7 @@ class TestRetryPolicy:
     def test_llm_retry_decorator(self):
         logger = logging.getLogger("test")
         attempts = 0
-        
+
         @llm_retry(logger=logger)
         def failing_func():
             nonlocal attempts
@@ -36,6 +37,6 @@ class TestRetryPolicy:
             if attempts < 2:
                 raise TimeoutError("retry me")
             return "ok"
-        
+
         assert failing_func() == "ok"
         assert attempts == 2

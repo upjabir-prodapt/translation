@@ -325,8 +325,7 @@ class CMapParser(PSStackParser[PSKeyword]):
                 continue
             if len(start_byte) != len(end_byte):
                 self._warn_once(
-                    "The start and end byte of begincidrange have "
-                    "different lengths.",
+                    "The start and end byte of begincidrange have different lengths.",
                 )
                 continue
             start_prefix = start_byte[:-4]
@@ -416,10 +415,16 @@ class CMapParser(PSStackParser[PSKeyword]):
                 pass
             return
 
-        if token in (self.KEYWORD_BEGINCODESPACERANGE, self.KEYWORD_ENDCODESPACERANGE,
-                     self.KEYWORD_BEGINCIDRANGE, self.KEYWORD_BEGINCIDCHAR,
-                     self.KEYWORD_BEGINBFRANGE, self.KEYWORD_BEGINBFCHAR,
-                     self.KEYWORD_BEGINNOTDEFRANGE, self.KEYWORD_ENDNOTDEFRANGE):
+        if token in (
+            self.KEYWORD_BEGINCODESPACERANGE,
+            self.KEYWORD_ENDCODESPACERANGE,
+            self.KEYWORD_BEGINCIDRANGE,
+            self.KEYWORD_BEGINCIDCHAR,
+            self.KEYWORD_BEGINBFRANGE,
+            self.KEYWORD_BEGINBFCHAR,
+            self.KEYWORD_BEGINNOTDEFRANGE,
+            self.KEYWORD_ENDNOTDEFRANGE,
+        ):
             self.popall()
             return
 

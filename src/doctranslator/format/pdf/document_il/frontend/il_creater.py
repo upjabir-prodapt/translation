@@ -669,7 +669,11 @@ class ILCreater:
                 continue
             il_font_metadata.pdf_font_char_bounding_box.append(
                 il_version_1.PdfFontCharBoundingBox(
-                    x=x, y=y, x2=x2, y2=y2, char_id=char_id,
+                    x=x,
+                    y=y,
+                    x2=x2,
+                    y2=y2,
+                    char_id=char_id,
                 )
             )
             font_char_bounding_box_map[char_id] = bbox
@@ -787,7 +791,8 @@ class ILCreater:
 
     def create_graphic_state(
         self,
-        gs: src.doctranslator.pdfminer.pdfinterp.PDFGraphicState | list[tuple[str, str]],
+        gs: src.doctranslator.pdfminer.pdfinterp.PDFGraphicState
+        | list[tuple[str, str]],
         include_clipping: bool = False,
         target_ctm: tuple[float, float, float, float, float, float] = None,
         clip_paths=None,
@@ -797,9 +802,7 @@ class ILCreater:
         passthrough_instruction = getattr(gs, "passthrough_instruction", gs)
 
         if include_clipping:
-            instruction_parts = [
-                f"{arg} {op}" for op, arg in passthrough_instruction
-            ]
+            instruction_parts = [f"{arg} {op}" for op, arg in passthrough_instruction]
         else:
             instruction_parts = [
                 f"{arg} {op}"
@@ -809,7 +812,9 @@ class ILCreater:
 
         # Add transformed clipping paths if requested and target CTM is provided
         if include_clipping and target_ctm and clip_paths:
-            self._append_clipping_instructions(instruction_parts, clip_paths, target_ctm)
+            self._append_clipping_instructions(
+                instruction_parts, clip_paths, target_ctm
+            )
 
         passthrough_per_char_instruction = " ".join(instruction_parts)
 
@@ -896,21 +901,30 @@ class ILCreater:
             descent = font.descent * char.size / 1000
 
         char_id = char.cid
-        char_bounding_box = self._get_char_bounding_box(char, font, char_id) if font else None
+        char_bounding_box = (
+            self._get_char_bounding_box(char, font, char_id) if font else None
+        )
 
         char_unicode = char.get_text()
         if space_regex.match(char_unicode):
             char_unicode = " "
         advance = char.adv
         bbox = il_version_1.Box(
-            x=char.bbox[0], y=char.bbox[1], x2=char.bbox[2], y2=char.bbox[3],
+            x=char.bbox[0],
+            y=char.bbox[1],
+            x2=char.bbox[2],
+            y2=char.bbox[3],
         )
         if bbox.x2 < bbox.x or bbox.y2 < bbox.y:
-            logger.warning("Invalid bounding box for character %s: %s", char_unicode, bbox)
+            logger.warning(
+                "Invalid bounding box for character %s: %s", char_unicode, bbox
+            )
 
         vertical, visual_bbox = self._compute_visual_bbox(char, descent)
         pdf_style = il_version_1.PdfStyle(
-            font_id=char.aw_font_id, font_size=char.size, graphic_state=gs,
+            font_id=char.aw_font_id,
+            font_size=char.size,
+            graphic_state=gs,
         )
 
         pdf_char = il_version_1.PdfCharacter(
@@ -1003,7 +1017,9 @@ class ILCreater:
             if path[0] == "h":
                 raw_pdf_paths.append(
                     il_version_1.PdfOriginalPath(
-                        pdf_path=il_version_1.PdfPath(x=0.0, y=0.0, op="h", has_xy=False)
+                        pdf_path=il_version_1.PdfPath(
+                            x=0.0, y=0.0, op="h", has_xy=False
+                        )
                     )
                 )
             else:
@@ -1011,14 +1027,20 @@ class ILCreater:
                     raw_pdf_paths.append(
                         il_version_1.PdfOriginalPath(
                             pdf_path=il_version_1.PdfPath(
-                                x=float(p[0]), y=float(p[1]), op="", has_xy=True,
+                                x=float(p[0]),
+                                y=float(p[1]),
+                                op="",
+                                has_xy=True,
                             )
                         )
                     )
                 raw_pdf_paths.append(
                     il_version_1.PdfOriginalPath(
                         pdf_path=il_version_1.PdfPath(
-                            x=float(path[-2]), y=float(path[-1]), op=path[0], has_xy=True,
+                            x=float(path[-2]),
+                            y=float(path[-1]),
+                            op=path[0],
+                            has_xy=True,
                         )
                     )
                 )
@@ -1028,7 +1050,10 @@ class ILCreater:
         if not self.enable_graphic_element_process:
             return
         bbox = il_version_1.Box(
-            x=curve.bbox[0], y=curve.bbox[1], x2=curve.bbox[2], y2=curve.bbox[3],
+            x=curve.bbox[0],
+            y=curve.bbox[1],
+            x2=curve.bbox[2],
+            y2=curve.bbox[3],
         )
         ctm = getattr(curve, "ctm", None)
         gs = self.create_graphic_state(
@@ -1167,7 +1192,9 @@ class ILCreater:
         import json
 
         from src.doctranslator.format.pdf.babelpdf.utils import guarded_bbox
-        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
+        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import (
+            decompose_ctm,
+        )
         from src.doctranslator.pdfminer.utils import apply_matrix_pt
         from src.doctranslator.pdfminer.utils import get_bound
 

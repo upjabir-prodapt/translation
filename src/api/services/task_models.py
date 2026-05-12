@@ -48,4 +48,3 @@ class DocTranslatorTranslationConfig(BaseModel):
         return self.model_dump(exclude_none=True)
 
     model_config = ConfigDict(frozen=True)
-

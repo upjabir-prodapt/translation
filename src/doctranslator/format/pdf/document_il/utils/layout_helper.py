@@ -12,7 +12,9 @@ from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.il_version_1 import Box
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfCharacter
 from src.doctranslator.format.pdf.document_il.il_version_1 import PdfParagraph
-from src.doctranslator.format.pdf.document_il.il_version_1 import PdfParagraphComposition
+from src.doctranslator.format.pdf.document_il.il_version_1 import (
+    PdfParagraphComposition,
+)
 
 logger = logging.getLogger(__name__)
 # HEIGHT_NOT_USFUL_CHAR_IN_CHAR = (

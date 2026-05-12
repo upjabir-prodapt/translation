@@ -20,7 +20,7 @@ from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
 from src.api.schemas.responses import TranslationResult
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -110,8 +110,16 @@ class JobService:
             raise JobNotFoundError(job_id)
 
         status = job_data.get("status", "unknown")
-        timestamps = job_data.get("timestamps", {}) if isinstance(job_data.get("timestamps"), dict) else {}
-        submitted_at = job_data.get("submitted_at") or timestamps.get("submitted_at") or job_data.get("created_at")
+        timestamps = (
+            job_data.get("timestamps", {})
+            if isinstance(job_data.get("timestamps"), dict)
+            else {}
+        )
+        submitted_at = (
+            job_data.get("submitted_at")
+            or timestamps.get("submitted_at")
+            or job_data.get("created_at")
+        )
         completed_at = job_data.get("completed_at") or timestamps.get("completed_at")
 
         result: TranslationResult | None = None
@@ -128,7 +136,9 @@ class JobService:
             error_message=self._job_error_message(job_data),
         )
 
-    async def _build_translation_result(self, job_id: str, job_data: dict[str, Any]) -> TranslationResult:
+    async def _build_translation_result(
+        self, job_id: str, job_data: dict[str, Any]
+    ) -> TranslationResult:
         raw_result = job_data.get("result", {}) or {}
         source_doc = job_data.get("source_document", {}) or {}
         translation_cfg = job_data.get("translation_config", {}) or {}
@@ -142,9 +152,7 @@ class JobService:
                     blob_path=output_gcs_uri, expires_in=3600
                 )
             except Exception as e:
-                logger.warning(
-                    f"Could not generate download URL for job {job_id}: {e}"
-                )
+                logger.warning(f"Could not generate download URL for job {job_id}: {e}")
 
         # Determine output filename
         output_filename = (
@@ -172,7 +180,8 @@ class JobService:
         )
 
         labels = TranslationLabels(
-            translation_intent=raw_result.get("intent") or translation_cfg.get("intent"),
+            translation_intent=raw_result.get("intent")
+            or translation_cfg.get("intent"),
             processing_time_seconds=job_data.get("processing_seconds"),
             token_count=raw_result.get("token_count"),
             cost_usd=raw_result.get("cost_usd"),
@@ -188,12 +197,16 @@ class JobService:
         self, status: str | None = None, limit: int = 10, offset: int = 0
     ) -> JobListResponse:
         """List jobs with filtering and pagination."""
-        jobs = await self.bigquery.list_translation_jobs(status=status, limit=limit, offset=offset)
+        jobs = await self.bigquery.list_translation_jobs(
+            status=status, limit=limit, offset=offset
+        )
 
         # Convert to response format
         job_responses = []
         for job in jobs:
-            progress, current_stage = self._progress_and_stage(str(job.get("status", "")))
+            progress, current_stage = self._progress_and_stage(
+                str(job.get("status", ""))
+            )
             cost_attribution = job.get("cost_attribution", {})
             job_responses.append(
                 JobStatusResponse(
@@ -327,7 +340,9 @@ class JobService:
 
             # Check for updates
             progress, current_stage = self._progress_and_stage(str(job_data["status"]))
-            current_update = job_data.get("completed_at") or job_data.get("submitted_at")
+            current_update = job_data.get("completed_at") or job_data.get(
+                "submitted_at"
+            )
             if last_update != current_update:
                 yield {
                     "type": "progress",

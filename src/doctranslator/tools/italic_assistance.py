@@ -6,10 +6,11 @@ from pathlib import Path
 import orjson
 from rich.console import Console
 from rich.table import Table
-
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import is_formulas_font
-from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.config.constants import settings
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
+    is_formulas_font,
+)
+from src.doctranslator.format.pdf.translation_config import TranslationConfig
 
 # Base folder containing per-job working directories.
 WORKING_FOLDER = settings.temp_root_path / settings.TEMP_JOBS_ROOT

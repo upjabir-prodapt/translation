@@ -6,7 +6,8 @@ Import these constants instead of duplicating inline payloads.
 
 import base64
 import io
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
 from typing import Any
 
 import fitz

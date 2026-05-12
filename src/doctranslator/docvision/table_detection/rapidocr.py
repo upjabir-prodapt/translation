@@ -6,10 +6,11 @@ from collections.abc import Generator
 import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
-
 from src.doctranslator.docvision.base_doclayout import YoloBox
 from src.doctranslator.docvision.base_doclayout import YoloResult
-from src.doctranslator.format.pdf.document_il.utils.mupdf_helper import get_no_rotation_img
+from src.doctranslator.format.pdf.document_il.utils.mupdf_helper import (
+    get_no_rotation_img,
+)
 from src.loaders.assets import get_table_detection_rapidocr_model_path
 
 try:
@@ -22,7 +23,6 @@ except ImportError as e:
         ) from e
     raise
 import pymupdf
-
 import src.doctranslator.format.pdf.document_il.il_version_1
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,9 @@ class RapidOCRModel:
         translate_config,
         save_debug_image,
     ) -> Generator[
-        tuple[src.doctranslator.format.pdf.document_il.il_version_1.Page, YoloResult], None, None
+        tuple[src.doctranslator.format.pdf.document_il.il_version_1.Page, YoloResult],
+        None,
+        None,
     ]:
         for page in pages:
             translate_config.raise_if_cancelled()
@@ -255,9 +257,7 @@ class RapidOCRModel:
                 # Check if this box is inside any of the table boxes
                 for table_box in table_boxes:
                     # Determine if box is inside or overlapping with table_box with image dimensions
-                    if self._is_box_in_table(
-                        box_xyxy, table_box, image.shape[0]
-                    ):
+                    if self._is_box_in_table(box_xyxy, table_box, image.shape[0]):
                         ok_boxes.append(box)
                         break
 

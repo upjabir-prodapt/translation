@@ -64,7 +64,9 @@ def get_model_selection_entries() -> list[dict[str, Any]]:
     elif isinstance(raw_data, list):
         raw_entries = [item for item in raw_data if isinstance(item, dict)]
     else:
-        raise ValueError("model_selection.json must contain an object or a list of objects")
+        raise ValueError(
+            "model_selection.json must contain an object or a list of objects"
+        )
 
     normalized_entries: list[dict[str, Any]] = []
     for entry in raw_entries:

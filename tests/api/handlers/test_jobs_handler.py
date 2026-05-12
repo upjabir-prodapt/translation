@@ -1,14 +1,19 @@
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+
 import pytest
 from src.api.handlers.jobs_handler import JobsHandler
-from unittest.mock import AsyncMock, MagicMock
+
 
 @pytest.fixture
 def mock_service():
     return AsyncMock()
 
+
 @pytest.fixture
 def handler(mock_service):
     return JobsHandler(job_service=mock_service)
+
 
 class TestJobsHandler:
     async def test_get_job_status(self, handler, mock_service):

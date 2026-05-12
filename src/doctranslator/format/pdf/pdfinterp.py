@@ -457,8 +457,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
     def _format_args(args) -> str:
         """Format a list of arguments as a PDF operand string."""
         return " ".join(
-            f"{x:f}" if isinstance(x, float) else str(x).replace("'", "")
-            for x in args
+            f"{x:f}" if isinstance(x, float) else str(x).replace("'", "") for x in args
         )
 
     def _build_ops_for_args_op(self, name: str, args) -> str:

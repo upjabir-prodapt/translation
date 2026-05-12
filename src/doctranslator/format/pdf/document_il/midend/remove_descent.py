@@ -77,6 +77,7 @@ class RemoveDescent:
 
     def _make_get_font(self, fonts):
         """Return a cached font-lookup closure for the given font map."""
+
         @cache
         def get_font(
             font_id: str,
@@ -91,23 +92,37 @@ class RemoveDescent:
                 if isinstance(fonts.get(font_id), il_version_1.PdfFont)
                 else None
             )
+
         return get_font
 
-    def _process_chars_in_composition(self, comp, get_font, descent_values, vertical_chars):
+    def _process_chars_in_composition(
+        self, comp, get_font, descent_values, vertical_chars
+    ):
         """Remove descent from all characters in a single composition and collect results."""
         if comp.pdf_character:
-            font = get_font(comp.pdf_character.pdf_style.font_id, comp.pdf_character.xobj_id)
+            font = get_font(
+                comp.pdf_character.pdf_style.font_id, comp.pdf_character.xobj_id
+            )
             if font:
                 descent = self._remove_char_descent(comp.pdf_character, font)
                 if descent is not None:
                     descent_values.append(descent)
                     vertical_chars.append(comp.pdf_character.vertical)
         elif comp.pdf_line:
-            self._process_char_list(comp.pdf_line.pdf_character, get_font, descent_values, vertical_chars)
+            self._process_char_list(
+                comp.pdf_line.pdf_character, get_font, descent_values, vertical_chars
+            )
         elif comp.pdf_formula:
-            self._process_char_list(comp.pdf_formula.pdf_character, get_font, descent_values, vertical_chars)
+            self._process_char_list(
+                comp.pdf_formula.pdf_character, get_font, descent_values, vertical_chars
+            )
         elif comp.pdf_same_style_characters:
-            self._process_char_list(comp.pdf_same_style_characters.pdf_character, get_font, descent_values, vertical_chars)
+            self._process_char_list(
+                comp.pdf_same_style_characters.pdf_character,
+                get_font,
+                descent_values,
+                vertical_chars,
+            )
 
     def _process_char_list(self, chars, get_font, descent_values, vertical_chars):
         """Remove descent from a list of characters and collect descent/vertical data."""
@@ -151,5 +166,7 @@ class RemoveDescent:
             descent_values: list[float] = []
             vertical_chars: list[bool] = []
             for comp in paragraph.pdf_paragraph_composition:
-                self._process_chars_in_composition(comp, get_font, descent_values, vertical_chars)
+                self._process_chars_in_composition(
+                    comp, get_font, descent_values, vertical_chars
+                )
             self._adjust_paragraph_box(paragraph, descent_values, vertical_chars)

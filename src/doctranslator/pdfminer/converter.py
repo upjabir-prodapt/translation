@@ -184,9 +184,9 @@ class PDFLayoutAnalyzer(PDFTextDevice):
         """Paint a rectangle if pts form a closed rectangle, otherwise a curve."""
         (x0, y0), (x1, y1), (x2, y2), (x3, y3), _ = pts
         is_closed_loop = pts[0] == pts[4]
-        has_square_coordinates = (
-            x0 == x1 and y1 == y2 and x2 == x3 and y3 == y0
-        ) or (y0 == y1 and x1 == x2 and y2 == y3 and x3 == x0)
+        has_square_coordinates = (x0 == x1 and y1 == y2 and x2 == x3 and y3 == y0) or (
+            y0 == y1 and x1 == x2 and y2 == y3 and x3 == x0
+        )
         if is_closed_loop and has_square_coordinates:
             rect = LTRect(
                 gstate.linewidth,
@@ -209,8 +209,16 @@ class PDFLayoutAnalyzer(PDFTextDevice):
         else:
             self.cur_item.add(
                 self._make_curve(
-                    gstate, stroke, fill, evenodd, pts, transformed_path,
-                    passthrough_instruction, xobj_id, current_clip_paths, path,
+                    gstate,
+                    stroke,
+                    fill,
+                    evenodd,
+                    pts,
+                    transformed_path,
+                    passthrough_instruction,
+                    xobj_id,
+                    current_clip_paths,
+                    path,
                 )
             )
 
@@ -276,19 +284,43 @@ class PDFLayoutAnalyzer(PDFTextDevice):
                 # Note: 'ml', in conditional above, is a frequent anomaly
                 # that we want to support.
                 self._paint_line(
-                    gstate, stroke, fill, evenodd, pts, transformed_path,
-                    passthrough_instruction, xobj_id, current_clip_paths, path,
+                    gstate,
+                    stroke,
+                    fill,
+                    evenodd,
+                    pts,
+                    transformed_path,
+                    passthrough_instruction,
+                    xobj_id,
+                    current_clip_paths,
+                    path,
                 )
             elif shape in {"mlllh", "mllll"}:
                 self._paint_rect_or_curve(
-                    gstate, stroke, fill, evenodd, pts, transformed_path,
-                    passthrough_instruction, xobj_id, current_clip_paths, path,
+                    gstate,
+                    stroke,
+                    fill,
+                    evenodd,
+                    pts,
+                    transformed_path,
+                    passthrough_instruction,
+                    xobj_id,
+                    current_clip_paths,
+                    path,
                 )
             else:
                 self.cur_item.add(
                     self._make_curve(
-                        gstate, stroke, fill, evenodd, pts, transformed_path,
-                        passthrough_instruction, xobj_id, current_clip_paths, path,
+                        gstate,
+                        stroke,
+                        fill,
+                        evenodd,
+                        pts,
+                        transformed_path,
+                        passthrough_instruction,
+                        xobj_id,
+                        current_clip_paths,
+                        path,
                     )
                 )
 
@@ -819,8 +851,7 @@ class XMLConverter(PDFConverter[AnyIO]):
             )
         else:
             self.write(
-                '<image width="%d" height="%d" />\n'
-                % (item.width, item.height),
+                '<image width="%d" height="%d" />\n' % (item.width, item.height),
             )
 
     def _render_xml_item(self, item: "LTItem", render: "Any") -> None:
@@ -841,11 +872,20 @@ class XMLConverter(PDFConverter[AnyIO]):
                 self.write("</layout>\n")
             self.write("</page>\n")
         elif isinstance(item, LTLine):
-            self.write('<line linewidth="%d" bbox="%s" />\n' % (item.linewidth, bbox2str(item.bbox)))
+            self.write(
+                '<line linewidth="%d" bbox="%s" />\n'
+                % (item.linewidth, bbox2str(item.bbox))
+            )
         elif isinstance(item, LTRect):
-            self.write('<rect linewidth="%d" bbox="%s" />\n' % (item.linewidth, bbox2str(item.bbox)))
+            self.write(
+                '<rect linewidth="%d" bbox="%s" />\n'
+                % (item.linewidth, bbox2str(item.bbox))
+            )
         elif isinstance(item, LTCurve):
-            self.write('<curve linewidth="%d" bbox="%s" pts="%s"/>\n' % (item.linewidth, bbox2str(item.bbox), item.get_pts()))
+            self.write(
+                '<curve linewidth="%d" bbox="%s" pts="%s"/>\n'
+                % (item.linewidth, bbox2str(item.bbox), item.get_pts())
+            )
         elif isinstance(item, LTFigure):
             self.write(f'<figure name="{item.name}" bbox="{bbox2str(item.bbox)}">\n')
             for child in item:
@@ -858,7 +898,10 @@ class XMLConverter(PDFConverter[AnyIO]):
             self.write("</textline>\n")
         elif isinstance(item, LTTextBox):
             wmode = ' wmode="vertical"' if isinstance(item, LTTextBoxVertical) else ""
-            self.write('<textbox id="%d" bbox="%s"%s>\n' % (item.index, bbox2str(item.bbox), wmode))
+            self.write(
+                '<textbox id="%d" bbox="%s"%s>\n'
+                % (item.index, bbox2str(item.bbox), wmode)
+            )
             for child in item:
                 render(child)
             self.write("</textbox>\n")
@@ -866,7 +909,13 @@ class XMLConverter(PDFConverter[AnyIO]):
             s = (
                 '<text font="%s" bbox="%s" colourspace="%s" '
                 'ncolour="%s" size="%.3f">'
-                % (enc(item.fontname), bbox2str(item.bbox), item.ncs.name, item.graphicstate.ncolor, item.size)
+                % (
+                    enc(item.fontname),
+                    bbox2str(item.bbox),
+                    item.ncs.name,
+                    item.graphicstate.ncolor,
+                    item.size,
+                )
             )
             self.write(s)
             self.write_text(item.get_text())

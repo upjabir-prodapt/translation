@@ -66,7 +66,9 @@ class FontMapper:
             try:
                 font_path, font_metadata = assets.get_font_and_metadata(font_file_name)
             except MetadataNotFoundError as exc:
-                logger.warning(f"Skipping unavailable font metadata for {font_file_name}: {exc}")
+                logger.warning(
+                    f"Skipping unavailable font metadata for {font_file_name}: {exc}"
+                )
                 continue
             pymupdf_font = pymupdf.Font(fontfile=str(font_path))
             pymupdf_font.has_glyph = functools.lru_cache(maxsize=10240, typed=True)(
@@ -97,10 +99,18 @@ class FontMapper:
             raise RuntimeError("No usable fonts loaded from metadata/cache")
 
         loaded_font_ids = set(self.fontid2fontpath.keys())
-        self.normal_font_ids = [font_id for font_id in font_family.normal if font_id in loaded_font_ids]
-        self.script_font_ids = [font_id for font_id in font_family.script if font_id in loaded_font_ids]
-        self.fallback_font_ids = [font_id for font_id in font_family.fallback if font_id in loaded_font_ids]
-        self.base_font_ids = [font_id for font_id in font_family.base if font_id in loaded_font_ids]
+        self.normal_font_ids = [
+            font_id for font_id in font_family.normal if font_id in loaded_font_ids
+        ]
+        self.script_font_ids = [
+            font_id for font_id in font_family.script if font_id in loaded_font_ids
+        ]
+        self.fallback_font_ids = [
+            font_id for font_id in font_family.fallback if font_id in loaded_font_ids
+        ]
+        self.base_font_ids = [
+            font_id for font_id in font_family.base if font_id in loaded_font_ids
+        ]
 
         if not self.normal_font_ids:
             self.normal_font_ids = list(loaded_font_ids)

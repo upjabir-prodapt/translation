@@ -1,11 +1,12 @@
+import io
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from src.api.utils.pdf_validator import PDFValidator
-from src.api.exceptions import ValidationError
-import fitz
 from fastapi import UploadFile
-import io
+from src.api.exceptions import ValidationError
+from src.api.utils.pdf_validator import PDFValidator
+
 
 class TestPDFValidator:
     def test_validate_pdf_bytes_too_large(self):
@@ -13,7 +14,9 @@ class TestPDFValidator:
             # Set a threshold large enough to be non-zero in MB formatting (e.g. 2MB)
             mock_settings.MAX_FILE_SIZE = 2 * 1024 * 1024
             with pytest.raises(ValidationError, match="File size exceeds 2MB limit"):
-                PDFValidator.validate_pdf_bytes(b"a" * (2 * 1024 * 1024 + 1), "test.pdf")
+                PDFValidator.validate_pdf_bytes(
+                    b"a" * (2 * 1024 * 1024 + 1), "test.pdf"
+                )
 
     @patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata")
     def test_validate_pdf_bytes_success(self, mock_extract):
@@ -41,7 +44,7 @@ class TestPDFValidator:
         mock_doc.is_encrypted = False
         mock_doc.needs_pass = False
         mock_open.return_value = mock_doc
-        
+
         metadata = PDFValidator.extract_pdf_metadata(b"fake-content")
         assert metadata["page_count"] == 5
         assert metadata["title"] == "Test"
@@ -56,7 +59,11 @@ class TestPDFValidator:
     async def test_validate_pdf_file_success(self):
         file_content = b"%PDF-1.4\n%%EOF"
         file = UploadFile(filename="test.pdf", file=io.BytesIO(file_content))
-        with patch.object(PDFValidator, "extract_pdf_metadata", return_value={"page_count": 1, "encrypted": False}):
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            return_value={"page_count": 1, "encrypted": False},
+        ):
             content, metadata = await PDFValidator.validate_pdf_file(file)
             assert content == file_content
             assert metadata["page_count"] == 1

@@ -217,8 +217,18 @@ class PDFTextDevice(PDFDevice):
             elif isinstance(obj, bytes):
                 x, needcharspace = self._render_chars_horizontal(
                     font.decode(obj),
-                    x, y, matrix, font, fontsize, scaling,
-                    charspace, wordspace, rise, ncs, graphicstate, needcharspace,
+                    x,
+                    y,
+                    matrix,
+                    font,
+                    fontsize,
+                    scaling,
+                    charspace,
+                    wordspace,
+                    rise,
+                    ncs,
+                    graphicstate,
+                    needcharspace,
                 )
             else:
                 logger.warning(
@@ -284,8 +294,18 @@ class PDFTextDevice(PDFDevice):
             elif isinstance(obj, bytes):
                 y, needcharspace = self._render_chars_vertical(
                     font.decode(obj),
-                    x, y, matrix, font, fontsize, scaling,
-                    charspace, wordspace, rise, ncs, graphicstate, needcharspace,
+                    x,
+                    y,
+                    matrix,
+                    font,
+                    fontsize,
+                    scaling,
+                    charspace,
+                    wordspace,
+                    rise,
+                    ncs,
+                    graphicstate,
+                    needcharspace,
                 )
             else:
                 logger.warning(

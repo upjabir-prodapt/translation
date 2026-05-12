@@ -1,6 +1,7 @@
 """Translation endpoints."""
 
 import base64
+from typing import Annotated
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -18,13 +19,11 @@ from src.api.schemas.requests import DocumentInput
 from src.api.schemas.requests import ProcessingOptions
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.requests import TranslationConfigInput
-from src.api.schemas.responses import TranslateResponse
 from src.api.schemas.responses import JobDetailResponse
+from src.api.schemas.responses import TranslateResponse
 
 router = APIRouter()
 
-
-from typing import Annotated
 
 @router.post("/translate", response_model=TranslateResponse, tags=["translation"])
 async def submit_translation(
@@ -35,7 +34,9 @@ async def submit_translation(
     enable_dlp: Annotated[bool, Form()] = True,
     enable_chunking: Annotated[bool, Form()] = True,
     priority: Annotated[str, Form()] = "standard",
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user_context)] = None,  # noqa: B008
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
     handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
 ):
     """Submit a document for translation via multipart upload and bearer auth."""
@@ -45,9 +46,7 @@ async def submit_translation(
     request = TranslateRequest(
         document=DocumentInput(
             content=base64.b64encode(content).decode("utf-8"),
-            format="docx"
-            if (file.filename or "").lower().endswith(".docx")
-            else "pdf",
+            format="docx" if (file.filename or "").lower().endswith(".docx") else "pdf",
             filename=file.filename or "document.pdf",
         ),
         translation_config=TranslationConfigInput(
@@ -69,14 +68,15 @@ async def submit_translation(
     return await handler.submit_translation(request)
 
 
-@router.get("/translate/{job_id}", response_model=JobDetailResponse, tags=["translation"])
+@router.get(
+    "/translate/{job_id}", response_model=JobDetailResponse, tags=["translation"]
+)
 async def get_translation_status(
     job_id: str,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user_context)] = None,  # noqa: B008
+    _current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
     handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
 ):
     """Get the status of a translation job."""
     return await handler.get_translation_status(job_id)
-
-
-

@@ -1,7 +1,6 @@
 """API request schemas."""
 
 import base64
-import binascii
 from typing import ClassVar
 from typing import Literal
 

@@ -62,7 +62,9 @@ def _composition_is_whitespace_only(composition) -> bool:
     if composition.pdf_character:
         return composition.pdf_character.char_unicode.isspace()
     if composition.pdf_line:
-        return all(char.char_unicode.isspace() for char in composition.pdf_line.pdf_character)
+        return all(
+            char.char_unicode.isspace() for char in composition.pdf_line.pdf_character
+        )
     if composition.pdf_same_style_characters:
         return all(
             char.char_unicode.isspace()

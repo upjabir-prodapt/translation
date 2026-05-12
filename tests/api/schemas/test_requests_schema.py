@@ -5,19 +5,15 @@ Unit tests for api/schemas/requests.py — Pydantic request validation models.
 import base64
 
 import pytest
-from pydantic import ValidationError as PydanticValidationError
-
-from src.api.schemas.requests import (
-    CostAttributionInput,
-    DocumentInput,
-    JobCancelRequest,
-    JobListRequest,
-    ProcessingOptions,
-    TranslateRequest,
-    TranslationConfigInput,
-)
 from fixtures.sample_data import VALID_PDF_B64
-
+from pydantic import ValidationError as PydanticValidationError
+from src.api.schemas.requests import CostAttributionInput
+from src.api.schemas.requests import DocumentInput
+from src.api.schemas.requests import JobCancelRequest
+from src.api.schemas.requests import JobListRequest
+from src.api.schemas.requests import ProcessingOptions
+from src.api.schemas.requests import TranslateRequest
+from src.api.schemas.requests import TranslationConfigInput
 
 # ---------------------------------------------------------------------------
 # DocumentInput
@@ -198,7 +194,7 @@ class TestTranslateRequest:
                     user_id="user-1",
                     business_unit="bu-1",
                     organization="org-1",
-                )
+                ),
             )
 
     def test_missing_translation_config_raises(self):

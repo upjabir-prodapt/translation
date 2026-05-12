@@ -1,17 +1,17 @@
 """Security utilities for authentication and authorization."""
 
+import logging
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-import logging
 from typing import Any
 
-from fastapi import HTTPException
+import jwt
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import status
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security import HTTPBearer
-import jwt
 from jwt import InvalidTokenError
 from pydantic import BaseModel
 
@@ -88,7 +88,7 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-async def verify_token(
+def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> dict[str, Any]:
     """Verify bearer token and return JWT payload."""

@@ -1,6 +1,5 @@
-import pytest
-from pathlib import Path
-from src.api.services.temp_workspace_service import TempWorkspaceService, JobWorkspace
+from src.api.services.temp_workspace_service import TempWorkspaceService
+
 
 class TestTempWorkspaceService:
     def test_init(self, tmp_path):

@@ -1,14 +1,18 @@
-
-import pytest
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from src.loaders.repositories.metadata_repository import (
-    _load_json_file, get_font_metadata, get_cmap_metadata,
-    _cache_lock, get_font_metadata_by_name, clear_metadata_cache,
-    EMBEDDING_FONT_METADATA, CMAP_METADATA
-)
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
 from src.loaders.exceptions import MetadataNotFoundError
+from src.loaders.repositories.metadata_repository import CMAP_METADATA
+from src.loaders.repositories.metadata_repository import EMBEDDING_FONT_METADATA
+from src.loaders.repositories.metadata_repository import _load_json_file
+from src.loaders.repositories.metadata_repository import clear_metadata_cache
+from src.loaders.repositories.metadata_repository import get_cmap_metadata
+from src.loaders.repositories.metadata_repository import get_font_metadata
+from src.loaders.repositories.metadata_repository import get_font_metadata_by_name
+
 
 class TestMetadataRepository:
     def test_load_json_file_success(self, tmp_path):
@@ -30,33 +34,65 @@ class TestMetadataRepository:
     def test_get_font_metadata_success(self, tmp_path):
         # Reset cache
         clear_metadata_cache()
-        with patch("src.loaders.repositories.metadata_repository.get_cache_file_path") as mock_path:
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_cache_file_path"
+        ) as mock_path:
             p = tmp_path / "fonts.json"
-            p.write_text(json.dumps({"arial.ttf": {"sha3_256": "abc", "size": 100, "url": "u", "font_name": "Arial"}}))
+            p.write_text(
+                json.dumps(
+                    {
+                        "arial.ttf": {
+                            "sha3_256": "abc",
+                            "size": 100,
+                            "url": "u",
+                            "font_name": "Arial",
+                        }
+                    }
+                )
+            )
             mock_path.return_value = p
-            
+
             meta = get_font_metadata()
             assert "arial.ttf" in meta
             assert meta["arial.ttf"].sha3_256 == "abc"
 
     def test_get_font_metadata_not_found(self, tmp_path):
         clear_metadata_cache()
-        with patch("src.loaders.repositories.metadata_repository.get_cache_file_path", return_value=Path("/nonexistent")):
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_cache_file_path",
+            return_value=Path("/nonexistent"),
+        ):
             meta = get_font_metadata()
             assert meta == {}
 
     def test_get_cmap_metadata_success(self, tmp_path):
         clear_metadata_cache()
-        with patch("src.loaders.repositories.metadata_repository.get_cache_file_path") as mock_path:
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_cache_file_path"
+        ) as mock_path:
             p = tmp_path / "cmap.json"
-            p.write_text(json.dumps({"UniGB": {"sha3_256": "abc", "size": 10, "url": "u", "cmap_name": "Uni"}}))
+            p.write_text(
+                json.dumps(
+                    {
+                        "UniGB": {
+                            "sha3_256": "abc",
+                            "size": 10,
+                            "url": "u",
+                            "cmap_name": "Uni",
+                        }
+                    }
+                )
+            )
             mock_path.return_value = p
-            
+
             meta = get_cmap_metadata()
             assert "UniGB" in meta
 
     def test_get_font_metadata_by_name(self):
-        with patch("src.loaders.repositories.metadata_repository.get_font_metadata", return_value={"a": MagicMock()}):
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_font_metadata",
+            return_value={"a": MagicMock()},
+        ):
             assert get_font_metadata_by_name("a") is not None
             assert get_font_metadata_by_name("b") is None
 
@@ -70,9 +106,17 @@ class TestMetadataRepository:
         mock_meta.url = "u"
         mock_meta.font_name = "Arial"
         mock_meta.subset_font_path = "p"
-        
-        with patch("src.loaders.repositories.metadata_repository.get_font_metadata_by_name", return_value=mock_meta), \
-             patch("src.loaders.repositories.metadata_repository.get_font_metadata", return_value={"test": mock_meta}):
+
+        with (
+            patch(
+                "src.loaders.repositories.metadata_repository.get_font_metadata_by_name",
+                return_value=mock_meta,
+            ),
+            patch(
+                "src.loaders.repositories.metadata_repository.get_font_metadata",
+                return_value={"test": mock_meta},
+            ),
+        ):
             res = EMBEDDING_FONT_METADATA["test"]
             assert res["sha3_256"] == "abc"
             assert "test" in EMBEDDING_FONT_METADATA
@@ -82,7 +126,10 @@ class TestMetadataRepository:
             assert list(EMBEDDING_FONT_METADATA.items())[0][0] == "test"
 
     def test_font_metadata_proxy_key_error(self):
-        with patch("src.loaders.repositories.metadata_repository.get_font_metadata_by_name", return_value=None):
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_font_metadata_by_name",
+            return_value=None,
+        ):
             with pytest.raises(KeyError):
                 _ = EMBEDDING_FONT_METADATA["missing"]
 
@@ -92,9 +139,17 @@ class TestMetadataRepository:
         mock_meta.size = 10
         mock_meta.url = "u"
         mock_meta.cmap_name = "Uni"
-        
-        with patch("src.loaders.repositories.metadata_repository.get_cmap_metadata_by_name", return_value=mock_meta), \
-             patch("src.loaders.repositories.metadata_repository.get_cmap_metadata", return_value={"UniGB": mock_meta}):
+
+        with (
+            patch(
+                "src.loaders.repositories.metadata_repository.get_cmap_metadata_by_name",
+                return_value=mock_meta,
+            ),
+            patch(
+                "src.loaders.repositories.metadata_repository.get_cmap_metadata",
+                return_value={"UniGB": mock_meta},
+            ),
+        ):
             res = CMAP_METADATA["UniGB"]
             assert res["sha3_256"] == "abc"
             assert "UniGB" in CMAP_METADATA
@@ -104,6 +159,9 @@ class TestMetadataRepository:
             assert list(CMAP_METADATA.items())[0][0] == "UniGB"
 
     def test_cmap_metadata_proxy_key_error(self):
-        with patch("src.loaders.repositories.metadata_repository.get_cmap_metadata_by_name", return_value=None):
+        with patch(
+            "src.loaders.repositories.metadata_repository.get_cmap_metadata_by_name",
+            return_value=None,
+        ):
             with pytest.raises(KeyError):
                 _ = CMAP_METADATA["missing"]

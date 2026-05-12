@@ -1,11 +1,16 @@
-import pytest
-from src.api.services.quality_judge_service import (
-    GoogleADKJudgeAgent, QualityJudgeResult, QualityJudgeLLMScores,
-    _compute_alignment_score, _split_sentences, extract_attempt_text
-)
-from unittest.mock import MagicMock, patch, mock_open
-from pathlib import Path
 import json
+from pathlib import Path
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+from src.api.services.quality_judge_service import GoogleADKJudgeAgent
+from src.api.services.quality_judge_service import QualityJudgeLLMScores
+from src.api.services.quality_judge_service import QualityJudgeResult
+from src.api.services.quality_judge_service import _compute_alignment_score
+from src.api.services.quality_judge_service import _split_sentences
+from src.api.services.quality_judge_service import extract_attempt_text
+
 
 class TestQualityJudgeService:
     def test_split_sentences(self):
@@ -27,7 +32,10 @@ class TestQualityJudgeService:
     @patch.object(GoogleADKJudgeAgent, "_judge_with_llm")
     def test_evaluate_success(self, mock_judge, mock_settings):
         mock_judge.return_value = {
-            "alignment_score": 1.0, "omission_score": 1.0, "hallucination_score": 1.0, "reasons": ["R1"]
+            "alignment_score": 1.0,
+            "omission_score": 1.0,
+            "hallucination_score": 1.0,
+            "reasons": ["R1"],
         }
         agent = GoogleADKJudgeAgent()
         res = agent.evaluate(source_text="s", translated_text="t")
@@ -40,6 +48,7 @@ class TestQualityJudgeService:
         agent = GoogleADKJudgeAgent()
         with patch.object(agent, "evaluate", return_value=MagicMock()) as mock_eval:
             import asyncio
+
             asyncio.run(agent.evaluate_async(source_text="s", translated_text="t"))
             mock_eval.assert_called_once()
 
@@ -59,13 +68,13 @@ class TestQualityJudgeService:
                 {
                     "paragraph": [
                         {"input": "Hello", "output": "Bonjour"},
-                        {"pdf_unicode": "World", "output": "Monde"}
+                        {"pdf_unicode": "World", "output": "Monde"},
                     ]
                 }
             ]
         }
         tracking_file.write_text(json.dumps(tracking_data))
-        
+
         src, tgt = extract_attempt_text(working_dir)
         assert src == "Hello\nWorld"
         assert tgt == "Bonjour\nMonde"
@@ -82,6 +91,7 @@ class TestQualityJudgeService:
         src, tgt = extract_attempt_text(working_dir)
         assert src == ""
         assert tgt == ""
+
 
 @pytest.fixture
 def mock_settings():

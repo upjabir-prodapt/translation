@@ -11,10 +11,9 @@ from pathlib import Path
 
 import orjson
 import pymupdf
-from rich.logging import RichHandler
-
 import src.doctranslator.format.pdf.high_level
 import src.doctranslator.format.pdf.translation_config
+from rich.logging import RichHandler
 from src.doctranslator.format.pdf.document_il import PdfFont
 
 logger = logging.getLogger(__name__)
@@ -31,12 +30,16 @@ def get_font_metadata(font_path) -> PdfFont:
     doc = pymupdf.open()
     page = doc.new_page(width=1000, height=1000)
     page.insert_font("test_font", font_path)
-    translation_config = src.doctranslator.format.pdf.translation_config.TranslationConfig(
-        *[None for _ in range(4)], doc_layout_model=1
+    translation_config = (
+        src.doctranslator.format.pdf.translation_config.TranslationConfig(
+            *[None for _ in range(4)], doc_layout_model=1
+        )
     )
     translation_config.progress_monitor = (
         src.doctranslator.format.pdf.high_level.ProgressMonitor(
-            src.doctranslator.format.pdf.high_level.get_translation_stage(translation_config)
+            src.doctranslator.format.pdf.high_level.get_translation_stage(
+                translation_config
+            )
         )
     )
     translation_config.font = font_path

@@ -1,5 +1,7 @@
 """Job management endpoints."""
 
+from typing import Annotated
+
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
@@ -16,17 +18,19 @@ from src.api.schemas.responses import JobStatusResponse
 router = APIRouter(dependencies=[Depends(get_current_user_context)])
 
 
-from typing import Annotated
-
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse, tags=["jobs"])
-async def get_job_status(job_id: str, handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None):  # noqa: B008
+async def get_job_status(
+    job_id: str, handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None
+):  # noqa: B008
     """Get the status of a translation job."""
     return await handler.get_job_status(job_id)
 
 
 @router.get("/jobs", response_model=JobListResponse, tags=["jobs"])
 async def list_jobs(
-    status: Annotated[str | None, Query(pattern="^(queued|processing|completed|failed|cancelled)$")] = None,
+    status: Annotated[
+        str | None, Query(pattern="^(queued|processing|completed|failed|cancelled)$")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     offset: Annotated[int, Query(ge=0)] = 0,
     handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008

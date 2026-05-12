@@ -1,8 +1,10 @@
-import pytest
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from src.api.exceptions import ConfigurationError
+from src.api.exceptions import JobNotFoundError
+from src.api.exceptions import ValidationError
 from src.api.middleware.exception_handler import handle_exception
-from src.api.exceptions import ValidationError, JobNotFoundError, ConfigurationError
+
 
 class TestExceptionHandler:
     def test_handle_http_exception(self):
@@ -12,7 +14,9 @@ class TestExceptionHandler:
         assert resp.body == b'{"error":{"message":"Forbidden","code":"HTTP_ERROR"}}'
 
     def test_handle_request_validation_error(self):
-        exc = RequestValidationError(errors=[{"loc": ("body", "f"), "msg": "err", "type": "t"}])
+        exc = RequestValidationError(
+            errors=[{"loc": ("body", "f"), "msg": "err", "type": "t"}]
+        )
         resp = handle_exception(exc)
         assert resp.status_code == 422
 

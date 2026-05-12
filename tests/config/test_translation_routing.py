@@ -1,8 +1,12 @@
+from unittest.mock import patch
+
 import pytest
-from src.config.translation_routing import normalize_language, normalize_domain, select_model_list, get_language_mapper, get_model_selection_entries
-from unittest.mock import patch, MagicMock
-from pathlib import Path
-import json
+from src.config.translation_routing import get_language_mapper
+from src.config.translation_routing import get_model_selection_entries
+from src.config.translation_routing import normalize_domain
+from src.config.translation_routing import normalize_language
+from src.config.translation_routing import select_model_list
+
 
 class TestTranslationRouting:
     def test_normalize_domain_success(self):
@@ -24,17 +28,22 @@ class TestTranslationRouting:
             get_language_mapper.cache_clear()
 
     def test_normalize_language_success(self):
-        with patch("src.config.translation_routing.get_language_mapper", return_value={"en": "en", "english": "en"}):
+        with patch(
+            "src.config.translation_routing.get_language_mapper",
+            return_value={"en": "en", "english": "en"},
+        ):
             assert normalize_language("English") == "en"
 
     @patch("src.config.translation_routing.get_model_selection_entries")
     def test_select_model_list_success(self, mock_get_entries):
-        mock_get_entries.return_value = [{
-            "source_language": "en",
-            "target_language": "fr",
-            "domain": "legal",
-            "model_chain": [{"model_id": "m1", "priority": 1}]
-        }]
+        mock_get_entries.return_value = [
+            {
+                "source_language": "en",
+                "target_language": "fr",
+                "domain": "legal",
+                "model_chain": [{"model_id": "m1", "priority": 1}],
+            }
+        ]
         models = select_model_list("en", "fr", "legal")
         assert models == ["m1"]
 
@@ -48,13 +57,18 @@ class TestTranslationRouting:
     def test_get_model_selection_entries_list(self, mock_load):
         get_model_selection_entries.cache_clear()
         try:
-            mock_load.return_value = [{
-                "source_language": "English",
-                "target_language": "French",
-                "domain": "legal",
-                "model_chain": [{"model_id": "m1"}]
-            }]
-            with patch("src.config.translation_routing.normalize_language", side_effect=["en", "fr"]):
+            mock_load.return_value = [
+                {
+                    "source_language": "English",
+                    "target_language": "French",
+                    "domain": "legal",
+                    "model_chain": [{"model_id": "m1"}],
+                }
+            ]
+            with patch(
+                "src.config.translation_routing.normalize_language",
+                side_effect=["en", "fr"],
+            ):
                 res = get_model_selection_entries()
                 assert len(res) == 1
                 assert res[0]["source_language"] == "en"
@@ -70,4 +84,3 @@ class TestTranslationRouting:
                 get_model_selection_entries()
         finally:
             get_model_selection_entries.cache_clear()
-

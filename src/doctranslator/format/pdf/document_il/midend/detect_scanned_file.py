@@ -6,7 +6,9 @@ import pymupdf
 import regex
 from skimage.metrics import structural_similarity
 
-from src.doctranslator.doctranslator_exception.DocTranslatorException import ScannedPDFError
+from src.doctranslator.doctranslator_exception.DocTranslatorException import (
+    ScannedPDFError,
+)
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
 from src.doctranslator.format.pdf.document_il.utils.style_helper import BLACK

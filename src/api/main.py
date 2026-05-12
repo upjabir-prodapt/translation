@@ -16,7 +16,7 @@ from src.api.routes.router import api_router
 from src.api.services.startup_assets_service import StartupAssetsService
 from src.api.services.startup_assets_service import create_background_task
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 
 # Track startup time
 app_start_time = datetime.now(UTC)

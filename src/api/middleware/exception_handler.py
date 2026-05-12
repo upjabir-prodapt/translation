@@ -1,5 +1,7 @@
 """Global exception handling middleware."""
 
+import asyncio
+
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
@@ -14,7 +16,7 @@ from src.api.exceptions import JobNotFoundError
 from src.api.exceptions import StorageError
 from src.api.exceptions import TranslationError
 from src.api.exceptions import ValidationError
-from src.config.logging import logger
+from src.config.logging_config import logger
 
 
 async def exception_handler_middleware(request: Request, call_next):
@@ -22,11 +24,24 @@ async def exception_handler_middleware(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as exc:
+        # Handle coroutines that were raised instead of exceptions
+        if asyncio.iscoroutine(exc):
+            try:
+                await exc
+            except Exception as nested_exc:
+                return handle_exception(nested_exc)
+            return handle_exception(RuntimeError("Coroutine was raised as exception"))
         return handle_exception(exc)
 
 
 def handle_exception(exc: Exception) -> JSONResponse:
     """Handle exceptions and return appropriate JSON responses."""
+
+    # Safely convert exception to string
+    try:
+        exc_str = str(exc)
+    except Exception:
+        exc_str = repr(exc)
 
     # Pass through FastAPI/Starlette HTTP exceptions unchanged
     if isinstance(exc, HTTPException):
@@ -117,22 +132,22 @@ def handle_exception(exc: Exception) -> JSONResponse:
 
     # ValueError from language/domain normalization surfaced outside service layer
     if isinstance(exc, ValueError):
-        logger.warning("Value error: {}", exc)
+        logger.warning("Value error: {}", exc_str)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            content={"error": {"message": str(exc), "code": "VALIDATION_ERROR"}},
+            content={"error": {"message": exc_str, "code": "VALIDATION_ERROR"}},
         )
 
     # RuntimeError from missing config (e.g. language_mapper.json not found)
     if isinstance(exc, RuntimeError):
-        logger.error(f"Runtime error: {exc}", exc_info=True)
+        logger.error(f"Runtime error: {exc_str}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": {"message": str(exc), "code": "CONFIGURATION_ERROR"}},
+            content={"error": {"message": exc_str, "code": "CONFIGURATION_ERROR"}},
         )
 
     # Unknown exceptions
-    logger.error("Unhandled exception: {}", exc, exc_info=True)
+    logger.error("Unhandled exception: {}", exc_str, exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

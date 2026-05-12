@@ -2,10 +2,10 @@
 
 from datetime import UTC
 from datetime import datetime
-from typing import Protocol
 from typing import Any
+from typing import Protocol
 
-from src.config.logging import logger
+from src.config.logging_config import logger
 
 
 class JobUpdater(Protocol):
@@ -67,4 +67,3 @@ class ProgressTracker:
             )
         except Exception:
             logger.exception(f"Failed to mark job {self.job_id} as failed")
-

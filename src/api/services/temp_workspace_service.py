@@ -63,4 +63,3 @@ class TempWorkspaceService:
         root = self._root / job_id
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)
-

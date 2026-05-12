@@ -42,14 +42,13 @@ CN_FONT_FAMILY = FontFamilyConfig(
         "SourceHanSerifCN-Bold.ttf",
         "SourceHanSerifCN-Regular.ttf",
         "SourceHanSansCN-Bold.ttf",
-<<<<<<< HEAD
         "SourceHanSansCN-Regular.ttf",
     ],
+    fallback=[
         GO_NOTO_KURRENT_REGULAR,
         GO_NOTO_KURRENT_BOLD,
     ],
     base=[SOURCE_HAN_SANS_CN_REGULAR],
->>>>>>> origin/feature/sonarqube_fix
 )
 
 HK_FONT_FAMILY = FontFamilyConfig(
@@ -173,7 +172,9 @@ def get_font_family(lang_code: str) -> FontFamilyConfig:
     return ALL_FONT_FAMILIES["EN"]
 
 
-def _merge_fonts(family1: FontFamilyConfig, family2: FontFamilyConfig, added_fonts: set[str]) -> None:
+def _merge_fonts(
+    family1: FontFamilyConfig, family2: FontFamilyConfig, added_fonts: set[str]
+) -> None:
     for category in ["script", "normal", "fallback", "base"]:
         fonts_list = getattr(family1, category)
         for font in getattr(family2, category):

@@ -149,9 +149,7 @@ class PDFXRef(PDFBaseXRef):
             raise PDFNoValidXRef(error_msg)
         return (start, nobjs)
 
-    def _parse_xref_entry(
-        self, parser: PDFParser, objid: int
-    ) -> None:
+    def _parse_xref_entry(self, parser: PDFParser, objid: int) -> None:
         """Parse a single xref entry line and store offset if in-use."""
         try:
             (_, line) = parser.nextline()
@@ -750,9 +748,7 @@ class PDFDocument:
                 newxref.load(parser)
                 self.xrefs.append(newxref)
 
-    def _process_trailer_encrypt(
-        self, trailer: dict[str, Any], password: str
-    ) -> None:
+    def _process_trailer_encrypt(self, trailer: dict[str, Any], password: str) -> None:
         """Extract encryption info from a trailer dict and initialize password."""
         id_value = list_value(trailer["ID"]) if "ID" in trailer else (b"", b"")
         # Some documents may not have a /ID, use two empty byte strings instead.
@@ -863,9 +859,7 @@ class PDFDocument:
         (_, obj) = self._parser.nextobject()
         return obj
 
-    def _resolve_obj_from_xrefs(
-        self, objid: int
-    ) -> tuple[object, int]:
+    def _resolve_obj_from_xrefs(self, objid: int) -> tuple[object, int]:
         """Search all xrefs for objid and return (obj, genno), raising PDFObjectNotFound if missing."""
         for xref in self.xrefs:
             try:
@@ -944,9 +938,7 @@ class PDFDocument:
 
         return page_labels.labels
 
-    def _lookup_name_node(
-        self, d: dict[str, Any], cat: str, key: str | bytes
-    ) -> Any:
+    def _lookup_name_node(self, d: dict[str, Any], cat: str, key: str | bytes) -> Any:
         """Recursively search a name-tree node for key."""
         if "Limits" in d:
             (k1, k2) = list_value(d["Limits"])

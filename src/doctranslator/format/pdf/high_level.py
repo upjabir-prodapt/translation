@@ -19,7 +19,11 @@ from pymupdf import Document
 from pymupdf import Font
 
 import src.doctranslator.asynchronize as asynchronize
-from src.doctranslator.doctranslator_exception.DocTranslatorException import ExtractTextError
+from src.api.services.dlp_service import DlpService
+from src.config.constants import settings
+from src.doctranslator.doctranslator_exception.DocTranslatorException import (
+    ExtractTextError,
+)
 from src.doctranslator.doctranslator_exception.DocTranslatorException import (
     InputFileGeneratedByDocTranslatorError,
 )
@@ -27,8 +31,12 @@ from src.doctranslator.format.pdf.converter import TranslateConverter
 from src.doctranslator.format.pdf.dlp_adapter import apply_dlp_to_document
 from src.doctranslator.format.pdf.dlp_adapter import unmask_document_with_tokens
 from src.doctranslator.format.pdf.document_il import il_version_1
-from src.doctranslator.format.pdf.document_il.backend.pdf_creater import SAVE_PDF_STAGE_NAME
-from src.doctranslator.format.pdf.document_il.backend.pdf_creater import SUBSET_FONT_STAGE_NAME
+from src.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    SAVE_PDF_STAGE_NAME,
+)
+from src.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    SUBSET_FONT_STAGE_NAME,
+)
 from src.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
 from src.doctranslator.format.pdf.document_il.backend.pdf_creater import reproduce_cmap
 from src.doctranslator.format.pdf.document_il.frontend.il_creater import ILCreater
@@ -38,14 +46,20 @@ from src.doctranslator.format.pdf.document_il.midend.add_debug_information impor
 from src.doctranslator.format.pdf.document_il.midend.automatic_term_extractor import (
     AutomaticTermExtractor,
 )
-from src.doctranslator.format.pdf.document_il.midend.detect_scanned_file import DetectScannedFile
+from src.doctranslator.format.pdf.document_il.midend.detect_scanned_file import (
+    DetectScannedFile,
+)
 from src.doctranslator.format.pdf.document_il.midend.il_translator import ILTranslator
 from src.doctranslator.format.pdf.document_il.midend.il_translator_llm_only import (
     ILTranslatorLLMOnly,
 )
 from src.doctranslator.format.pdf.document_il.midend.layout_parser import LayoutParser
-from src.doctranslator.format.pdf.document_il.midend.paragraph_finder import ParagraphFinder
-from src.doctranslator.format.pdf.document_il.midend.styles_and_formulas import StylesAndFormulas
+from src.doctranslator.format.pdf.document_il.midend.paragraph_finder import (
+    ParagraphFinder,
+)
+from src.doctranslator.format.pdf.document_il.midend.styles_and_formulas import (
+    StylesAndFormulas,
+)
 from src.doctranslator.format.pdf.document_il.midend.table_parser import TableParser
 from src.doctranslator.format.pdf.document_il.midend.typesetting import Typesetting
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
@@ -63,8 +77,6 @@ from src.doctranslator.pdfminer.pdfparser import PDFParser
 from src.doctranslator.progress_monitor import ProgressMonitor
 from src.doctranslator.utils import memory
 from src.doctranslator.utils.common import close_process_pool
-from src.config.constants import settings
-from src.api.services.dlp_service import DlpService
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +134,9 @@ def check_metadata(pdf: Document):
         )
 
 
-def _build_creator_field(existing_creator: str | None, producer: str | None) -> str | None:
+def _build_creator_field(
+    existing_creator: str | None, producer: str | None
+) -> str | None:
     """Combine existing creator and producer into a single creator string."""
     if not producer:
         return existing_creator
@@ -428,9 +442,7 @@ def _apply_dlp_if_enabled(
 
     job_id = (translation_config.dlp_job_id or "").strip()
     if not job_id:
-        logger.warning(
-            f"DLP enabled but no dlp_job_id configured, skipping DLP masking"
-        )
+        logger.warning("DLP enabled but no dlp_job_id configured, skipping DLP masking")
         return
 
     source_language = (
@@ -438,7 +450,7 @@ def _apply_dlp_if_enabled(
     ).strip()
     if not source_language:
         logger.warning(
-            f"DLP enabled but no source language configured, skipping DLP masking",
+            "DLP enabled but no source language configured, skipping DLP masking",
         )
         return
 
@@ -562,12 +574,12 @@ async def async_translate(translation_config: TranslationConfig):
             cancel_event.set()
         except KeyboardInterrupt:
             logger.info(
-                f"Translation cancelled by user through keyboard interrupt",
+                "Translation cancelled by user through keyboard interrupt",
             )
             cancel_event.set()
     if cancel_event.is_set():
         future.cancel()
-    logger.info(f"Waiting for translation to finish...")
+    logger.info("Waiting for translation to finish...")
     await finish_event.wait()
 
 
@@ -593,7 +605,7 @@ class MemoryMonitor:
             target=self._monitor_memory_usage, daemon=True
         )
         self.monitor_thread.start()
-        logger.debug(f"Memory monitoring started")
+        logger.debug("Memory monitoring started")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -656,7 +668,9 @@ def fix_null_xref(doc: Document) -> None:
             obj = doc.xref_object(i)
             if obj == "null":
                 doc.update_object(i, "[]")
-            elif obj and ("/ASCII85Decode" in obj or "/LZWDecode" in obj):  # make pdfminer happy
+            elif obj and (
+                "/ASCII85Decode" in obj or "/LZWDecode" in obj
+            ):  # make pdfminer happy
                 data = doc.xref_stream(i)
                 doc.update_stream(i, data)
             elif obj and "/Annots" in obj:
@@ -761,7 +775,9 @@ def _merge_part_dlp_into_parent(
         chunk_offset = translation_config.dlp_chunk_count
         for row in part_config.dlp_token_rows:
             merged_row = dict(row)
-            merged_row["chunk_index"] = int(merged_row.get("chunk_index", 0)) + int(chunk_offset)
+            merged_row["chunk_index"] = int(merged_row.get("chunk_index", 0)) + int(
+                chunk_offset
+            )
             translation_config.dlp_token_rows.append(merged_row)
         translation_config.dlp_chunk_count += int(part_config.dlp_chunk_count)
         translation_config.dlp_token_counter = max(
@@ -804,9 +820,12 @@ def _run_split_translation(
         return _do_translate_single(part_monitor, part_cfg)
 
     max_part_workers = max(1, int(settings.SPLIT_PART_MAX_CONCURRENT))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_part_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_part_workers
+    ) as executor:
         futures = {
-            executor.submit(run_part, idx, cfg): idx for idx, cfg in part_configs.items()
+            executor.submit(run_part, idx, cfg): idx
+            for idx, cfg in part_configs.items()
         }
         for future in concurrent.futures.as_completed(futures):
             i = futures[future]
@@ -819,7 +838,9 @@ def _run_split_translation(
                     f"[pdf_translate] Split part done: "
                     f"idx={i + 1}/{len(split_points)} working_dir={_wd}"
                 )
-                _merge_part_dlp_into_parent(part_config, translation_config, dlp_merge_lock)
+                _merge_part_dlp_into_parent(
+                    part_config, translation_config, dlp_merge_lock
+                )
             except Exception as e:
                 logger.error(f"Error in part {i}: {e}")
                 pm.translate_error(e)
@@ -862,7 +883,9 @@ def _dispatch_translation(
         logger.info("[pdf_translate] Single logical part after split — using one pass")
         return _do_translate_single(pm, translation_config)
 
-    return _run_split_translation(pm, translation_config, original_pdf_path, split_points)
+    return _run_split_translation(
+        pm, translation_config, original_pdf_path, split_points
+    )
 
 
 def _populate_result_statistics(
@@ -873,7 +896,9 @@ def _populate_result_statistics(
         sc = translation_config.shared_context_cross_split_part
         result.total_valid_character_count = getattr(sc, "valid_char_count_total", 0)
         token_total = getattr(sc, "total_valid_text_token_count", None)
-        result.total_valid_text_token_count = token_total if isinstance(token_total, int) else 0
+        result.total_valid_text_token_count = (
+            token_total if isinstance(token_total, int) else 0
+        )
     except Exception as e:
         logger.warning(f"Failed to populate valid text statistics: {e}")
         try:
@@ -947,7 +972,7 @@ def migrate_toc(
 ):
     if translation_config.use_alternating_pages_dual:
         logger.info(
-            f'skipping TOC migration for "use_alternating_pages_dual" mode',
+            'skipping TOC migration for "use_alternating_pages_dual" mode',
         )
         return
     old_doc = Document(translation_config.input_file)
@@ -957,12 +982,12 @@ def migrate_toc(
         fix_filter(old_doc)
         fix_null_xref(old_doc)
     except Exception:
-        logger.exception(f"auto fix failed, please check the pdf file")
+        logger.exception("auto fix failed, please check the pdf file")
 
     toc_data = old_doc.get_toc()
 
     if not toc_data:
-        logger.info(f"No TOC found in the original PDF, skipping migration.")
+        logger.info("No TOC found in the original PDF, skipping migration.")
         return
 
     files = {
@@ -1054,7 +1079,9 @@ def _extract_last_sentence(doc) -> str:
 def _extract_first_sentence(doc, overlap_pages: int) -> str:
     """Return a representative leading sentence from *doc* after the overlap region."""
     first_content_page = min(overlap_pages, doc.page_count - 1)
-    first_page_text = doc[first_content_page].get_text().strip() if doc.page_count else ""
+    first_page_text = (
+        doc[first_content_page].get_text().strip() if doc.page_count else ""
+    )
     if "." in first_page_text:
         return first_page_text.split(".")[0].strip()
     return first_page_text[:100]
@@ -1109,7 +1136,9 @@ def _check_translation_continuity(
             doc_a = Document(str(pdf_path_a))
             last_sentence = _extract_last_sentence(doc_a)
 
-            overlap_b = split_points[idx_b].overlap_pages if idx_b < len(split_points) else 0
+            overlap_b = (
+                split_points[idx_b].overlap_pages if idx_b < len(split_points) else 0
+            )
             doc_b = Document(str(pdf_path_b))
             first_sentence = _extract_first_sentence(doc_b, overlap_b)
 
@@ -1191,7 +1220,9 @@ def _run_layout_and_structure_phases(
         logger.info("[pdf_translate] Phase: skipped scanned-file detection")
     else:
         logger.info("[pdf_translate] Phase: scanned-file detection")
-        DetectScannedFile(translation_config).process(docs, temp_pdf_path, mediabox_data)
+        DetectScannedFile(translation_config).process(
+            docs, temp_pdf_path, mediabox_data
+        )
         logger.info("[pdf_translate] Phase: scanned-file detection finished")
         if translation_config.debug:
             xml_converter.write_json(
@@ -1246,11 +1277,15 @@ def _run_translation_phase(
 
     if support_llm_term_extraction and translation_config.auto_extract_glossary:
         logger.info("[pdf_translate] Phase: automatic term / glossary extraction (LLM)")
-        AutomaticTermExtractor(term_extraction_engine, translation_config).procress(docs)
+        AutomaticTermExtractor(term_extraction_engine, translation_config).procress(
+            docs
+        )
         logger.info("[pdf_translate] Phase: glossary extraction finished")
 
     if not translation_config.skip_translation:
-        translator_kind = "ILTranslatorLLMOnly" if support_llm_translate else "ILTranslator"
+        translator_kind = (
+            "ILTranslatorLLMOnly" if support_llm_translate else "ILTranslator"
+        )
         logger.info(f"[pdf_translate] Phase: paragraph translation ({translator_kind})")
         il_translator = (
             ILTranslatorLLMOnly(translate_engine, translation_config)
@@ -1291,7 +1326,9 @@ def _try_generate_watermark_bytes(
             doc_pdf2zh, translation_config, docs, mediabox_data
         )
     except Exception:
-        logger.warning("Failed to generate watermark for first page, using no watermark")
+        logger.warning(
+            "Failed to generate watermark for first page, using no watermark"
+        )
         translation_config.watermark_output_mode = WatermarkOutputMode.NoWatermark
         return None, None
 
@@ -1364,7 +1401,12 @@ def _do_translate_single(
         return result
 
     docs = _run_layout_and_structure_phases(
-        docs, doc_pdf2zh, temp_pdf_path, mediabox_data, translation_config, xml_converter
+        docs,
+        doc_pdf2zh,
+        temp_pdf_path,
+        mediabox_data,
+        translation_config,
+        xml_converter,
     )
     _apply_dlp_if_enabled(docs, translation_config, stage_label="pre_translation")
     _run_translation_phase(docs, translation_config, xml_converter)

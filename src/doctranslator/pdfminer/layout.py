@@ -698,22 +698,30 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         self.groups: list[LTTextGroup] | None = None
 
     @staticmethod
-    def _compute_halign(obj0: LTComponent, obj1: LTComponent, laparams: LAParams) -> bool:
+    def _compute_halign(
+        obj0: LTComponent, obj1: LTComponent, laparams: LAParams
+    ) -> bool:
         """Return True if obj0 and obj1 are horizontally aligned within char_margin."""
         return (
             obj0.is_voverlap(obj1)
-            and min(obj0.height, obj1.height) * laparams.line_overlap < obj0.voverlap(obj1)
-            and obj0.hdistance(obj1) < max(obj0.width, obj1.width) * laparams.char_margin
+            and min(obj0.height, obj1.height) * laparams.line_overlap
+            < obj0.voverlap(obj1)
+            and obj0.hdistance(obj1)
+            < max(obj0.width, obj1.width) * laparams.char_margin
         )
 
     @staticmethod
-    def _compute_valign(obj0: LTComponent, obj1: LTComponent, laparams: LAParams) -> bool:
+    def _compute_valign(
+        obj0: LTComponent, obj1: LTComponent, laparams: LAParams
+    ) -> bool:
         """Return True if obj0 and obj1 are vertically aligned (detect_vertical mode)."""
         return (
             laparams.detect_vertical
             and obj0.is_hoverlap(obj1)
-            and min(obj0.width, obj1.width) * laparams.line_overlap < obj0.hoverlap(obj1)
-            and obj0.vdistance(obj1) < max(obj0.height, obj1.height) * laparams.char_margin
+            and min(obj0.width, obj1.width) * laparams.line_overlap
+            < obj0.hoverlap(obj1)
+            and obj0.vdistance(obj1)
+            < max(obj0.height, obj1.height) * laparams.char_margin
         )
 
     def _advance_line(
@@ -764,7 +772,9 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             if obj0 is not None:
                 halign = self._compute_halign(obj0, obj1, laparams)
                 valign = self._compute_valign(obj0, obj1, laparams)
-                line, to_yield = self._advance_line(obj0, obj1, line, halign, valign, laparams)
+                line, to_yield = self._advance_line(
+                    obj0, obj1, line, halign, valign, laparams
+                )
                 if to_yield is not None:
                     yield to_yield
             obj0 = obj1
@@ -839,7 +849,11 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             y0 = min(obj1.y0, obj2.y0)
             x1 = max(obj1.x1, obj2.x1)
             y1 = max(obj1.y1, obj2.y1)
-            return (x1 - x0) * (y1 - y0) - obj1.width * obj1.height - obj2.width * obj2.height
+            return (
+                (x1 - x0) * (y1 - y0)
+                - obj1.width * obj1.height
+                - obj2.width * obj2.height
+            )
 
         def isany(obj1: element_t, obj2: element_t) -> set[element_t]:
             """Return any objects occupying the bounding box between obj1 and obj2."""
@@ -858,7 +872,14 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             return LTTextGroupLRTB([obj1, obj2])
 
         dists: list[tuple[bool, float, int, int, element_t, element_t]] = [
-            (False, dist(boxes[i], boxes[j]), id(boxes[i]), id(boxes[j]), boxes[i], boxes[j])
+            (
+                False,
+                dist(boxes[i], boxes[j]),
+                id(boxes[i]),
+                id(boxes[j]),
+                boxes[i],
+                boxes[j],
+            )
             for i in range(len(boxes))
             for j in range(i + 1, len(boxes))
         ]

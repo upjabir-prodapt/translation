@@ -1,9 +1,14 @@
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from src.repository.storage_repository import StorageRepository, FileType, StoragePath
-from src.repository.repository_exception import StorageError
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+from src.repository.repository_exception import StorageError
+from src.repository.storage_repository import FileType
+from src.repository.storage_repository import StoragePath
+from src.repository.storage_repository import StorageRepository
+
 
 @pytest.fixture
 def mock_storage_client():
@@ -14,12 +19,17 @@ def mock_storage_client():
     bucket.blob.return_value = blob
     return client
 
+
 @pytest.fixture
 def repo(mock_storage_client):
-    with patch("src.repository.storage_repository.storage.Client", return_value=mock_storage_client):
+    with patch(
+        "src.repository.storage_repository.storage.Client",
+        return_value=mock_storage_client,
+    ):
         with patch("src.repository.storage_repository.settings") as mock_settings:
             mock_settings.GCS_BUCKET_NAME = "test-bucket"
             return StorageRepository()
+
 
 class TestStorageRepository:
     def test_init_defaults(self, mock_storage_client):
@@ -62,7 +72,7 @@ class TestStorageRepository:
         mock_blob.updated = datetime.now()
         mock_blob.content_type = "application/pdf"
         mock_blob.md5_hash = "abc"
-        
+
         meta = await repo.get_file_metadata("gs://bucket/path")
         assert meta["size"] == 100
 
@@ -78,9 +88,7 @@ class TestStorageRepository:
         # In reality, delete_file wraps generic Exceptions too or just GoogleAPIError?
         # The code showed catch GoogleAPIError.
         from google.api_core.exceptions import GoogleAPIError
+
         mock_blob.delete.side_effect = GoogleAPIError("fail")
         with pytest.raises(StorageError):
             await repo.delete_file("gs://bucket/path")
-
-
-
