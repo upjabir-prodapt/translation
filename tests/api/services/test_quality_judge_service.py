@@ -92,6 +92,79 @@ class TestQualityJudgeService:
         assert src == ""
         assert tgt == ""
 
+    def test_quality_judge_result_to_dict(self, mock_settings):
+        result = QualityJudgeResult(
+            alignment_score=0.9,
+            omission_score=0.85,
+            hallucination_score=0.95,
+            final_score=0.9,
+            pass_fail=True,
+            reasons=["good"],
+            model="gemini-pro",
+        )
+        d = result.to_dict()
+        assert d["alignment_score"] == 0.9
+        assert d["pass_fail"] is True
+
+    @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
+    def test_judge_with_llm_success(self, mock_generate, mock_settings):
+        mock_response = MagicMock()
+        mock_response.parsed = QualityJudgeLLMScores(
+            alignment_score=0.9,
+            omission_score=0.85,
+            hallucination_score=0.92,
+            reasons=["good translation"],
+        )
+        mock_generate.return_value = mock_response
+        agent = GoogleADKJudgeAgent(model="gemini-pro")
+        agent._client = MagicMock()
+        result = agent._judge_with_llm("Hello", "Bonjour")
+        assert isinstance(result, QualityJudgeLLMScores)
+        assert result.alignment_score == 0.9
+
+    @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
+    def test_judge_with_llm_parse_exception_fallback(self, mock_generate, mock_settings):
+        mock_response = MagicMock()
+        mock_response.parsed = None
+        mock_response.text = '{"alignment_score": 0.7, "omission_score": 0.7, "hallucination_score": 0.8, "reasons": ["ok"]}'
+        mock_generate.return_value = mock_response
+        agent = GoogleADKJudgeAgent(model="gemini-pro")
+        agent._client = MagicMock()
+        # Make response.parsed raise when accessed
+        type(mock_response).parsed = property(lambda self: (_ for _ in ()).throw(Exception("parse error")))
+        result = agent._judge_with_llm("Hello", "Bonjour")
+        assert isinstance(result, QualityJudgeLLMScores)
+
+    @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
+    def test_judge_with_llm_full_fallback(self, mock_generate, mock_settings):
+        mock_response = MagicMock()
+        mock_generate.return_value = mock_response
+        agent = GoogleADKJudgeAgent(model="gemini-pro")
+        agent._client = MagicMock()
+        # Make parsed raise and text return unparseable JSON
+        type(mock_response).parsed = property(lambda self: (_ for _ in ()).throw(Exception("parse error")))
+        mock_response.text = "not json at all !!!"
+        result = agent._judge_with_llm("Hello", "Bonjour")
+        assert isinstance(result, QualityJudgeLLMScores)
+        assert result.alignment_score == 0.0
+
+    def test_evaluate_with_dict_scores(self, mock_settings):
+        agent = GoogleADKJudgeAgent()
+        with patch.object(agent, "_judge_with_llm") as mock_judge:
+            # Return something that is neither dict nor QualityJudgeLLMScores (triggers dict() path)
+            # Must be iterable of 2-tuples for dict() to work
+            class FakeScores:
+                def __iter__(self):
+                    return iter([
+                        ("alignment_score", 0.8),
+                        ("omission_score", 0.9),
+                        ("hallucination_score", 0.85),
+                        ("reasons", ["r1"]),
+                    ])
+            mock_judge.return_value = FakeScores()
+            result = agent.evaluate(source_text="s", translated_text="t")
+            assert isinstance(result, QualityJudgeResult)
+
 
 @pytest.fixture
 def mock_settings():

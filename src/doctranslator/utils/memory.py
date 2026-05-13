@@ -85,6 +85,13 @@ def _get_rss_psutil(pid: int) -> int | None:
         return None
 
 
+def _try_get_pss(pid: int, use_smaps_rollup_only: bool) -> int | None:
+    """Attempt to read PSS for a Linux process. Returns PSS bytes or None."""
+    if use_smaps_rollup_only:
+        return _parse_pss_from_smaps_rollup(pid)
+    return _get_pss_linux(pid)
+
+
 def _get_single_process_memory(
     pid: int, prefer_pss: bool = True, use_smaps_rollup_only: bool = False
 ) -> int | None:
@@ -100,18 +107,9 @@ def _get_single_process_memory(
         Memory usage in bytes, or None if all methods fail
     """
     if sys.platform == "linux" and prefer_pss:
-        if use_smaps_rollup_only:
-            # Only try smaps_rollup, then fallback to RSS
-            pss = _parse_pss_from_smaps_rollup(pid)
-            if pss is not None:
-                return pss
-        else:
-            # Try full PSS (smaps_rollup -> smaps)
-            pss = _get_pss_linux(pid)
-            if pss is not None:
-                return pss
-
-    # Fallback to RSS
+        pss = _try_get_pss(pid, use_smaps_rollup_only)
+        if pss is not None:
+            return pss
     return _get_rss_psutil(pid)
 
 
@@ -200,6 +198,26 @@ def get_memory_usage_bytes(
     return max(0, total_memory)
 
 
+def _sum_children_rss(pid: int) -> int:
+    """Sum RSS of all child processes. Returns 0 if psutil is unavailable or inaccessible."""
+    if psutil is None:
+        return 0
+    try:
+        parent_process = psutil.Process(pid)
+        children = parent_process.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return 0
+    total = 0
+    for child in children:
+        try:
+            child_rss = _get_rss_psutil(child.pid)
+            if child_rss is not None:
+                total += child_rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return total
+
+
 def _get_rss_estimate(pid: int, include_children: bool) -> int:
     """
     Get a fast RSS-only memory estimate for a process and optionally its children.
@@ -211,20 +229,8 @@ def _get_rss_estimate(pid: int, include_children: bool) -> int:
     rss = _get_rss_psutil(pid)
     if rss is not None:
         memory += rss
-
-    if include_children and psutil is not None:
-        try:
-            parent_process = psutil.Process(pid)
-            for child in parent_process.children(recursive=True):
-                try:
-                    child_rss = _get_rss_psutil(child.pid)
-                    if child_rss is not None:
-                        memory += child_rss
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
+    if include_children:
+        memory += _sum_children_rss(pid)
     return memory
 
 

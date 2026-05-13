@@ -48,12 +48,8 @@ class TestPipelineOrchestrator:
         assert args[1]["error_message"] == "none"
 
     @patch("src.api.services.pipeline_orchestrator.JobProcessor")
-    @patch(
-        "src.api.services.pipeline_orchestrator.extract_attempt_text",
-        return_value=("s", "t"),
-    )
     async def test_run_success(
-        self, mock_extract, mock_processor_cls, orchestrator, mock_bq, mock_storage
+        self, mock_processor_cls, orchestrator, mock_bq, mock_storage
     ):
         mock_processor = AsyncMock()
         mock_processor.translate.return_value = {"status": "ok", "page_count": 1}

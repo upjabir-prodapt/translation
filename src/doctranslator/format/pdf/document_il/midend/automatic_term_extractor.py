@@ -262,6 +262,45 @@ class AutomaticTermExtractor:
                     f"Request ID {request_id}: Skipping malformed term item: {item}",
                 )
 
+    def _should_skip_paragraph(self, paragraph, pbar) -> bool:
+        """Return True and advance pbar if this paragraph should be excluded from extraction."""
+        if paragraph.debug_id is None or paragraph.unicode is None:
+            pbar.advance(1)
+            return True
+        if is_cid_paragraph(paragraph):
+            pbar.advance(1)
+            return True
+        if is_pure_numeric_paragraph(paragraph):
+            pbar.advance(1)
+            return True
+        if is_placeholder_only_paragraph(paragraph):
+            pbar.advance(1)
+            return True
+        return False
+
+    def _submit_batch(
+        self,
+        paragraphs: list,
+        tracker: PageTermExtractTracker,
+        executor: PriorityThreadPoolExecutor,
+        pbar,
+        total_token_count: int,
+    ) -> None:
+        """Submit a batch of paragraphs to the executor for term extraction."""
+        executor.submit(
+            self.extract_terms_from_paragraphs,
+            BatchParagraph(paragraphs, tracker),
+            pbar,
+            total_token_count,
+            priority=1048576 - total_token_count,
+        )
+
+    def _is_batch_full(self, total_token_count: int, paragraphs: list) -> bool:
+        """Return True when the current batch exceeds token or paragraph limits."""
+        max_tokens = self.translation_config.llm_term_extraction_batch_max_tokens
+        max_paragraphs = self.translation_config.llm_term_extraction_batch_max_paragraphs
+        return total_token_count > max_tokens or len(paragraphs) > max_paragraphs
+
     def process_page(
         self,
         page: Page,
@@ -273,43 +312,17 @@ class AutomaticTermExtractor:
         paragraphs = []
         total_token_count = 0
         for paragraph in page.pdf_paragraph:
-            if paragraph.debug_id is None or paragraph.unicode is None:
-                pbar.advance(1)
-                continue
-            if is_cid_paragraph(paragraph):
-                pbar.advance(1)
-                continue
-            if is_pure_numeric_paragraph(paragraph):
-                pbar.advance(1)
-                continue
-            if is_placeholder_only_paragraph(paragraph):
-                pbar.advance(1)
+            if self._should_skip_paragraph(paragraph, pbar):
                 continue
             total_token_count += self.calc_token_count(paragraph.unicode)
             paragraphs.append(paragraph)
-            max_tokens = self.translation_config.llm_term_extraction_batch_max_tokens
-            max_paragraphs = (
-                self.translation_config.llm_term_extraction_batch_max_paragraphs
-            )
-            if total_token_count > max_tokens or len(paragraphs) > max_paragraphs:
-                executor.submit(
-                    self.extract_terms_from_paragraphs,
-                    BatchParagraph(paragraphs, tracker),
-                    pbar,
-                    total_token_count,
-                    priority=1048576 - total_token_count,
-                )
+            if self._is_batch_full(total_token_count, paragraphs):
+                self._submit_batch(paragraphs, tracker, executor, pbar, total_token_count)
                 paragraphs = []
                 total_token_count = 0
 
         if paragraphs:
-            executor.submit(
-                self.extract_terms_from_paragraphs,
-                BatchParagraph(paragraphs, tracker),
-                pbar,
-                total_token_count,
-                priority=1048576 - total_token_count,
-            )
+            self._submit_batch(paragraphs, tracker, executor, pbar, total_token_count)
 
     def _build_reference_glossary_section(self, inputs: list[str]) -> str:
         """Build the reference glossary section string for the LLM prompt."""

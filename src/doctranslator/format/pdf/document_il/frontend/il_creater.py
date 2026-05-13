@@ -597,33 +597,51 @@ class ILCreater:
                 return "BASE64:" + base64.b64encode(font_name).decode("utf-8")
         return font_name
 
+    def _cidfont_encoding_length_from_encoding(self, xref_id: int) -> int | None:
+        """Return encoding length from the Encoding key, or None if undetermined."""
+        _, encoding = self.mupdf.xref_get_key(xref_id, "Encoding")
+        if encoding in ("/Identity-H", "/Identity-V"):
+            return 2
+        if encoding == "/WinAnsiEncoding":
+            return 1
+        return None
+
+    def _cidfont_encoding_length_from_tounicode(self, xref_id: int) -> int | None:
+        """Return encoding length from the ToUnicode stream, or None if unavailable."""
+        _, to_unicode_id = self.mupdf.xref_get_key(xref_id, "ToUnicode")
+        if to_unicode_id is None:
+            return None
+        to_unicode_bytes = self.mupdf.xref_stream(
+            int(to_unicode_id.split(" ")[0])
+        )
+        code_range = re.search(
+            b"begincodespacerange\n?.*<(\\d+?)>.*",
+            to_unicode_bytes,
+        ).group(1)
+        return len(code_range) // 2
+
+    def _cidfont_encoding_length_from_unicode_map(self, font) -> int:
+        """Return encoding length inferred from the font's unicode map."""
+        if (
+            font.unicode_map
+            and font.unicode_map.cid2unichr
+            and max(font.unicode_map.cid2unichr.keys()) > 255
+        ):
+            return 2
+        return 1
+
     def _get_cidfont_encoding_length(self, xref_id: int, font) -> int:
         """Determine encoding length for a CID font."""
         try:
-            # pdf 32000:2008 page 273 - Table 118 - Predefined CJK CMap names
-            _, encoding = self.mupdf.xref_get_key(xref_id, "Encoding")
-            if encoding in ("/Identity-H", "/Identity-V"):
-                return 2
-            if encoding == "/WinAnsiEncoding":
-                return 1
-            _, to_unicode_id = self.mupdf.xref_get_key(xref_id, "ToUnicode")
-            if to_unicode_id is not None:
-                to_unicode_bytes = self.mupdf.xref_stream(
-                    int(to_unicode_id.split(" ")[0]),
-                )
-                code_range = re.search(
-                    b"begincodespacerange\n?.*<(\\d+?)>.*",
-                    to_unicode_bytes,
-                ).group(1)
-                return len(code_range) // 2
+            length = self._cidfont_encoding_length_from_encoding(xref_id)
+            if length is not None:
+                return length
+            length = self._cidfont_encoding_length_from_tounicode(xref_id)
+            if length is not None:
+                return length
         except Exception:
-            if (
-                font.unicode_map
-                and font.unicode_map.cid2unichr
-                and max(font.unicode_map.cid2unichr.keys()) > 255
-            ):
-                return 2
-        return 1
+            pass
+        return self._cidfont_encoding_length_from_unicode_map(font)
 
     def _get_mupdf_font_properties(self, xref_id: int):
         """Get bold/italic/monospaced/serif properties from mupdf font."""
@@ -692,14 +710,15 @@ class ILCreater:
                 font_char_bounding_box_map
             )
 
-    def on_page_resource_font(self, font: PDFFont, xref_id: int, font_id: str):
-        font_name = self._decode_font_name(font.fontname)
-        logger.debug(f"handle font {font_name} @ {xref_id} in {self.xobj_id}")
+    def _build_il_font_metadata(
+        self, font: PDFFont, xref_id: int, font_id: str, font_name: str
+    ) -> "il_version_1.PdfFont":
+        """Build a PdfFont IL object from a parsed PDF font."""
         encoding_length = 1
         if isinstance(font, PDFCIDFont):
             encoding_length = self._get_cidfont_encoding_length(xref_id, font)
         bold, italic, monospaced, serif = self._get_mupdf_font_properties(xref_id)
-        il_font_metadata = il_version_1.PdfFont(
+        return il_version_1.PdfFont(
             name=font_name,
             xref_id=xref_id,
             font_id=font_id,
@@ -712,6 +731,19 @@ class ILCreater:
             descent=font.descent,
             pdf_font_char_bounding_box=[],
         )
+
+    def _register_font_in_page(self, font_id: str, il_font_metadata) -> None:
+        """Register il_font_metadata into the correct font list (page or xobj)."""
+        fonts = self.current_page.pdf_font
+        if self.xobj_id in self.xobj_map:
+            fonts = self.xobj_map[self.xobj_id].pdf_font
+        fonts[:] = [f for f in fonts if f.font_id != font_id]
+        fonts.append(il_font_metadata)
+
+    def on_page_resource_font(self, font: PDFFont, xref_id: int, font_id: str):
+        font_name = self._decode_font_name(font.fontname)
+        logger.debug(f"handle font {font_name} @ {xref_id} in {self.xobj_id}")
+        il_font_metadata = self._build_il_font_metadata(font, xref_id, font_id, font_name)
         try:
             font_char_bounding_box_map = self._build_font_bbox_map(
                 xref_id, il_font_metadata, font_name
@@ -722,36 +754,25 @@ class ILCreater:
             logger.error(f"failed to parse font xobj id {xref_label}: {e}")
         self.current_page_font_name_id_map[xref_id] = font_id
         self.current_available_fonts[font_id] = il_font_metadata
+        self._register_font_in_page(font_id, il_font_metadata)
 
-        fonts = self.current_page.pdf_font
-        if self.xobj_id in self.xobj_map:
-            fonts = self.xobj_map[self.xobj_id].pdf_font
-        fonts[:] = [f for f in fonts if f.font_id != font_id]
-        fonts.append(il_font_metadata)
-
-    def parse_font_xobj_id(self, xobj_id: int):
-        if xobj_id is None:
-            return [], {}
-
-        bbox_list = []
-        encoding = parse_font_encoding(self.mupdf, xobj_id)
-        differences = []
-        font_differences = self.mupdf.xref_get_key(xobj_id, "Encoding/Differences")
-        if font_differences:
-            differences = parse_encoding(font_differences[1])
+    def _load_bbox_from_font_files(self, xobj_id: int, encoding, differences) -> list:
+        """Try each FontFile key and return the first non-empty bbox_list found."""
         for file_key in ["FontFile", "FontFile2", "FontFile3"]:
             font_file = self.mupdf.xref_get_key(xobj_id, f"FontDescriptor/{file_key}")
             if file_idx := indirect(font_file):
-                bbox_list = parse_font_file(
-                    self.mupdf,
-                    file_idx,
-                    encoding,
-                    differences,
-                )
-        cmap = {}
+                return parse_font_file(self.mupdf, file_idx, encoding, differences)
+        return []
+
+    def _load_cmap(self, xobj_id: int) -> dict:
+        """Load the ToUnicode CMap for a font xref, returning {} if absent."""
         to_unicode = self.mupdf.xref_get_key(xobj_id, "ToUnicode")
         if to_unicode_idx := indirect(to_unicode):
-            cmap = parse_cmap(self.mupdf.xref_stream(to_unicode_idx).decode("U8"))
+            return parse_cmap(self.mupdf.xref_stream(to_unicode_idx).decode("U8"))
+        return {}
+
+    def _resolve_bbox_fallbacks(self, xobj_id: int, bbox_list: list) -> list:
+        """Apply Base14, CID-font, and Type3 fallbacks to arrive at a final bbox_list."""
         if not bbox_list:
             obj_type, obj_val = self.mupdf.xref_get_key(xobj_id, "BaseFont")
             if obj_type == "name":
@@ -760,6 +781,20 @@ class ILCreater:
             bbox_list = cid_bbox
         if self.mupdf.xref_get_key(xobj_id, "Subtype")[1] == "/Type3":
             bbox_list = get_type3_bbox(self.mupdf, xobj_id)
+        return bbox_list
+
+    def parse_font_xobj_id(self, xobj_id: int):
+        if xobj_id is None:
+            return [], {}
+
+        encoding = parse_font_encoding(self.mupdf, xobj_id)
+        differences = []
+        font_differences = self.mupdf.xref_get_key(xobj_id, "Encoding/Differences")
+        if font_differences:
+            differences = parse_encoding(font_differences[1])
+        bbox_list = self._load_bbox_from_font_files(xobj_id, encoding, differences)
+        cmap = self._load_cmap(xobj_id)
+        bbox_list = self._resolve_bbox_fallbacks(xobj_id, bbox_list)
         return bbox_list, cmap
 
     def _build_clip_path_instruction(self, clip_path, source_ctm, target_ctm, evenodd):
@@ -880,35 +915,17 @@ class ILCreater:
                 il_version_1.Box(ll[0], ll[1], ur[0], ur[1])
             )
 
-    def on_lt_char(self, char: LTChar):
-        if char.aw_font_id is None:
-            return
+    def _check_rotation_angle(self, char: LTChar) -> bool:
+        """Return False if the character's rotation angle is outside accepted ranges."""
         try:
             rotation_angle = get_rotation_angle(char.matrix)
-            if not (-0.1 <= rotation_angle <= 0.1 or 89.9 <= rotation_angle <= 90.1):
-                return
+            return -0.1 <= rotation_angle <= 0.1 or 89.9 <= rotation_angle <= 90.1
         except Exception:
             logger.warning("Failed to get rotation angle for char %s", char.get_text())
-        try:
-            self._collect_valid_char(char.get_text())
-        except Exception as e:
-            logger.warning(f"Error collecting valid char: {e}")
-        gs = self.create_graphic_state(char.graphicstate)
-        font = self._get_char_font(char)
+            return True  # allow through on error, consistent with original behaviour
 
-        descent = 0
-        if font and hasattr(font, "descent"):
-            descent = font.descent * char.size / 1000
-
-        char_id = char.cid
-        char_bounding_box = (
-            self._get_char_bounding_box(char, font, char_id) if font else None
-        )
-
-        char_unicode = char.get_text()
-        if space_regex.match(char_unicode):
-            char_unicode = " "
-        advance = char.adv
+    def _build_char_bbox(self, char: LTChar, char_unicode: str) -> "il_version_1.Box":
+        """Build and validate an il_version_1.Box for the character."""
         bbox = il_version_1.Box(
             x=char.bbox[0],
             y=char.bbox[1],
@@ -916,17 +933,18 @@ class ILCreater:
             y2=char.bbox[3],
         )
         if bbox.x2 < bbox.x or bbox.y2 < bbox.y:
-            logger.warning(
-                "Invalid bounding box for character %s: %s", char_unicode, bbox
-            )
+            logger.warning("Invalid bounding box for character %s: %s", char_unicode, bbox)
+        return bbox
 
-        vertical, visual_bbox = self._compute_visual_bbox(char, descent)
+    def _build_pdf_char(
+        self, char: LTChar, char_id: int, char_unicode: str, advance, bbox, vertical, visual_bbox, gs
+    ) -> "il_version_1.PdfCharacter":
+        """Construct the PdfCharacter IL object."""
         pdf_style = il_version_1.PdfStyle(
             font_id=char.aw_font_id,
             font_size=char.size,
             graphic_state=gs,
         )
-
         pdf_char = il_version_1.PdfCharacter(
             box=bbox,
             pdf_character_id=char_id,
@@ -942,13 +960,10 @@ class ILCreater:
         if self.translation_config.ocr_workaround:
             pdf_char.pdf_style.graphic_state = BLACK
             pdf_char.render_order = None
-        if pdf_style.font_size == 0.0:
-            logger.warning("Font size is 0.0 for character %s. Skip it.", char_unicode)
-            return
+        return pdf_char
 
-        self._refine_visual_bbox(pdf_char, char, char_bounding_box, pdf_style.font_size)
-        self.current_page.pdf_character.append(pdf_char)
-
+    def _maybe_add_char_box_rect(self, pdf_char) -> None:
+        """Append a debug rectangle for the character visual bbox if show_char_box is set."""
         if self.translation_config.show_char_box:
             self.current_page.pdf_rectangle.append(
                 il_version_1.PdfRectangle(
@@ -958,6 +973,39 @@ class ILCreater:
                     line_width=0.2,
                 )
             )
+
+    def on_lt_char(self, char: LTChar):
+        if char.aw_font_id is None:
+            return
+        if not self._check_rotation_angle(char):
+            return
+        try:
+            self._collect_valid_char(char.get_text())
+        except Exception as e:
+            logger.warning(f"Error collecting valid char: {e}")
+
+        gs = self.create_graphic_state(char.graphicstate)
+        font = self._get_char_font(char)
+        descent = font.descent * char.size / 1000 if font and hasattr(font, "descent") else 0
+        char_id = char.cid
+        char_bounding_box = self._get_char_bounding_box(char, font, char_id) if font else None
+
+        char_unicode = char.get_text()
+        if space_regex.match(char_unicode):
+            char_unicode = " "
+        advance = char.adv
+        bbox = self._build_char_bbox(char, char_unicode)
+        vertical, visual_bbox = self._compute_visual_bbox(char, descent)
+        pdf_char = self._build_pdf_char(
+            char, char_id, char_unicode, advance, bbox, vertical, visual_bbox, gs
+        )
+        if pdf_char.pdf_style.font_size == 0.0:
+            logger.warning("Font size is 0.0 for character %s. Skip it.", char_unicode)
+            return
+
+        self._refine_visual_bbox(pdf_char, char, char_bounding_box, pdf_char.pdf_style.font_size)
+        self.current_page.pdf_character.append(pdf_char)
+        self._maybe_add_char_box_rect(pdf_char)
 
     def _is_valid_char(self, ch: str) -> bool:
         """Return True if ch is a valid translatable character."""
@@ -1186,64 +1234,52 @@ class ILCreater:
             "parameters": {},
         }
 
-    def on_inline_image_end(self, stream_obj, ctm):
-        """End processing inline image and create PdfForm"""
+    def _extract_inline_image_data(self, stream_obj) -> str:
+        """Return base64-encoded image data from an inline image stream object."""
         import base64
-        import json
+        if hasattr(stream_obj, "data") and stream_obj.data is not None:
+            return base64.b64encode(stream_obj.data).decode("ascii")
+        if hasattr(stream_obj, "rawdata") and stream_obj.rawdata is not None:
+            return base64.b64encode(stream_obj.rawdata).decode("ascii")
+        return ""
 
+    def _build_inline_image_parameters(self, stream_obj) -> dict:
+        """Build a plain dict of image parameters from a stream object's attrs."""
+        image_dict = stream_obj.attrs if hasattr(stream_obj, "attrs") else {}
+        parameters = {}
+        for key, value in image_dict.items():
+            parameters[key] = value.name if hasattr(value, "name") else str(value)
+        return parameters
+
+    def _compute_inline_image_bbox(self, ctm):
+        """Compute the final bounding box of an inline image given its CTM."""
         from src.doctranslator.format.pdf.babelpdf.utils import guarded_bbox
-        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import (
-            decompose_ctm,
-        )
         from src.doctranslator.pdfminer.utils import apply_matrix_pt
         from src.doctranslator.pdfminer.utils import get_bound
 
-        # Extract image parameters from stream dictionary
-        image_dict = stream_obj.attrs if hasattr(stream_obj, "attrs") else {}
+        (x, y, w, h) = guarded_bbox((0, 0, 1, 1))
+        bounds = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
+        return get_bound(apply_matrix_pt(ctm, (p, q)) for (p, q) in bounds)
 
-        # Build parameters dictionary
-        parameters = {}
-        for key, value in image_dict.items():
-            if hasattr(value, "name"):
-                parameters[key] = value.name
-            else:
-                parameters[key] = str(value)
+    def on_inline_image_end(self, stream_obj, ctm):
+        """End processing inline image and create PdfForm"""
+        import json
+        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
 
-        # Get image data (encoded as base64)
-        image_data = ""
-        if hasattr(stream_obj, "data") and stream_obj.data is not None:
-            image_data = base64.b64encode(stream_obj.data).decode("ascii")
-        elif hasattr(stream_obj, "rawdata") and stream_obj.rawdata is not None:
-            image_data = base64.b64encode(stream_obj.rawdata).decode("ascii")
-
-        # Create inline form with parameters as JSON string
+        parameters = self._build_inline_image_parameters(stream_obj)
+        image_data = self._extract_inline_image_data(stream_obj)
         inline_form = il_version_1.PdfInlineForm(
             form_data=image_data, image_parameters=json.dumps(parameters)
         )
-
-        # Calculate bounding box - inline images are typically 1x1 unit square in user space
-        bbox = (0, 0, 1, 1)
-        (x, y, w, h) = guarded_bbox(bbox)
-        bounds = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
-        final_bbox = get_bound(apply_matrix_pt(ctm, (p, q)) for (p, q) in bounds)
-
-        # Create graphics state
+        final_bbox = self._compute_inline_image_bbox(ctm)
         gs = self.create_graphic_state(
             self.passthrough_per_char_instruction, include_clipping=True, target_ctm=ctm
         )
-
-        # Create PdfMatrix from CTM
         pdf_matrix = il_version_1.PdfMatrix(
             a=ctm[0], b=ctm[1], c=ctm[2], d=ctm[3], e=ctm[4], f=ctm[5]
         )
-
-        # Create affine transform
         affine_transform = decompose_ctm(ctm)
-
-        # Create PdfFormSubtype with inline form
         pdf_form_subtype = il_version_1.PdfFormSubtype(pdf_inline_form=inline_form)
-
-        # Create PdfForm for the inline image
         pdf_form = il_version_1.PdfForm(
             box=il_version_1.Box(
                 x=final_bbox[0],
@@ -1260,6 +1296,4 @@ class ILCreater:
             render_order=self.get_render_order_and_increase(),
             form_type="image",
         )
-
-        # Add to current page
         self.current_page.pdf_form.append(pdf_form)

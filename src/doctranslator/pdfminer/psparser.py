@@ -181,7 +181,7 @@ class PSBaseParser:
 
     def poll(self, pos: int | None = None, n: int = 80) -> None:
         pos0 = self.fp.tell()
-        if not pos:
+        if pos is None:
             pos = self.bufpos + self.charpos
         self.fp.seek(pos)
         log.debug("poll(%d): %r", pos, self.fp.read(n))
@@ -265,6 +265,40 @@ class PSBaseParser:
                 s = s[:n]
                 buf = b""
 
+    def _dispatch_char_token(self, c: bytes, j: int) -> int:
+        """Dispatch a single non-whitespace character to the appropriate parse state.
+
+        Returns the new character position (j+1 in all cases handled here).
+        """
+        if c == b"%":
+            self._curtoken = b"%"
+            self._parse1 = self._parse_comment
+        elif c == b"/":
+            self._curtoken = b""
+            self._parse1 = self._parse_literal
+        elif c in b"-+" or c.isdigit():
+            self._curtoken = c
+            self._parse1 = self._parse_number
+        elif c == b".":
+            self._curtoken = c
+            self._parse1 = self._parse_float
+        elif c.isalpha():
+            self._curtoken = c
+            self._parse1 = self._parse_keyword
+        elif c == b"(":
+            self._curtoken = b""
+            self.paren = 1
+            self._parse1 = self._parse_string
+        elif c == b"<":
+            self._curtoken = b""
+            self._parse1 = self._parse_wopen
+        elif c == b">":
+            self._curtoken = b""
+            self._parse1 = self._parse_wclose
+        elif c != b"\x00":
+            self._add_token(KWD(c))
+        return j + 1
+
     def _parse_main(self, s: bytes, i: int) -> int:
         m = NONSPC.search(s, i)
         if not m:
@@ -272,44 +306,7 @@ class PSBaseParser:
         j = m.start(0)
         c = s[j : j + 1]
         self._curtokenpos = self.bufpos + j
-        if c == b"%":
-            self._curtoken = b"%"
-            self._parse1 = self._parse_comment
-            return j + 1
-        elif c == b"/":
-            self._curtoken = b""
-            self._parse1 = self._parse_literal
-            return j + 1
-        elif c in b"-+" or c.isdigit():
-            self._curtoken = c
-            self._parse1 = self._parse_number
-            return j + 1
-        elif c == b".":
-            self._curtoken = c
-            self._parse1 = self._parse_float
-            return j + 1
-        elif c.isalpha():
-            self._curtoken = c
-            self._parse1 = self._parse_keyword
-            return j + 1
-        elif c == b"(":
-            self._curtoken = b""
-            self.paren = 1
-            self._parse1 = self._parse_string
-            return j + 1
-        elif c == b"<":
-            self._curtoken = b""
-            self._parse1 = self._parse_wopen
-            return j + 1
-        elif c == b">":
-            self._curtoken = b""
-            self._parse1 = self._parse_wclose
-            return j + 1
-        elif c == b"\x00":
-            return j + 1
-        else:
-            self._add_token(KWD(c))
-            return j + 1
+        return self._dispatch_char_token(c, j)
 
     def _add_token(self, obj: PSBaseParserToken) -> None:
         self._tokens.append((self._curtokenpos, obj))
@@ -591,12 +588,12 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
     def _handle_end_dict(self, pos: int) -> None:
         """Handle end of dictionary, building and pushing a dict onto the stack."""
         try:
-            (pos, objs) = self.end_type("d")
+            (obj_pos, objs) = self.end_type("d")
             if len(objs) % 2 != 0:
                 error_msg = "Invalid dictionary construct: %r" % objs
                 raise PSSyntaxError(error_msg)
             d = {literal_name(k): v for (k, v) in choplist(2, objs) if v is not None}
-            self.push((pos, d))
+            self.push((obj_pos, d))
         except PSTypeError:
             if settings.STRICT:
                 raise

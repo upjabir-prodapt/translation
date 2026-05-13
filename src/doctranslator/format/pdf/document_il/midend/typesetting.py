@@ -229,18 +229,8 @@ class TypesettingUnit:
 
         return self.is_cjk_char_cache
 
-    def calc_is_cjk_char(self):
-        if self.formular:
-            return False
-        unicode = self.try_get_unicode()
-        if not unicode:
-            return False
-        if "(cid" in unicode:
-            return False
-        if len(unicode) > 1:
-            return False
-        assert len(unicode) == 1, "Unicode must be a single character"
-        if unicode in [
+    _CJK_PUNCTUATION_SET = frozenset(
+        [
             "（",
             "）",
             "【",
@@ -263,42 +253,68 @@ class TypesettingUnit:
             "？",
             "！",
             "，",
-        ]:
-            return True
-        if unicode:
-            if re.match(
+        ]
+    )
+
+    def _is_cjk_by_punctuation_list(self, unicode: str) -> bool:
+        """Return True if the character is in the CJK punctuation list."""
+        return unicode in self._CJK_PUNCTUATION_SET
+
+    def _is_cjk_by_regex(self, unicode: str) -> bool:
+        """Return True if the character matches CJK Unicode ranges via regex."""
+        return bool(
+            re.match(
                 r"^["
-                r"\u3000-\u303f"  # CJK Symbols and Punctuation
-                r"\u3040-\u309f"  # Hiragana
-                r"\u30a0-\u30ff"  # Katakana
-                r"\u3100-\u312f"  # Bopomofo
-                r"\uac00-\ud7af"  # Hangul Syllables
-                r"\u1100-\u11ff"  # Hangul Jamo
-                r"\u3130-\u318f"  # Hangul Compatibility Jamo
-                r"\ua960-\ua97f"  # Hangul Jamo Extended-A
-                r"\ud7b0-\ud7ff"  # Hangul Jamo Extended-B
-                r"\u3190-\u319f"  # Kanbun
-                r"\u3200-\u32ff"  # Enclosed CJK Letters and Months
-                r"\u3300-\u33ff"  # CJK Compatibility
-                r"\ufe30-\ufe4f"  # CJK Compatibility Forms
-                r"\u4e00-\u9fff"  # CJK Unified Ideographs
-                r"\u2e80-\u2eff"  # CJK Radicals Supplement
-                r"\u31c0-\u31ef"  # CJK Strokes
-                r"\u2f00-\u2fdf"  # Kangxi Radicals
-                r"\ufe10-\ufe1f"  # Vertical Forms
+                r"　-〿"  # CJK Symbols and Punctuation
+                r"぀-ゟ"  # Hiragana
+                r"゠-ヿ"  # Katakana
+                r"㄀-ㄯ"  # Bopomofo
+                r"가-힯"  # Hangul Syllables
+                r"ᄀ-ᇿ"  # Hangul Jamo
+                r"㄰-㆏"  # Hangul Compatibility Jamo
+                r"ꥠ-꥿"  # Hangul Jamo Extended-A
+                r"ힰ-퟿"  # Hangul Jamo Extended-B
+                r"㆐-㆟"  # Kanbun
+                r"㈀-㋿"  # Enclosed CJK Letters and Months
+                r"㌀-㏿"  # CJK Compatibility
+                r"︰-﹏"  # CJK Compatibility Forms
+                r"一-鿿"  # CJK Unified Ideographs
+                r"⺀-⻿"  # CJK Radicals Supplement
+                r"㇀-㇯"  # CJK Strokes
+                r"⼀-⿟"  # Kangxi Radicals
+                r"︐-︟"  # Vertical Forms
                 r"]+$",
                 unicode,
-            ):
-                return True
-            try:
-                unicodedata_name = unicodedata.name(unicode)
-                return (
-                    "CJK UNIFIED IDEOGRAPH" in unicodedata_name
-                    or "FULLWIDTH" in unicodedata_name
-                )
-            except ValueError:
-                return False
-        return False
+            )
+        )
+
+    def _is_cjk_by_unicode_name(self, unicode: str) -> bool:
+        """Return True if the character's Unicode name indicates CJK or FULLWIDTH."""
+        try:
+            unicodedata_name = unicodedata.name(unicode)
+            return (
+                "CJK UNIFIED IDEOGRAPH" in unicodedata_name
+                or "FULLWIDTH" in unicodedata_name
+            )
+        except ValueError:
+            return False
+
+    def calc_is_cjk_char(self):
+        if self.formular:
+            return False
+        unicode = self.try_get_unicode()
+        if not unicode:
+            return False
+        if "(cid" in unicode:
+            return False
+        if len(unicode) > 1:
+            return False
+        assert len(unicode) == 1, "Unicode must be a single character"
+        if self._is_cjk_by_punctuation_list(unicode):
+            return True
+        if self._is_cjk_by_regex(unicode):
+            return True
+        return self._is_cjk_by_unicode_name(unicode)
 
     @property
     def is_space(self):
@@ -327,55 +343,47 @@ class TypesettingUnit:
 
         if unicode:
             return unicode in [
-                # 英文标点
-                ",",
-                ".",
-                ":",
-                ";",
-                "?",
-                "!",
-                # 中文点号
-                "，",  # 逗号
-                "。",  # 句号
-                "．",  # 全角句号
-                "、",  # 顿号
-                "：",  # 冒号
-                "；",  # 分号
-                "！",  # 叹号
-                "‼",  # 双叹号
-                "？",  # 问号
-                "⁇",  # 双问号
-                # 结束引号
-                "”",  # 右双引号
-                "’",  # 右单引号
-                "」",  # 右直角单引号
-                "』",  # 右直角双引号
-                # 结束括号
-                ")",  # 右圆括号
-                "]",  # 右方括号
-                "}",  # 右花括号
-                "）",  # 右圆括号
-                "〕",  # 右龟甲括号
-                "〉",  # 右单书名号
-                "】",  # 右黑色方头括号
-                "〗",  # 右空白方头括号
-                "］",  # 全角右方括号
-                "｝",  # 全角右花括号
-                # 结束双书名号
-                "》",  # 右双书名号
-                # 连接号
-                "～",  # 全角波浪号
-                "-",  # 连字符减号
-                "–",  # 短破折号 (EN DASH)
-                "—",  # 长破折号 (EM DASH)
-                # 间隔号
-                "·",  # 中间点
-                "・",  # 片假名中间点
-                "‧",  # 连字点
-                # 分隔号
-                "/",  # 斜杠
-                "／",  # 全角斜杠
-                "⁄",  # 分数斜杠
+                “,”,
+                “.”,
+                “:”,
+                “;”,
+                “?”,
+                “!”,
+                “，”,
+                “。”,
+                “．”,
+                “、”,
+                “：”,
+                “；”,
+                “！”,
+                “‼”,
+                “？”,
+                “⁇”,
+                “””,  # right double quotation mark
+                “’”,  # right single quotation mark
+                “」”,
+                “』”,
+                “)”,
+                “]”,
+                “}”,
+                “）”,
+                “〕”,
+                “〉”,
+                “】”,
+                “〗”,
+                “］”,
+                “｝”,
+                “》”,
+                “～”,
+                “-”,
+                “–“,
+                “—“,
+                “·”,
+                “・”,
+                “‧”,
+                “/”,
+                “／”,
+                “⁄”,
             ]
         return False
 
@@ -395,23 +403,20 @@ class TypesettingUnit:
         if not unicode:
             return False
         return unicode in [
-            # 开始引号
-            "“",  # 左双引号
-            "‘",  # 左单引号
-            "「",  # 左直角单引号
-            "『",  # 左直角双引号
-            # 开始括号
-            "(",  # 左圆括号
-            "[",  # 左方括号
-            "{",  # 左花括号
-            "（",  # 左圆括号
-            "〔",  # 左龟甲括号
-            "〈",  # 左单书名号
-            "《",  # 左双书名号
-            # 开始单双书名号
-            "〖",  # 左空白方头括号
-            "〘",  # 左黑色方头括号
-            "〚",  # 左单书名号
+            “””,  # left double quotation mark
+            “’”,  # left single quotation mark
+            “「”,
+            “『”,
+            “(“,
+            “[“,
+            “{“,
+            “（”,
+            “〔”,
+            “〈”,
+            “《”,
+            “〖”,
+            “〘”,
+            “〚”,
         ]
 
     def passthrough(
@@ -485,6 +490,139 @@ class TypesettingUnit:
         box = self.box
         return box.y2 - box.y
 
+    def _relocate_char(self, x: float, y: float, scale: float) -> TypesettingUnit:
+        """Helper: relocate a char-based TypesettingUnit."""
+        new_char = PdfCharacter(
+            pdf_character_id=self.char.pdf_character_id,
+            char_unicode=self.char.char_unicode,
+            box=Box(
+                x=x,
+                y=y,
+                x2=x + self.width * scale,
+                y2=y + self.height * scale,
+            ),
+            pdf_style=PdfStyle(
+                font_id=self.char.pdf_style.font_id,
+                font_size=self.char.pdf_style.font_size * scale,
+                graphic_state=self.char.pdf_style.graphic_state,
+            ),
+            scale=scale,
+            vertical=self.char.vertical,
+            advance=self.char.advance * scale if self.char.advance else None,
+            debug_info=self.debug_info,
+            xobj_id=self.char.xobj_id,
+        )
+        new_tu = TypesettingUnit(char=new_char)
+        new_tu.try_resue_cache(self)
+        return new_tu
+
+    def _relocate_formula_char(
+        self, char, x: float, y: float, scale: float, min_x: float, min_y: float
+    ) -> PdfCharacter:
+        """Helper: build a relocated PdfCharacter for a formula character."""
+        rel_x = char.box.x - min_x
+        rel_y = char.box.y - min_y
+        visual_rel_x = char.visual_bbox.box.x - min_x
+        visual_rel_y = char.visual_bbox.box.y - min_y
+        return PdfCharacter(
+            pdf_character_id=char.pdf_character_id,
+            char_unicode=char.char_unicode,
+            box=Box(
+                x=x + (rel_x + self.formular.x_offset) * scale,
+                y=y + (rel_y + self.formular.y_offset) * scale,
+                x2=x
+                + (rel_x + (char.box.x2 - char.box.x) + self.formular.x_offset) * scale,
+                y2=y
+                + (rel_y + (char.box.y2 - char.box.y) + self.formular.y_offset) * scale,
+            ),
+            visual_bbox=il_version_1.VisualBbox(
+                box=Box(
+                    x=x + (visual_rel_x + self.formular.x_offset) * scale,
+                    y=y + (visual_rel_y + self.formular.y_offset) * scale,
+                    x2=x
+                    + (
+                        visual_rel_x
+                        + (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
+                        + self.formular.x_offset
+                    )
+                    * scale,
+                    y2=y
+                    + (
+                        visual_rel_y
+                        + (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
+                        + self.formular.y_offset
+                    )
+                    * scale,
+                ),
+            ),
+            pdf_style=PdfStyle(
+                font_id=char.pdf_style.font_id,
+                font_size=char.pdf_style.font_size * scale,
+                graphic_state=char.pdf_style.graphic_state,
+            ),
+            scale=scale,
+            vertical=char.vertical,
+            advance=char.advance * scale if char.advance else None,
+            xobj_id=char.xobj_id,
+        )
+
+    def _relocate_formula(self, x: float, y: float, scale: float) -> TypesettingUnit:
+        """Helper: relocate a formula-based TypesettingUnit."""
+        min_x = self.formular.box.x
+        min_y = self.formular.box.y
+        new_chars = [
+            self._relocate_formula_char(char, x, y, scale, min_x, min_y)
+            for char in self.formular.pdf_character
+        ]
+
+        bbox_min_x = min(char.visual_bbox.box.x for char in new_chars)
+        bbox_min_y = min(char.visual_bbox.box.y for char in new_chars)
+        bbox_max_x = max(char.visual_bbox.box.x2 for char in new_chars)
+        bbox_max_y = max(char.visual_bbox.box.y2 for char in new_chars)
+
+        new_formula = PdfFormula(
+            box=Box(x=bbox_min_x, y=bbox_min_y, x2=bbox_max_x, y2=bbox_max_y),
+            pdf_character=new_chars,
+            x_offset=self.formular.x_offset * scale,
+            y_offset=self.formular.y_offset * scale,
+            x_advance=self.formular.x_advance * scale,
+        )
+
+        new_formula.pdf_curve = [
+            self._transform_curve_for_relocation(
+                curve, self.formular.box.x, self.formular.box.y, x, y, scale
+            )
+            for curve in self.formular.pdf_curve
+        ]
+        new_formula.pdf_form = [
+            self._transform_form_for_relocation(
+                form, self.formular.box.x, self.formular.box.y, x, y, scale
+            )
+            for form in self.formular.pdf_form
+        ]
+
+        update_formula_data(new_formula)
+        new_tu = TypesettingUnit(formular=new_formula)
+        new_tu.try_resue_cache(self)
+        return new_tu
+
+    def _relocate_unicode(self, x: float, y: float, scale: float) -> TypesettingUnit:
+        """Helper: relocate a unicode-based TypesettingUnit."""
+        new_unit = TypesettingUnit(
+            unicode=self.unicode,
+            font=self.font,
+            original_font=self.original_font,
+            font_size=self.font_size * scale,
+            style=self.style,
+            xobj_id=self.xobj_id,
+            debug_info=self.debug_info,
+        )
+        new_unit.x = x
+        new_unit.y = y
+        new_unit.scale = scale
+        new_unit.try_resue_cache(self)
+        return new_unit
+
     def relocate(
         self,
         x: float,
@@ -502,155 +640,11 @@ class TypesettingUnit:
             新的排版单元
         """
         if self.char:
-            # 创建新的字符对象
-            new_char = PdfCharacter(
-                pdf_character_id=self.char.pdf_character_id,
-                char_unicode=self.char.char_unicode,
-                box=Box(
-                    x=x,
-                    y=y,
-                    x2=x + self.width * scale,
-                    y2=y + self.height * scale,
-                ),
-                pdf_style=PdfStyle(
-                    font_id=self.char.pdf_style.font_id,
-                    font_size=self.char.pdf_style.font_size * scale,
-                    graphic_state=self.char.pdf_style.graphic_state,
-                ),
-                scale=scale,
-                vertical=self.char.vertical,
-                advance=self.char.advance * scale if self.char.advance else None,
-                debug_info=self.debug_info,
-                xobj_id=self.char.xobj_id,
-            )
-            new_tu = TypesettingUnit(char=new_char)
-            new_tu.try_resue_cache(self)
-            return new_tu
-
+            return self._relocate_char(x, y, scale)
         elif self.formular:
-            # 创建新的公式对象，保持内部字符的相对位置
-            new_chars = []
-            min_x = self.formular.box.x
-            min_y = self.formular.box.y
-
-            for char in self.formular.pdf_character:
-                # 计算相对位置
-                rel_x = char.box.x - min_x
-                rel_y = char.box.y - min_y
-
-                visual_rel_x = char.visual_bbox.box.x - min_x
-                visual_rel_y = char.visual_bbox.box.y - min_y
-
-                # 创建新的字符对象
-                new_char = PdfCharacter(
-                    pdf_character_id=char.pdf_character_id,
-                    char_unicode=char.char_unicode,
-                    box=Box(
-                        x=x + (rel_x + self.formular.x_offset) * scale,
-                        y=y + (rel_y + self.formular.y_offset) * scale,
-                        x2=x
-                        + (rel_x + (char.box.x2 - char.box.x) + self.formular.x_offset)
-                        * scale,
-                        y2=y
-                        + (rel_y + (char.box.y2 - char.box.y) + self.formular.y_offset)
-                        * scale,
-                    ),
-                    visual_bbox=il_version_1.VisualBbox(
-                        box=Box(
-                            x=x + (visual_rel_x + self.formular.x_offset) * scale,
-                            y=y + (visual_rel_y + self.formular.y_offset) * scale,
-                            x2=x
-                            + (
-                                visual_rel_x
-                                + (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
-                                + self.formular.x_offset
-                            )
-                            * scale,
-                            y2=y
-                            + (
-                                visual_rel_y
-                                + (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
-                                + self.formular.y_offset
-                            )
-                            * scale,
-                        ),
-                    ),
-                    pdf_style=PdfStyle(
-                        font_id=char.pdf_style.font_id,
-                        font_size=char.pdf_style.font_size * scale,
-                        graphic_state=char.pdf_style.graphic_state,
-                    ),
-                    scale=scale,
-                    vertical=char.vertical,
-                    advance=char.advance * scale if char.advance else None,
-                    xobj_id=char.xobj_id,
-                )
-                new_chars.append(new_char)
-
-            # Calculate bounding box from new_chars
-            min_x = min(char.visual_bbox.box.x for char in new_chars)
-            min_y = min(char.visual_bbox.box.y for char in new_chars)
-            max_x = max(char.visual_bbox.box.x2 for char in new_chars)
-            max_y = max(char.visual_bbox.box.y2 for char in new_chars)
-
-            new_formula = PdfFormula(
-                box=Box(
-                    x=min_x,
-                    y=min_y,
-                    x2=max_x,
-                    y2=max_y,
-                ),
-                pdf_character=new_chars,
-                x_offset=self.formular.x_offset * scale,
-                y_offset=self.formular.y_offset * scale,
-                x_advance=self.formular.x_advance * scale,
-            )
-
-            # Handle contained curves
-            new_curves = []
-            for curve in self.formular.pdf_curve:
-                new_curve = self._transform_curve_for_relocation(
-                    curve,
-                    self.formular.box.x,
-                    self.formular.box.y,
-                    x,
-                    y,
-                    scale,
-                )
-                new_curves.append(new_curve)
-            new_formula.pdf_curve = new_curves
-
-            # Handle contained forms
-            new_forms = []
-            for form in self.formular.pdf_form:
-                new_form = self._transform_form_for_relocation(
-                    form, self.formular.box.x, self.formular.box.y, x, y, scale
-                )
-                new_forms.append(new_form)
-            new_formula.pdf_form = new_forms
-
-            update_formula_data(new_formula)
-
-            new_tu = TypesettingUnit(formular=new_formula)
-            new_tu.try_resue_cache(self)
-            return new_tu
-
+            return self._relocate_formula(x, y, scale)
         elif self.unicode:
-            # 对于 Unicode 字符，我们存储新的位置信息
-            new_unit = TypesettingUnit(
-                unicode=self.unicode,
-                font=self.font,
-                original_font=self.original_font,
-                font_size=self.font_size * scale,
-                style=self.style,
-                xobj_id=self.xobj_id,
-                debug_info=self.debug_info,
-            )
-            new_unit.x = x
-            new_unit.y = y
-            new_unit.scale = scale
-            new_unit.try_resue_cache(self)
-            return new_unit
+            return self._relocate_unicode(x, y, scale)
 
     def _transform_curve_for_relocation(
         self,
@@ -988,7 +982,7 @@ class Typesetting:
                     paragraph.box = expanded_box
                 return expanded_box, True
         except Exception:
-            pass
+            return box, False
         return box, False
 
     def _try_expand_box_rightward(
@@ -1007,7 +1001,7 @@ class Typesetting:
                     paragraph.box = expanded_box
                 return expanded_box, True
         except Exception:
-            pass
+            return box, False
         return box, False
 
     def _try_layout_at_scale(
@@ -1032,7 +1026,40 @@ class Typesetting:
         except Exception:
             return None, False
 
-    def _find_optimal_scale_and_layout(
+    def _attempt_expand_space(
+        self,
+        scale: float,
+        expand_space_flag: int,
+        box: Box,
+        page: il_version_1.Page,
+        paragraph: il_version_1.PdfParagraph,
+        apply_layout: bool,
+    ) -> tuple[Box, int, float]:
+        """Try to expand the layout box when scale drops below 0.7.
+
+        Returns (new_box, new_expand_flag, new_scale).  new_scale may be reset
+        to 1.0 when an expansion succeeds but the flag resets the loop.
+        """
+        if expand_space_flag == 0:
+            box, expanded = self._try_expand_box_downward(
+                box, page, paragraph, apply_layout
+            )
+            expand_space_flag = 1
+            if expanded:
+                return box, expand_space_flag, scale
+        elif expand_space_flag == 1:
+            box, expanded = self._try_expand_box_rightward(
+                box, page, paragraph, apply_layout
+            )
+            expand_space_flag = 2
+            if expanded:
+                return box, expand_space_flag, scale
+
+        if expand_space_flag < 2:
+            scale = 1.0
+        return box, expand_space_flag, scale
+
+    def _find_optimal_scale_and_layout(  # NOSONAR - layout search has several PDF-specific fit branches
         self,
         paragraph: il_version_1.PdfParagraph,
         page: il_version_1.Page,
@@ -1087,23 +1114,9 @@ class Typesetting:
             scale = scale - 0.05 if scale > 0.6 else scale - 0.1
 
             if scale < 0.7:
-                if expand_space_flag == 0:
-                    box, expanded = self._try_expand_box_downward(
-                        box, page, paragraph, apply_layout
-                    )
-                    expand_space_flag = 1
-                    if expanded:
-                        continue
-                elif expand_space_flag == 1:
-                    box, expanded = self._try_expand_box_rightward(
-                        box, page, paragraph, apply_layout
-                    )
-                    expand_space_flag = 2
-                    if expanded:
-                        continue
-
-                if expand_space_flag < 2:
-                    scale = 1.0
+                box, expand_space_flag, scale = self._attempt_expand_space(
+                    scale, expand_space_flag, box, page, paragraph, apply_layout
+                )
 
         # 如果仍然放不下，尝试去除英文换行限制
         if use_english_line_break:
@@ -1440,7 +1453,7 @@ class Typesetting:
         all_fit = new_y >= box.y
         return new_y, all_fit, []
 
-    def _layout_typesetting_units(
+    def _layout_typesetting_units(  # NOSONAR - text layout flow keeps PDF line-breaking decisions together
         self,
         typesetting_units: list[TypesettingUnit],
         box: Box,
@@ -1504,9 +1517,9 @@ class Typesetting:
                 use_english_line_break,
                 width_before_next_break_point,
             ):
-                current_x = box.x
                 if not current_line_heights:
                     return [], False
+                current_x = box.x
                 current_y, line_all_fit, current_line_heights = (
                     self._advance_to_next_line(
                         current_line_heights, line_skip, current_y, line_ys, box
@@ -1574,6 +1587,46 @@ class Typesetting:
             if char_unicode not in ("\n",)
         ]
 
+    def _units_from_composition(
+        self,
+        composition,
+        paragraph: il_version_1.PdfParagraph,
+        get_font,
+    ) -> list[TypesettingUnit] | None:
+        """Convert a single composition item to TypesettingUnits.
+
+        Returns a list of units, or None to signal an unknown/fatal composition type.
+        Returns an empty list for compositions that produce no units.
+        """
+        if composition.pdf_line:
+            return [
+                TypesettingUnit(char=char)
+                for char in composition.pdf_line.pdf_character
+            ]
+        if composition.pdf_character:
+            return [
+                TypesettingUnit(
+                    char=composition.pdf_character, debug_info=paragraph.debug_info
+                )
+            ]
+        if composition.pdf_same_style_characters:
+            return [
+                TypesettingUnit(char=char)
+                for char in composition.pdf_same_style_characters.pdf_character
+            ]
+        if composition.pdf_same_style_unicode_characters:
+            return self._units_from_unicode_composition(
+                composition, paragraph, get_font
+            )
+        if composition.pdf_formula:
+            return [TypesettingUnit(formular=composition.pdf_formula)]
+        logger.error(
+            f"Unknown composition type. "
+            f"Composition: {composition}. "
+            f"Paragraph: {paragraph}. ",
+        )
+        return []
+
     def create_typesetting_units(
         self,
         paragraph: il_version_1.PdfParagraph,
@@ -1594,40 +1647,10 @@ class Typesetting:
         for composition in paragraph.pdf_paragraph_composition:
             if composition is None:
                 continue
-            if composition.pdf_line:
-                result.extend(
-                    [
-                        TypesettingUnit(char=char)
-                        for char in composition.pdf_line.pdf_character
-                    ],
-                )
-            elif composition.pdf_character:
-                result.append(
-                    TypesettingUnit(
-                        char=composition.pdf_character, debug_info=paragraph.debug_info
-                    ),
-                )
-            elif composition.pdf_same_style_characters:
-                result.extend(
-                    [
-                        TypesettingUnit(char=char)
-                        for char in composition.pdf_same_style_characters.pdf_character
-                    ],
-                )
-            elif composition.pdf_same_style_unicode_characters:
-                units = self._units_from_unicode_composition(
-                    composition, paragraph, get_font
-                )
-                if units is not None:
-                    result.extend(units)
-            elif composition.pdf_formula:
-                result.extend([TypesettingUnit(formular=composition.pdf_formula)])
-            else:
-                logger.error(
-                    f"Unknown composition type. "
-                    f"Composition: {composition}. "
-                    f"Paragraph: {paragraph}. ",
-                )
+            units = self._units_from_composition(composition, paragraph, get_font)
+            if units is not None:
+                result.extend(units)
+
         result = list(filter(lambda x: x.unicode is None or x.font is not None, result))
 
         if any(x.width < 0 for x in result):
@@ -1667,25 +1690,31 @@ class Typesetting:
         """Return True when box_a and box_b share any horizontal range."""
         return not (box_a.x >= box_b.x2 or box_a.x2 <= box_b.x)
 
+    def _is_right_blocker(self, element_box: Box, current_box: Box) -> bool:
+        """Return True if element_box is to the right of and vertically overlaps current_box."""
+        return element_box.x > current_box.x and self._boxes_overlap_vertically(
+            element_box, current_box
+        )
+
+    def _is_below_blocker(self, element_box: Box, current_box: Box) -> bool:
+        """Return True if element_box is below and horizontally overlaps current_box."""
+        return element_box.y2 < current_box.y and self._boxes_overlap_horizontally(
+            element_box, current_box
+        )
+
     def _iter_blocker_boxes_right(self, current_box: Box, page):
         """Yield the x coordinate of every element that lies to the right of current_box
         and has vertical overlap with it."""
         for para in page.pdf_paragraph:
             if para.box is None or para.box == current_box:
                 continue
-            if para.box.x > current_box.x and self._boxes_overlap_vertically(
-                para.box, current_box
-            ):
+            if self._is_right_blocker(para.box, current_box):
                 yield para.box.x
         for char in page.pdf_character:
-            if char.box.x > current_box.x and self._boxes_overlap_vertically(
-                char.box, current_box
-            ):
+            if self._is_right_blocker(char.box, current_box):
                 yield char.box.x
         for figure in page.pdf_figure:
-            if figure.box.x > current_box.x and self._boxes_overlap_vertically(
-                figure.box, current_box
-            ):
+            if self._is_right_blocker(figure.box, current_box):
                 yield figure.box.x
 
     def _iter_blocker_boxes_below(self, current_box: Box, page):
@@ -1694,19 +1723,13 @@ class Typesetting:
         for para in page.pdf_paragraph:
             if para.box is None or para.box == current_box:
                 continue
-            if para.box.y2 < current_box.y and self._boxes_overlap_horizontally(
-                para.box, current_box
-            ):
+            if self._is_below_blocker(para.box, current_box):
                 yield para.box.y2
         for char in page.pdf_character:
-            if char.box.y2 < current_box.y and self._boxes_overlap_horizontally(
-                char.box, current_box
-            ):
+            if self._is_below_blocker(char.box, current_box):
                 yield char.box.y2
         for figure in page.pdf_figure:
-            if figure.box.y2 < current_box.y and self._boxes_overlap_horizontally(
-                figure.box, current_box
-            ):
+            if self._is_below_blocker(figure.box, current_box):
                 yield figure.box.y2
 
     def get_max_right_space(self, current_box: Box, page) -> float:

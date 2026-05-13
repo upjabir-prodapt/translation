@@ -447,6 +447,50 @@ class ILTranslator:
                     return paragraph
         return None
 
+    def _build_page_font_maps(
+        self, page: Page
+    ) -> tuple[dict[str, PdfFont], dict[int, dict[str, PdfFont]]]:
+        """Build the per-page and per-xobject font lookup maps."""
+        page_font_map: dict[str, PdfFont] = {}
+        for font in page.pdf_font:
+            page_font_map[font.font_id] = font
+        page_xobj_font_map: dict[int, dict[str, PdfFont]] = {}
+        for xobj in page.pdf_xobject:
+            page_xobj_font_map[xobj.xobj_id] = page_font_map.copy()
+            for font in xobj.pdf_font:
+                page_xobj_font_map[xobj.xobj_id][font.font_id] = font
+        return page_font_map, page_xobj_font_map
+
+    def _submit_paragraph_translation(
+        self,
+        paragraph: PdfParagraph,
+        page: Page,
+        pbar,
+        tracker: PageTranslateTracker,
+        page_font_map: dict,
+        page_xobj_font_map: dict,
+        executor: PriorityThreadPoolExecutor,
+    ) -> None:
+        """Update title context and submit a paragraph for translation."""
+        paragraph_token_count = self.calc_token_count(paragraph.unicode)
+        if paragraph.layout_label == "title":
+            self.shared_context_cross_split_part.recent_title_paragraph = (
+                copy.deepcopy(paragraph)
+            )
+        executor.submit(
+            self.translate_paragraph,
+            paragraph,
+            page,
+            pbar,
+            tracker.new_paragraph(),
+            page_font_map,
+            page_xobj_font_map,
+            priority=1048576 - paragraph_token_count,
+            paragraph_token_count=paragraph_token_count,
+            title_paragraph=self.translation_config.shared_context_cross_split_part.first_paragraph,
+            local_title_paragraph=self.translation_config.shared_context_cross_split_part.recent_title_paragraph,
+        )
+
     def process_page(
         self,
         page: Page,
@@ -455,32 +499,10 @@ class ILTranslator:
         tracker: PageTranslateTracker = None,
     ):
         self.translation_config.raise_if_cancelled()
+        page_font_map, page_xobj_font_map = self._build_page_font_maps(page)
         for paragraph in page.pdf_paragraph:
-            page_font_map = {}
-            for font in page.pdf_font:
-                page_font_map[font.font_id] = font
-            page_xobj_font_map = {}
-            for xobj in page.pdf_xobject:
-                page_xobj_font_map[xobj.xobj_id] = page_font_map.copy()
-                for font in xobj.pdf_font:
-                    page_xobj_font_map[xobj.xobj_id][font.font_id] = font
-            paragraph_token_count = self.calc_token_count(paragraph.unicode)
-            if paragraph.layout_label == "title":
-                self.shared_context_cross_split_part.recent_title_paragraph = (
-                    copy.deepcopy(paragraph)
-                )
-            executor.submit(
-                self.translate_paragraph,
-                paragraph,
-                page,
-                pbar,
-                tracker.new_paragraph(),
-                page_font_map,
-                page_xobj_font_map,
-                priority=1048576 - paragraph_token_count,
-                paragraph_token_count=paragraph_token_count,
-                title_paragraph=self.translation_config.shared_context_cross_split_part.first_paragraph,
-                local_title_paragraph=self.translation_config.shared_context_cross_split_part.recent_title_paragraph,
+            self._submit_paragraph_translation(
+                paragraph, page, pbar, tracker, page_font_map, page_xobj_font_map, executor
             )
 
     class TranslateInput:
@@ -941,6 +963,62 @@ class ILTranslator:
         )
         return comp
 
+    def _make_no_placeholder_result(
+        self,
+        output: str,
+        base_style,
+        llm_translate_tracker,
+    ) -> list:
+        """Build the result list when there are no placeholders."""
+        comp = PdfParagraphComposition()
+        comp.pdf_same_style_unicode_characters = PdfSameStyleUnicodeCharacters()
+        comp.pdf_same_style_unicode_characters.unicode = output
+        comp.pdf_same_style_unicode_characters.pdf_style = base_style
+        if llm_translate_tracker:
+            llm_translate_tracker.set_placeholder_full_match()
+        return [comp]
+
+    def _check_placeholder_match_and_log(
+        self,
+        patterns: list,
+        output: str,
+        input_unicode: str,
+        llm_translate_tracker,
+    ) -> None:
+        """Check if all placeholders matched and update tracker / log accordingly."""
+        all_match = all(re.search(p, output, flags=re.IGNORECASE) for p in patterns)
+        if all_match:
+            if llm_translate_tracker:
+                llm_translate_tracker.set_placeholder_full_match()
+        else:
+            logger.debug(f"Failed to match all placeholder for {input_unicode}")
+
+    def _collect_output_segments(
+        self,
+        output: str,
+        combined_pattern: str,
+        placeholders: list,
+        base_style,
+        remove_placeholder,
+    ) -> list:
+        """Split output by placeholder matches and return composition list."""
+        result = []
+        last_end = 0
+        for match in re.finditer(combined_pattern, output, flags=re.IGNORECASE):
+            if match.start() > last_end:
+                text = output[last_end : match.start()]
+                if text:
+                    result.append(self._make_plain_text_comp(text, base_style, remove_placeholder))
+            result.append(
+                self._resolve_matched_placeholder(match.group(0), placeholders, remove_placeholder)
+            )
+            last_end = match.end()
+        if last_end < len(output):
+            text = output[last_end:]
+            if text:
+                result.append(self._make_plain_text_comp(text, base_style, remove_placeholder))
+        return result
+
     def parse_translate_output(
         self,
         input_text: TranslateInput,
@@ -948,70 +1026,32 @@ class ILTranslator:
         tracker: ParagraphTranslateTracker | None = None,
         llm_translate_tracker: LLMTranslateTracker | None = None,
     ) -> [PdfParagraphComposition]:
-        result = []
-
         # 如果没有占位符，直接返回整个文本
         if not input_text.placeholders:
-            comp = PdfParagraphComposition()
-            comp.pdf_same_style_unicode_characters = PdfSameStyleUnicodeCharacters()
-            comp.pdf_same_style_unicode_characters.unicode = output
-            comp.pdf_same_style_unicode_characters.pdf_style = input_text.base_style
-            if llm_translate_tracker:
-                llm_translate_tracker.set_placeholder_full_match()
-            return [comp]
+            return self._make_no_placeholder_result(
+                output, input_text.base_style, llm_translate_tracker
+            )
 
         # 构建正则表达式模式
         patterns, placeholder_patterns = self._build_placeholder_patterns(
             input_text.placeholders
         )
 
-        all_match = all(re.search(p, output, flags=re.IGNORECASE) for p in patterns)
-        if all_match:
-            if llm_translate_tracker:
-                llm_translate_tracker.set_placeholder_full_match()
-        else:
-            logger.debug(f"Failed to match all placeholder for {input_text.unicode}")
+        self._check_placeholder_match_and_log(
+            patterns, output, input_text.unicode, llm_translate_tracker
+        )
 
-        # 合并所有模式
         combined_pattern = "|".join(patterns)
         combined_placeholder_pattern = "|".join(placeholder_patterns)
-
         allowed_placeholder_tokens = self._build_allowed_placeholder_tokens(input_text)
         remove_placeholder = self._make_remove_placeholder_fn(
             combined_placeholder_pattern, allowed_placeholder_tokens, tracker
         )
 
-        # 找到所有匹配
-        last_end = 0
-        for match in re.finditer(combined_pattern, output, flags=re.IGNORECASE):
-            # 处理匹配之前的普通文本
-            if match.start() > last_end:
-                text = output[last_end : match.start()]
-                if text:
-                    result.append(
-                        self._make_plain_text_comp(
-                            text, input_text.base_style, remove_placeholder
-                        )
-                    )
-
-            result.append(
-                self._resolve_matched_placeholder(
-                    match.group(0), input_text.placeholders, remove_placeholder
-                )
-            )
-            last_end = match.end()
-
-        # 处理最后的普通文本
-        if last_end < len(output):
-            text = output[last_end:]
-            if text:
-                result.append(
-                    self._make_plain_text_comp(
-                        text, input_text.base_style, remove_placeholder
-                    )
-                )
-
-        return result
+        return self._collect_output_segments(
+            output, combined_pattern, input_text.placeholders,
+            input_text.base_style, remove_placeholder
+        )
 
     def pre_translate_paragraph(
         self,

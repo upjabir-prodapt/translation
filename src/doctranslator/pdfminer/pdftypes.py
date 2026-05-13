@@ -334,30 +334,38 @@ class PDFStream(PDFObject):
             except zlib.error:
                 return b""
 
+    def _is_passthrough_filter(self, f: object) -> bool:
+        """Return True if the filter produces data that should be passed through as-is."""
+        return (
+            f in LITERALS_DCT_DECODE
+            or f in LITERALS_JBIG2_DECODE
+            or f in LITERALS_JPX_DECODE
+        )
+
+    def _decode_compressed_data(self, data: bytes, f: object, params: object) -> bytes:
+        """Apply a single compression filter (non-passthrough) and return decoded bytes."""
+        if f in LITERALS_FLATE_DECODE:
+            return self._apply_flate_decode(data)
+        if f in LITERALS_LZW_DECODE:
+            return lzwdecode(data)
+        if f in LITERALS_ASCII85_DECODE:
+            return ascii85decode(data)
+        if f in LITERALS_ASCIIHEX_DECODE:
+            return asciihexdecode(data)
+        if f in LITERALS_RUNLENGTH_DECODE:
+            return rldecode(data)
+        if f in LITERALS_CCITTFAX_DECODE:
+            return ccittfaxdecode(data, params)
+        if f == LITERAL_CRYPT:
+            raise PDFNotImplementedError("/Crypt filter is unsupported")
+        raise PDFNotImplementedError("Unsupported filter: %r" % f)
+
     def _apply_single_stream_filter(
         self, data: bytes, f: object, params: object
     ) -> bytes:
         """Apply one filter to stream data and return the decoded bytes."""
-        if f in LITERALS_FLATE_DECODE:
-            data = self._apply_flate_decode(data)
-        elif f in LITERALS_LZW_DECODE:
-            data = lzwdecode(data)
-        elif f in LITERALS_ASCII85_DECODE:
-            data = ascii85decode(data)
-        elif f in LITERALS_ASCIIHEX_DECODE:
-            data = asciihexdecode(data)
-        elif f in LITERALS_RUNLENGTH_DECODE:
-            data = rldecode(data)
-        elif f in LITERALS_CCITTFAX_DECODE:
-            data = ccittfaxdecode(data, params)
-        elif f in LITERALS_DCT_DECODE:
-            pass  # JPG stream — return as-is without double-decoding
-        elif f in LITERALS_JBIG2_DECODE or f in LITERALS_JPX_DECODE:
-            pass  # JBIG2/JPX streams are passed through as-is
-        elif f == LITERAL_CRYPT:
-            raise PDFNotImplementedError("/Crypt filter is unsupported")
-        else:
-            raise PDFNotImplementedError("Unsupported filter: %r" % f)
+        if not self._is_passthrough_filter(f):
+            data = self._decode_compressed_data(data, f, params)
 
         # apply predictors
         if params and "Predictor" in params:

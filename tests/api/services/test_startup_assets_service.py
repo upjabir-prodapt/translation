@@ -74,4 +74,4 @@ class TestStartupAssetsService:
             ):
                 status = await service.run_preflight()
                 assert status.critical_sync_ok is True
-                assert "tmp" in status.assets_root
+                assert Path(status.assets_root) == Path(tempfile.gettempdir())

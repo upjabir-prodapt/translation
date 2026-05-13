@@ -2,6 +2,7 @@ import logging
 import shutil
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -144,10 +145,10 @@ def _recalculate_line_text_with_spacing(line, orientation):
 # vertical: True if the char is vertical, False if the char is horizontal
 def extract_paragraph_line(
     pdf_path,
-) -> dict[int, list[tuple[il_version_1.Box, str, bool]]]:
+) -> Optional[dict[int, list[tuple[il_version_1.Box, str, bool]]]]:
     il = parse_pdf(pdf_path)
     if il is None:
-        return None  # type: ignore[return-value]
+        return None
     line_boxes = {}
     for page in il.page:
         line_boxes[page.page_number] = convert_page_to_char_boxes(page)
@@ -213,7 +214,11 @@ def _assign_char_to_band(
     if best_idx != -1:
         band_chars, band_ss, band_se = bands_data[best_idx]
         band_chars.append(char)
-        bands_data[best_idx] = (band_chars, min(band_ss, char_ss), max(band_se, char_se))
+        bands_data[best_idx] = (
+            band_chars,
+            min(band_ss, char_ss),
+            max(band_se, char_se),
+        )
         bands_data.append(bands_data.pop(best_idx))
     else:
         bands_data.append(([char], char_ss, char_se))
@@ -257,7 +262,10 @@ def _split_tall_line(
     line_ss = min(get_secondary_start(c) for c in line.chars)
     line_se = max(get_secondary_end(c) for c in line.chars)
 
-    if line_se - line_ss > max_char_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD and len(line.chars) > 1:
+    if (
+        line_se - line_ss > max_char_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD
+        and len(line.chars) > 1
+    ):
         centers = np.array(
             [[(get_secondary_start(c) + get_secondary_end(c)) / 2] for c in line.chars]
         )
@@ -398,10 +406,17 @@ def _check_horizontal_adjacency_merge(
         h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
         if h_gap >= 0:
             avg_char_width = np.mean(
-                [c[0].x2 - c[0].x for c in (line1.chars + line2.chars) if c[0].x2 > c[0].x]
+                [
+                    c[0].x2 - c[0].x
+                    for c in (line1.chars + line2.chars)
+                    if c[0].x2 > c[0].x
+                ]
                 or [0]
             )
-            if avg_char_width > 0 and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER:
+            if (
+                avg_char_width > 0
+                and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
+            ):
                 line1.chars.extend(line2.chars)
                 lines_to_skip.add(j)
                 return True, _merge_bbox(bbox1, bbox2)
@@ -424,10 +439,17 @@ def _check_vertical_adjacency_merge(
         v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
         if v_gap >= 0:
             avg_char_height = np.mean(
-                [c[0].y2 - c[0].y for c in (line1.chars + line2.chars) if c[0].y2 > c[0].y]
+                [
+                    c[0].y2 - c[0].y
+                    for c in (line1.chars + line2.chars)
+                    if c[0].y2 > c[0].y
+                ]
                 or [0]
             )
-            if avg_char_height > 0 and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER:
+            if (
+                avg_char_height > 0
+                and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
+            ):
                 line1.chars.extend(line2.chars)
                 lines_to_skip.add(j)
                 return True, _merge_bbox(bbox1, bbox2)
@@ -439,8 +461,105 @@ def _check_adjacency_merge(
 ) -> tuple[bool, Bbox]:
     """Try to merge line1 and line2 by adjacency. Returns (merged, new_bbox1)."""
     if not line1.chars[0][2]:  # horizontal
-        return _check_horizontal_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+        return _check_horizontal_adjacency_merge(
+            line1, line2, bbox1, bbox2, lines_to_skip, j
+        )
     return _check_vertical_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+
+
+def _compute_bbox_area(bbox: Bbox) -> float:
+    """Return area of *bbox*, or 0 if degenerate."""
+    if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+        return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    return 0
+
+
+def _compute_intersection_area(bbox1: Bbox, bbox2: Bbox) -> float:
+    """Return the intersection area of two bounding boxes."""
+    inter_x0 = max(bbox1[0], bbox2[0])
+    inter_y0 = max(bbox1[1], bbox2[1])
+    inter_x1 = min(bbox1[2], bbox2[2])
+    inter_y1 = min(bbox1[3], bbox2[3])
+    return max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
+
+
+def _try_merge_line_pair(
+    line1: "Line",
+    line2: "Line",
+    bbox1: Bbox,
+    bbox2: Bbox,
+    page_lines: list,
+    i: int,
+    j: int,
+    lines_to_skip: set,
+) -> tuple[bool, "Line", Bbox]:
+    """Attempt containment then adjacency merge of line1 with line2."""
+    inter_area = _compute_intersection_area(bbox1, bbox2)
+    area1 = _compute_bbox_area(bbox1)
+    area2 = _compute_bbox_area(bbox2)
+
+    did_merge, line1, bbox1 = _check_containment_merge(
+        line1,
+        line2,
+        bbox1,
+        bbox2,
+        inter_area,
+        area1,
+        area2,
+        page_lines,
+        i,
+        j,
+        lines_to_skip,
+    )
+    if did_merge:
+        return True, line1, bbox1
+
+    did_adj, bbox1 = _check_adjacency_merge(
+        line1, line2, bbox1, bbox2, lines_to_skip, j
+    )
+    return did_adj, line1, bbox1
+
+
+def _sort_and_recalculate_merged_line(line1: "Line") -> None:
+    """Sort chars and recalculate text after a merge."""
+    orientation = "horizontal" if not line1.chars[0][2] else "vertical"
+    if orientation == "horizontal":
+        line1.chars.sort(key=lambda c: c[0].x)
+    else:
+        line1.chars.sort(key=lambda c: c[0].y)
+    _recalculate_line_text_with_spacing(line1, orientation)
+
+
+def _merge_line_with_candidates(
+    line1: "Line",
+    bbox1: Bbox,
+    i: int,
+    page_lines: list,
+    lines_to_skip: set,
+) -> tuple[bool, "Line", Bbox]:
+    """Scan subsequent lines and merge any that overlap or are adjacent to line1."""
+    line1_avg_char_height = np.mean(
+        [c[0].y2 - c[0].y for c in line1.chars if c[0].y2 > c[0].y] or [0]
+    )
+    max_v_gap = line1_avg_char_height * MERGE_VERTICAL_GAP_MULTIPLIER
+    merged = False
+
+    for j in range(i + 1, len(page_lines)):
+        if j in lines_to_skip:
+            continue
+        line2 = page_lines[j]
+        if not line2.chars:
+            continue
+        bbox2 = _compute_bbox(line2.chars)
+        if bbox1[1] - bbox2[3] > max_v_gap:
+            break
+        did, line1, bbox1 = _try_merge_line_pair(
+            line1, line2, bbox1, bbox2, page_lines, i, j, lines_to_skip
+        )
+        if did:
+            merged = True
+
+    return merged, line1, bbox1
 
 
 def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
@@ -464,73 +583,12 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
             continue
 
         bbox1 = _compute_bbox(line1.chars)
-
-        line1_avg_char_height = np.mean(
-            [c[0].y2 - c[0].y for c in line1.chars if c[0].y2 > c[0].y] or [0]
+        merged, line1, bbox1 = _merge_line_with_candidates(
+            line1, bbox1, i, page_lines, lines_to_skip
         )
-        max_v_gap = line1_avg_char_height * MERGE_VERTICAL_GAP_MULTIPLIER
-
-        merged = False
-        for j in range(i + 1, len(page_lines)):
-            if j in lines_to_skip:
-                continue
-
-            line2 = page_lines[j]
-            if not line2.chars:
-                continue
-
-            bbox2 = _compute_bbox(line2.chars)
-
-            v_gap = bbox1[1] - bbox2[3]
-            if v_gap > max_v_gap:
-                break
-
-            inter_x0 = max(bbox1[0], bbox2[0])
-            inter_y0 = max(bbox1[1], bbox2[1])
-            inter_x1 = min(bbox1[2], bbox2[2])
-            inter_y1 = min(bbox1[3], bbox2[3])
-            inter_area = max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
-            area1 = (
-                (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-                if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1])
-                else 0
-            )
-            area2 = (
-                (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-                if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1])
-                else 0
-            )
-
-            did_merge, line1, bbox1 = _check_containment_merge(
-                line1,
-                line2,
-                bbox1,
-                bbox2,
-                inter_area,
-                area1,
-                area2,
-                page_lines,
-                i,
-                j,
-                lines_to_skip,
-            )
-            if did_merge:
-                merged = True
-                continue
-
-            did_adj, bbox1 = _check_adjacency_merge(
-                line1, line2, bbox1, bbox2, lines_to_skip, j
-            )
-            if did_adj:
-                merged = True
 
         if merged:
-            orientation = "horizontal" if not line1.chars[0][2] else "vertical"
-            if orientation == "horizontal":
-                line1.chars.sort(key=lambda c: c[0].x)
-            else:
-                line1.chars.sort(key=lambda c: c[0].y)
-            _recalculate_line_text_with_spacing(line1, orientation)
+            _sort_and_recalculate_merged_line(line1)
 
         merged_lines.append(line1)
 
@@ -620,8 +678,6 @@ def draw_clustered_lines_to_image(pdf_path, clustered_lines: dict[int, list[Line
 
         if pixmap.n in [3, 4]:
             image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-
-        # cv2.imwrite(str(debug_dir / f"{page_number}.png"), image_array)
 
         annotated_image = image_array.copy()
 
@@ -714,13 +770,6 @@ def main():
 
         total_lines = sum(len(l) for l in lines.values())
         logger.info(f"Clustered into {total_lines} lines. Drawing boxes...")
-
-        # logger.info("--- Clustered Lines Text ---")
-        # for page_num, page_lines in lines.items():
-        #     logger.info(f"Page {page_num}:")
-        #     for i, line in enumerate(page_lines):
-        #         logger.info(f"  Line {i}: {line.text}")
-        # logger.info("----------------------------")
 
         draw_clustered_lines_to_image(pdf_path, lines)
         logger.info("Annotated images saved in 'ocr-box-image-clustered' directory.")

@@ -114,6 +114,39 @@ def _extract_font_from_same_style_unicode(
     return fonts
 
 
+def _extract_font_from_composition(
+    comp: dict, page_font_map: dict[str, tuple[str, str]]
+) -> set[tuple[str, str]]:
+    """Dispatch font extraction for a single paragraph composition entry."""
+    if comp.get("pdf_character"):
+        return _extract_font_from_char(comp["pdf_character"], page_font_map)
+    if comp.get("pdf_line"):
+        return _extract_font_from_line(comp["pdf_line"], page_font_map)
+    if comp.get("pdf_formula"):
+        return _extract_font_from_formula(comp["pdf_formula"], page_font_map)
+    if comp.get("pdf_same_style_characters"):
+        return _extract_font_from_same_style(
+            comp["pdf_same_style_characters"], page_font_map
+        )
+    if comp.get("pdf_same_style_unicode_characters"):
+        return _extract_font_from_same_style_unicode(
+            comp["pdf_same_style_unicode_characters"], page_font_map
+        )
+    return set()
+
+
+def _extract_paragraph_style_font(
+    paragraph: dict, page_font_map: dict[str, tuple[str, str]]
+) -> set[tuple[str, str]]:
+    """Extract font from the paragraph-level pdf_style, if present."""
+    fonts: set[tuple[str, str]] = set()
+    if paragraph.get("pdf_style"):
+        entry = _get_font_from_style(paragraph["pdf_style"], page_font_map)
+        if entry:
+            fonts.add(entry)
+    return fonts
+
+
 def extract_fonts_from_paragraph(
     paragraph: dict, page_font_map: dict[str, tuple[str, str]]
 ) -> set[tuple[str, str]]:
@@ -127,35 +160,31 @@ def extract_fonts_from_paragraph(
     Returns:
         Set of (font_id, name) tuples
     """
-    fonts: set[tuple[str, str]] = set()
-
-    # Check if paragraph has a pdfStyle with font_id
-    if "pdf_style" in paragraph and paragraph["pdf_style"]:
-        entry = _get_font_from_style(paragraph["pdf_style"], page_font_map)
-        if entry:
-            fonts.add(entry)
-
-    # Process paragraph compositions if present
+    fonts = _extract_paragraph_style_font(paragraph, page_font_map)
     for comp in paragraph.get("pdf_paragraph_composition", []):
-        if "pdf_character" in comp and comp["pdf_character"]:
-            fonts |= _extract_font_from_char(comp["pdf_character"], page_font_map)
-        elif "pdf_line" in comp and comp["pdf_line"]:
-            fonts |= _extract_font_from_line(comp["pdf_line"], page_font_map)
-        elif "pdf_formula" in comp and comp["pdf_formula"]:
-            fonts |= _extract_font_from_formula(comp["pdf_formula"], page_font_map)
-        elif "pdf_same_style_characters" in comp and comp["pdf_same_style_characters"]:
-            fonts |= _extract_font_from_same_style(
-                comp["pdf_same_style_characters"], page_font_map
-            )
-        elif (
-            "pdf_same_style_unicode_characters" in comp
-            and comp["pdf_same_style_unicode_characters"]
-        ):
-            fonts |= _extract_font_from_same_style_unicode(
-                comp["pdf_same_style_unicode_characters"], page_font_map
-            )
-
+        fonts |= _extract_font_from_composition(comp, page_font_map)
     return fonts
+
+
+def _build_page_font_map(page: dict) -> dict[str, tuple[str, str]]:
+    """Build a font_id -> (font_id, name) map for a single page dict."""
+    page_font_map: dict[str, tuple[str, str]] = {}
+    for font in page.get("pdf_font", []):
+        if "font_id" in font and "name" in font:
+            page_font_map[font["font_id"]] = (font["font_id"], font["name"])
+    return page_font_map
+
+
+def _collect_matching_fonts_from_page(
+    page: dict, pattern, page_font_map: dict
+) -> set[tuple[str, str]]:
+    """Return fonts used in paragraphs whose debug_id matches *pattern*."""
+    found: set[tuple[str, str]] = set()
+    for paragraph in page.get("pdf_paragraph", []):
+        debug_id = paragraph.get("debug_id")
+        if debug_id and pattern.search(debug_id):
+            found.update(extract_fonts_from_paragraph(paragraph, page_font_map))
+    return found
 
 
 def find_fonts_by_debug_id(json_path: Path, debug_id_regex: str) -> dict[str, str]:
@@ -169,34 +198,16 @@ def find_fonts_by_debug_id(json_path: Path, debug_id_regex: str) -> dict[str, st
     Returns:
         Dictionary mapping font_ids to font names
     """
-    # Load and parse JSON
     with json_path.open("rb") as f:
         doc_data = orjson.loads(f.read())
 
-    # Compile regex pattern (case insensitive)
     pattern = re.compile(debug_id_regex.strip(" \"'"), re.IGNORECASE)
+    found_fonts: set[tuple[str, str]] = set()
 
-    # Set to collect all found font information
-    found_fonts = set()
-
-    # Process each page
     for page in doc_data.get("page", []):
-        # Create a mapping of font_id to (font_id, name) tuples for this page
-        page_font_map = {}
-        for font in page.get("pdf_font", []):
-            if "font_id" in font and "name" in font:
-                page_font_map[font["font_id"]] = (font["font_id"], font["name"])
+        page_font_map = _build_page_font_map(page)
+        found_fonts.update(_collect_matching_fonts_from_page(page, pattern, page_font_map))
 
-        # Check each paragraph
-        for paragraph in page.get("pdf_paragraph", []):
-            # Check if paragraph has debug_id and if it matches the pattern
-            debug_id = paragraph.get("debug_id")
-            if debug_id and pattern.search(debug_id):
-                # Get all fonts used in this paragraph
-                paragraph_fonts = extract_fonts_from_paragraph(paragraph, page_font_map)
-                found_fonts.update(paragraph_fonts)
-
-    # Convert set of tuples to dictionary
     return dict(found_fonts)
 
 
@@ -219,28 +230,43 @@ def _resolve_json_path(args) -> "tuple[Path | None, int]":
     return json_path, 0
 
 
+def _collect_new_fonts_from_paragraph(
+    paragraph_content: dict,
+    page_font_map: dict,
+    page_index: int,
+    paragraph_index: int,
+    existing_names: set,
+    fonts: list,
+) -> None:
+    """Append unique (page_idx, font_name, para_idx, debug_id) entries to *fonts*."""
+    font_debug_id = paragraph_content.get("debug_id")
+    if not font_debug_id:
+        return
+    paragraph_fonts = extract_fonts_from_paragraph(paragraph_content, page_font_map)
+    for _font_id, font_name in paragraph_fonts:
+        if font_name not in existing_names:
+            fonts.append((page_index, font_name, paragraph_index, font_debug_id))
+            existing_names.add(font_name)
+
+
 def _collect_paragraph_fonts_from_file(json_path: Path) -> list:
     """Scan all paragraphs in *json_path* and return unique (page_idx, font_name, para_idx, debug_id) tuples."""
-    fonts = []
+    fonts: list = []
     with json_path.open(encoding="utf-8") as f:
         pdf_data = json.load(f)
 
     for page_index, page in enumerate(pdf_data["page"]):
-        page_font_map = {
-            font["font_id"]: (font["font_id"], font["name"])
-            for font in page["pdf_font"]
-            if "font_id" in font and "name" in font
-        }
+        page_font_map = _build_page_font_map(page)
+        existing_names: set = {entry[1] for entry in fonts}
         for paragraph_index, paragraph_content in enumerate(page["pdf_paragraph"]):
-            font_debug_id = paragraph_content.get("debug_id")
-            if not font_debug_id:
-                continue
-            paragraph_fonts = extract_fonts_from_paragraph(paragraph_content, page_font_map)
-            existing_names = {entry[1] for entry in fonts}
-            for _font_id, font_name in paragraph_fonts:
-                if font_name not in existing_names:
-                    fonts.append((page_index, font_name, paragraph_index, font_debug_id))
-                    existing_names.add(font_name)
+            _collect_new_fonts_from_paragraph(
+                paragraph_content,
+                page_font_map,
+                page_index,
+                paragraph_index,
+                existing_names,
+                fonts,
+            )
     return fonts
 
 

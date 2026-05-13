@@ -147,7 +147,7 @@ def _run_initializer(executor_reference, initializer, initargs):
     try:
         initializer(*initargs)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - broad catch is intentional: initializer may raise any exception type
         _base.LOGGER.critical("Exception in initializer:", exc_info=True)
         executor = executor_reference()
         if executor is not None:
@@ -169,7 +169,7 @@ def _worker(executor_reference, work_queue, initializer, initargs):
                     return
             finally:
                 work_queue.task_done()
-    except Exception:
+    except Exception:  # noqa: BLE001 - broad catch is intentional: re-raised immediately after logging
         _base.LOGGER.critical("Exception in worker", exc_info=True)
         raise
 

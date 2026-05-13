@@ -163,53 +163,26 @@ class ResultMerger:
             )
         return auto_extracted_glossary_path
 
-    def merge_results(
-        self,
-        results: dict[int, TranslateResult | None],
-        split_points: list[SplitPoint] | None = None,
-    ) -> TranslateResult:
-        """Merge multiple translation results into one"""
-        if not results:
-            raise ValueError("No results to merge")
-
-        basename = Path(self.config.input_file).stem
+    def _build_output_file_names(self, basename: str) -> tuple[str, str, str, str]:
+        """Return (mono_name, dual_name, no_wm_mono_name, no_wm_debug_suffix)."""
         debug_suffix = ".debug" if self.config.debug else ""
-
         mono_file_name = f"{basename}{debug_suffix}.{self.config.lang_out}.mono.pdf"
         dual_file_name = f"{basename}{debug_suffix}.{self.config.lang_out}.dual.pdf"
-
-        debug_suffix += ".no_watermark"
+        no_wm_suffix = debug_suffix + ".no_watermark"
         mono_file_name_no_watermark = (
-            f"{basename}{debug_suffix}.{self.config.lang_out}.mono.pdf"
+            f"{basename}{no_wm_suffix}.{self.config.lang_out}.mono.pdf"
         )
+        return mono_file_name, dual_file_name, mono_file_name_no_watermark, no_wm_suffix
 
-        results = {k: v for k, v in results.items() if v is not None}
-        sorted_results = dict(sorted(results.items()))
-        overlap_pages_list = self._build_overlap_pages_list(
-            sorted_results, split_points
-        )
-
-        merged_mono_path = self._try_merge_mono(
-            results, sorted_results, mono_file_name, overlap_pages_list
-        )
-        merged_dual_path = self._try_merge_dual(
-            results, sorted_results, dual_file_name, overlap_pages_list
-        )
-        merged_no_watermark_mono_path, merged_no_watermark_dual_path = (
-            self._try_merge_no_watermark_pdfs(
-                results, sorted_results, mono_file_name_no_watermark, overlap_pages_list
-            )
-        )
-        auto_extracted_glossary_path = self._save_auto_extracted_glossary(
-            basename, debug_suffix
-        )
-
-        # Create merged result
-        merged_result = TranslateResult(
-            mono_pdf_path=merged_mono_path,
-            dual_pdf_path=merged_dual_path,
-            auto_extracted_glossary_path=auto_extracted_glossary_path,
-        )
+    @staticmethod
+    def _reconcile_watermark_paths(
+        merged_result: TranslateResult,
+        merged_mono_path,
+        merged_dual_path,
+        merged_no_watermark_mono_path,
+        merged_no_watermark_dual_path,
+    ) -> None:
+        """Cross-assign mono/dual watermark paths so neither side is left None."""
         merged_result.no_watermark_mono_pdf_path = merged_no_watermark_mono_path
         merged_result.no_watermark_dual_pdf_path = merged_no_watermark_dual_path
 
@@ -223,12 +196,58 @@ class ResultMerger:
         elif merged_result.dual_pdf_path is None:
             merged_result.dual_pdf_path = merged_no_watermark_dual_path
 
-        # Calculate total time
+    def merge_results(
+        self,
+        results: dict[int, TranslateResult | None],
+        split_points: list[SplitPoint] | None = None,
+    ) -> TranslateResult:
+        """Merge multiple translation results into one"""
+        if not results:
+            raise ValueError("No results to merge")
+
+        basename = Path(self.config.input_file).stem
+        (
+            mono_file_name,
+            dual_file_name,
+            mono_file_name_no_watermark,
+            no_wm_suffix,
+        ) = self._build_output_file_names(basename)
+
+        results = {k: v for k, v in results.items() if v is not None}
+        sorted_results = dict(sorted(results.items()))
+        overlap_pages_list = self._build_overlap_pages_list(sorted_results, split_points)
+
+        merged_mono_path = self._try_merge_mono(
+            results, sorted_results, mono_file_name, overlap_pages_list
+        )
+        merged_dual_path = self._try_merge_dual(
+            results, sorted_results, dual_file_name, overlap_pages_list
+        )
+        merged_no_watermark_mono_path, merged_no_watermark_dual_path = (
+            self._try_merge_no_watermark_pdfs(
+                results, sorted_results, mono_file_name_no_watermark, overlap_pages_list
+            )
+        )
+        auto_extracted_glossary_path = self._save_auto_extracted_glossary(
+            basename, no_wm_suffix
+        )
+
+        merged_result = TranslateResult(
+            mono_pdf_path=merged_mono_path,
+            dual_pdf_path=merged_dual_path,
+            auto_extracted_glossary_path=auto_extracted_glossary_path,
+        )
+        self._reconcile_watermark_paths(
+            merged_result,
+            merged_mono_path,
+            merged_dual_path,
+            merged_no_watermark_mono_path,
+            merged_no_watermark_dual_path,
+        )
         total_time = sum(
             r.total_seconds for r in results.values() if hasattr(r, "total_seconds")
         )
         merged_result.total_seconds = total_time
-
         return merged_result
 
     def _merge_pdfs(

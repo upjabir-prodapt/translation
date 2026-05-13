@@ -700,27 +700,40 @@ class PDFCreater:
         page_xref_id = pdf[page.page_number].xref
         return self.get_xobj_available_fonts(page_xref_id, pdf)
 
+    def _resolve_xref_resources(self, pdf, resources_type, r_id):
+        """Resolve resource dict from an xref or inline dict, returning (type, value)."""
+        if resources_type == "xref":
+            resource_xref_id = re.search("(\\d+) 0 R", r_id).group(1)
+            r_id = pdf.xref_object(int(resource_xref_id))
+            resources_type = "dict"
+        return resources_type, r_id
+
+    def _extract_font_dict_from_resources(self, pdf, resources_type, r_id):
+        """Extract raw font dictionary string from resolved resources."""
+        if resources_type == "dict":
+            xref_id = re.search("/Font (\\d+) 0 R", r_id)
+            if xref_id is not None:
+                return pdf.xref_object(int(xref_id.group(1)))
+            search = re.search("/Font *<<(.+?)>>", r_id.replace("\n", " "))
+            if search is None:
+                return None
+            return search.group(1)
+        # resources_type is something else — treat r_id as direct xref
+        r_id_int = int(r_id.split(" ")[0])
+        _, font_dict = pdf.xref_get_key(r_id_int, "Font")
+        return font_dict
+
     def get_xobj_available_fonts(self, page_xref_id, pdf):
         try:
             resources_type, r_id = pdf.xref_get_key(page_xref_id, "Resources")
-            if resources_type == "xref":
-                resource_xref_id = re.search("(\\d+) 0 R", r_id).group(1)
-                r_id = pdf.xref_object(int(resource_xref_id))
-                resources_type = "dict"
-            if resources_type == "dict":
-                xref_id = re.search("/Font (\\d+) 0 R", r_id)
-                if xref_id is not None:
-                    xref_id = xref_id.group(1)
-                    font_dict = pdf.xref_object(int(xref_id))
-                else:
-                    search = re.search("/Font *<<(.+?)>>", r_id.replace("\n", " "))
-                    if search is None:
-                        # Have resources but no fonts
-                        return set()
-                    font_dict = search.group(1)
-            else:
-                r_id = int(r_id.split(" ")[0])
-                _, font_dict = pdf.xref_get_key(r_id, "Font")
+            resources_type, r_id = self._resolve_xref_resources(
+                pdf, resources_type, r_id
+            )
+            font_dict = self._extract_font_dict_from_resources(
+                pdf, resources_type, r_id
+            )
+            if font_dict is None:
+                return set()
             fonts = re.findall("/([^ ]+?) ", font_dict)
             return set(fonts)
         except Exception:
@@ -765,6 +778,46 @@ class PDFCreater:
         # Restore graphics state
         draw_op.append(b" n Q\n")
 
+    def _compute_side_by_side_layout(self, orig_page, trans_page, dual_translate_first):
+        """Compute dimensions and rect pair for a side-by-side dual page."""
+        rotate_angle = orig_page.rotation
+        total_width = orig_page.rect.width + trans_page.rect.width
+        max_height = max(orig_page.rect.height, trans_page.rect.height)
+        left_width = (
+            trans_page.rect.width if dual_translate_first else orig_page.rect.width
+        )
+        rect_left = pymupdf.Rect(0, 0, left_width, max_height)
+        rect_right = pymupdf.Rect(left_width, 0, total_width, max_height)
+        if dual_translate_first:
+            rect_left, rect_right = rect_right, rect_left
+        return rotate_angle, total_width, max_height, rect_left, rect_right
+
+    def _show_dual_page_side(
+        self,
+        dual_page,
+        rect,
+        src_pdf,
+        page_id: int,
+        rotate_angle: float,
+        side_label: str,
+    ):
+        """Render one side of a dual page, logging a warning on failure."""
+        try:
+            dual_page.show_pdf_page(
+                rect,
+                src_pdf,
+                page_id,
+                keep_proportion=True,
+                rotate=-rotate_angle,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to show {side_label}. "
+                f"Page ID: {page_id}. "
+                f"Original PDF: {self.original_pdf_path}. ",
+                exc_info=e,
+            )
+
     def create_side_by_side_dual_pdf(
         self,
         original_pdf: pymupdf.Document,
@@ -781,70 +834,36 @@ class PDFCreater:
         Returns:
             The created dual PDF document
         """
-        # Create a new PDF for side-by-side pages
         dual = pymupdf.open()
         page_count = min(original_pdf.page_count, translated_pdf.page_count)
 
         for page_id in range(page_count):
-            # Get pages from both PDFs
             orig_page = original_pdf[page_id]
             trans_page = translated_pdf[page_id]
-            rotate_angle = orig_page.rotation
-            total_width = orig_page.rect.width + trans_page.rect.width
-            max_height = max(orig_page.rect.height, trans_page.rect.height)
-            left_width = (
-                orig_page.rect.width
-                if not translation_config.dual_translate_first
-                else trans_page.rect.width
+            rotate_angle, total_width, max_height, rect_left, rect_right = (
+                self._compute_side_by_side_layout(
+                    orig_page, trans_page, translation_config.dual_translate_first
+                )
             )
-
             orig_page.set_rotation(0)
             trans_page.set_rotation(0)
-
-            # Create new page with combined width
             dual_page = dual.new_page(width=total_width, height=max_height)
-
-            # Define rectangles for left and right sides
-            rect_left = pymupdf.Rect(0, 0, left_width, max_height)
-            rect_right = pymupdf.Rect(left_width, 0, total_width, max_height)
-
-            # Show pages according to dual_translate_first setting
-            if translation_config.dual_translate_first:
-                # Show translated page on left and original on right
-                rect_left, rect_right = rect_right, rect_left
-            try:
-                # Show original page on left and translated on right (default)
-                dual_page.show_pdf_page(
-                    rect_left,
-                    original_pdf,
-                    page_id,
-                    keep_proportion=True,
-                    rotate=-rotate_angle,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to show original page on left and translated on right (default). "
-                    f"Page ID: {page_id}. "
-                    f"Original PDF: {self.original_pdf_path}. "
-                    f"Translated PDF: {translation_config.input_file}. ",
-                    exc_info=e,
-                )
-            try:
-                dual_page.show_pdf_page(
-                    rect_right,
-                    translated_pdf,
-                    page_id,
-                    keep_proportion=True,
-                    rotate=-rotate_angle,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to show translated page on left and original on right. "
-                    f"Page ID: {page_id}. "
-                    f"Original PDF: {self.original_pdf_path}. "
-                    f"Translated PDF: {translation_config.input_file}. ",
-                    exc_info=e,
-                )
+            self._show_dual_page_side(
+                dual_page,
+                rect_left,
+                original_pdf,
+                page_id,
+                rotate_angle,
+                "original page on left",
+            )
+            self._show_dual_page_side(
+                dual_page,
+                rect_right,
+                translated_pdf,
+                page_id,
+                rotate_angle,
+                "translated page on right",
+            )
         return dual
 
     def create_alternating_pages_dual_pdf(
@@ -877,6 +896,27 @@ class PDFCreater:
 
         return dual
 
+    def _build_debug_page_op(self, pdf, page, base_op) -> BitStream:
+        """Build the full debug page BitStream for one page."""
+        page_op = BitStream()
+        page_op.append(b"q ")
+        if base_op is not None:
+            page_op.append(base_op)
+        page_op.append(b" Q ")
+        page_op.append(
+            f"q Q 1 0 0 1 {page.cropbox.box.x:.6f} {page.cropbox.box.y:.6f} cm \n".encode()
+        )
+        available_font_list = self.get_available_font_list(pdf, page)
+        page_encoding_length_map = {f.font_id: f.encoding_length for f in page.pdf_font}
+        chars = list(page.pdf_character) if page.pdf_character else []
+        for paragraph in page.pdf_paragraph:
+            chars.extend(self.render_paragraph_to_char(paragraph))
+        self._render_debug_chars(chars, page_op, available_font_list, page_encoding_length_map)
+        for rect in page.pdf_rectangle:
+            if rect.debug_info:
+                self._render_rectangle(page_op, rect)
+        return page_op
+
     def write_debug_info(
         self,
         pdf: pymupdf.Document,
@@ -889,27 +929,7 @@ class PDFCreater:
             resource_xref_id = re.search("(\\d+) 0 R", r_id).group(1)
             base_op = pdf.xref_stream(int(resource_xref_id))
             translation_config.raise_if_cancelled()
-            available_font_list = self.get_available_font_list(pdf, page)
-            page_encoding_length_map = {
-                f.font_id: f.encoding_length for f in page.pdf_font
-            }
-            page_op = BitStream()
-            page_op.append(b"q ")
-            if base_op is not None:
-                page_op.append(base_op)
-            page_op.append(b" Q ")
-            page_op.append(
-                f"q Q 1 0 0 1 {page.cropbox.box.x:.6f} {page.cropbox.box.y:.6f} cm \n".encode(),
-            )
-            chars = list(page.pdf_character) if page.pdf_character else []
-            for paragraph in page.pdf_paragraph:
-                chars.extend(self.render_paragraph_to_char(paragraph))
-            self._render_debug_chars(
-                chars, page_op, available_font_list, page_encoding_length_map
-            )
-            for rect in page.pdf_rectangle:
-                if rect.debug_info:
-                    self._render_rectangle(page_op, rect)
+            page_op = self._build_debug_page_op(pdf, page, base_op)
             pdf.update_stream(int(resource_xref_id), page_op.tobytes())
         translation_config.raise_if_cancelled()
 
@@ -947,6 +967,40 @@ class PDFCreater:
             page_op.append(b" Tj ET Q \n")
 
     @staticmethod
+    def _wait_for_subprocess_with_timeout(process, timeout: int, label: str) -> bool:
+        """Poll *process* until done or *timeout* seconds elapsed.
+
+        Returns True if the process finished on its own, False if it timed out.
+        """
+        start_time = time.time()
+        while process.is_alive():
+            if time.time() - start_time > timeout:
+                logger.warning(
+                    f"{label} timeout after {timeout} seconds, terminating subprocess"
+                )
+                process.terminate()
+                try:
+                    process.join(5)
+                    if process.is_alive():
+                        logger.warning("Subprocess did not terminate, killing it")
+                        process.kill()
+                        process.terminate()
+                        process.kill()
+                        process.terminate()
+                        process.kill()
+                        process.terminate()
+                except Exception as e:
+                    logger.error(f"Error terminating subprocess: {e}")
+                return False
+            time.sleep(0.5)
+        return True
+
+    @staticmethod
+    def _is_output_valid(temp_output: str) -> bool:
+        """Return True if the subprocess output file exists and is non-empty."""
+        return Path(temp_output).exists() and Path(temp_output).stat().st_size > 0
+
+    @staticmethod
     def subset_fonts_in_subprocess(
         pdf: pymupdf.Document, translation_config: TranslationConfig, tag: str
     ) -> pymupdf.Document:
@@ -960,7 +1014,6 @@ class PDFCreater:
             Path to the PDF with subsetted fonts, or original path if subsetting failed or timed out
         """
         original_pdf = pdf
-        # Create temporary file paths
         temp_input = str(
             translation_config.get_working_file_path(f"temp_subset_input_{tag}.pdf")
         )
@@ -968,57 +1021,27 @@ class PDFCreater:
             translation_config.get_working_file_path(f"temp_subset_output_{tag}.pdf")
         )
 
-        # Save PDF to temporary file without subsetting
         pdf.save(temp_input)
 
-        # Create and start subprocess
         process = Process(target=_subset_fonts_process, args=(temp_input, temp_output))
         process.start()
 
-        # Wait for subprocess with timeout (1 minute)
-        timeout = 60  # 1 minutes in seconds
-        start_time = time.time()
+        timeout = 60
+        finished = PDFCreater._wait_for_subprocess_with_timeout(
+            process, timeout, "Font subsetting"
+        )
+        if not finished:
+            return original_pdf
 
-        while process.is_alive():
-            if time.time() - start_time > timeout:
-                logger.warning(
-                    f"Font subsetting timeout after {timeout} seconds, terminating subprocess"
-                )
-                process.terminate()
-                try:
-                    process.join(5)  # Give it 5 seconds to clean up
-                    if process.is_alive():
-                        logger.warning("Subprocess did not terminate, killing it")
-                        process.kill()
-                        process.terminate()
-                        process.kill()
-                        process.terminate()
-                        process.kill()
-                        process.terminate()
-                except Exception as e:
-                    logger.error(f"Error terminating font subsetting process: {e}")
-
-                return original_pdf
-
-            time.sleep(0.5)  # Check every half second
-
-        # Process completed, check exit code
         exit_code = process.exitcode
-        success = exit_code == 0
-
-        # Check if subsetting was successful
-        if (
-            success
-            and Path(temp_output).exists()
-            and Path(temp_output).stat().st_size > 0
-        ):
+        if exit_code == 0 and PDFCreater._is_output_valid(temp_output):
             logger.info("Font subsetting completed successfully")
             return pymupdf.open(temp_output)
-        else:
-            logger.warning(
-                f"Font subsetting failed with exit code {exit_code} or produced empty file"
-            )
-            return original_pdf
+
+        logger.warning(
+            f"Font subsetting failed with exit code {exit_code} or produced empty file"
+        )
+        return original_pdf
 
     @staticmethod
     def _save_pdf_fallback(pdf, output_path, garbage, deflate, deflate_fonts, linear):
@@ -1051,6 +1074,21 @@ class PDFCreater:
                 process.terminate()
         except Exception as e:
             logger.error(f"Error terminating PDF save process: {e}")
+
+    @staticmethod
+    def _copy_saved_pdf(temp_input: str, temp_output: str, output_path: str, pdf) -> bool:
+        """Copy temp_output to output_path, falling back to pdf.save on error."""
+        try:
+            import shutil
+            shutil.copy2(temp_output, output_path)
+            return True
+        except Exception as e:
+            logger.error(f"Error copying saved PDF: {e}")
+            pdf.save(output_path)
+            return False
+        finally:
+            Path(temp_input).unlink(missing_ok=True)
+            Path(temp_output).unlink(missing_ok=True)
 
     @staticmethod
     def save_pdf_with_timeout(
@@ -1090,52 +1128,24 @@ class PDFCreater:
         pdf.save(temp_input)
         process = Process(
             target=_save_pdf_clean_process,
-            args=(
-                temp_input,
-                temp_output,
-                garbage,
-                deflate,
-                clean,
-                deflate_fonts,
-                linear,
-            ),
+            args=(temp_input, temp_output, garbage, deflate, clean, deflate_fonts, linear),
         )
         process.start()
 
-        start_time = time.time()
-        while process.is_alive():
-            if time.time() - start_time > timeout:
-                logger.warning(
-                    f"PDF save with clean={clean} timeout after {timeout} seconds, terminating subprocess"
-                )
-                process.terminate()
-                PDFCreater._terminate_subprocess(process)
-                logger.info("Falling back to save with clean=False")
-                PDFCreater._save_pdf_fallback(
-                    pdf, output_path, garbage, deflate, deflate_fonts, linear
-                )
-                return False
-            time.sleep(0.5)
+        finished = PDFCreater._wait_for_subprocess_with_timeout(
+            process, timeout, f"PDF save with clean={clean}"
+        )
+        if not finished:
+            logger.info("Falling back to save with clean=False")
+            PDFCreater._save_pdf_fallback(
+                pdf, output_path, garbage, deflate, deflate_fonts, linear
+            )
+            return False
 
         exit_code = process.exitcode
-        if (
-            exit_code == 0
-            and Path(temp_output).exists()
-            and Path(temp_output).stat().st_size > 0
-        ):
+        if exit_code == 0 and PDFCreater._is_output_valid(temp_output):
             logger.info(f"PDF save with clean={clean} completed successfully")
-            try:
-                import shutil
-
-                shutil.copy2(temp_output, output_path)
-                return True
-            except Exception as e:
-                logger.error(f"Error copying saved PDF: {e}")
-                pdf.save(output_path)
-                return False
-            finally:
-                Path(temp_input).unlink()
-                Path(temp_output).unlink()
+            return PDFCreater._copy_saved_pdf(temp_input, temp_output, output_path, pdf)
 
         logger.warning(
             f"PDF save with clean={clean} failed with exit code {exit_code} or produced empty file"
@@ -1235,6 +1245,76 @@ class PDFCreater:
             )
         return path
 
+    def _build_debug_suffix(self, translation_config: TranslationConfig) -> str:
+        """Return the debug/watermark filename suffix."""
+        suffix = ".debug" if translation_config.debug else ""
+        if translation_config.watermark_output_mode != WatermarkOutputMode.Watermarked:
+            suffix += ".no_watermark"
+        return suffix
+
+    def _render_all_pages(self, pdf, translation_config, check_font_exists):
+        """Render every page's content stream into *pdf*."""
+        with self.translation_config.progress_monitor.stage_start(
+            self.stage_name, len(self.docs.page)
+        ) as pbar:
+            for page in self.docs.page:
+                self.update_page_content_stream(
+                    check_font_exists, page, pdf, translation_config
+                )
+                pbar.advance()
+
+    def _subset_and_restore(self, pdf, translation_config):
+        """Optionally subset fonts and restore the media box."""
+        with self.translation_config.progress_monitor.stage_start(
+            SUBSET_FONT_STAGE_NAME, 1
+        ) as pbar:
+            if not translation_config.skip_clean:
+                pdf = self.subset_fonts_in_subprocess(
+                    pdf, translation_config, tag="mono"
+                )
+            pbar.advance()
+        try:
+            self.restore_media_box(pdf, self.mediabox_data)
+        except Exception:
+            logger.exception("restore media box failed")
+        return pdf
+
+    def _remove_untranslated_pages(self, pdf, translation_config) -> list[int]:
+        """Delete non-translated pages from *pdf* when only_include_translated_page is set."""
+        if not translation_config.only_include_translated_page:
+            return []
+        pages_to_translate = {
+            page.page_number
+            for page in self.docs.page
+            if self.translation_config.should_translate_page(page.page_number + 1)
+        }
+        should_removed_page = list(set(range(len(pdf))) - pages_to_translate)
+        pdf.delete_pages(should_removed_page)
+        return should_removed_page
+
+    def _save_output_pdfs(
+        self, pdf, mono_out_path, translation_config, basename, debug_suffix, gc_level, should_removed_page
+    ):
+        """Save mono and dual output PDFs under progress monitor tracking."""
+        dual_out_path = None
+        with self.translation_config.progress_monitor.stage_start(
+            SAVE_PDF_STAGE_NAME, 2
+        ) as pbar:
+            if not translation_config.no_mono:
+                self._save_mono_pdf(pdf, mono_out_path, gc_level, translation_config)
+            pbar.advance()
+            if not translation_config.no_dual:
+                dual_out_path = self._build_dual_pdf(
+                    pdf,
+                    translation_config,
+                    basename,
+                    debug_suffix,
+                    gc_level,
+                    should_removed_page,
+                )
+            pbar.advance()
+        return dual_out_path
+
     def write(
         self,
         translation_config: TranslationConfig,
@@ -1242,72 +1322,21 @@ class PDFCreater:
     ) -> TranslateResult:
         try:
             basename = Path(translation_config.input_file).stem
-            debug_suffix = ".debug" if translation_config.debug else ""
-            if (
-                translation_config.watermark_output_mode
-                != WatermarkOutputMode.Watermarked
-            ):
-                debug_suffix += ".no_watermark"
+            debug_suffix = self._build_debug_suffix(translation_config)
             mono_out_path = translation_config.get_output_file_path(
                 f"{basename}{debug_suffix}.{translation_config.lang_out}.mono.pdf",
             )
             pdf = pymupdf.open(self.original_pdf_path)
             self.font_mapper.add_font(pdf, self.docs)
-            with self.translation_config.progress_monitor.stage_start(
-                self.stage_name,
-                len(self.docs.page),
-            ) as pbar:
-                for page in self.docs.page:
-                    self.update_page_content_stream(
-                        check_font_exists, page, pdf, translation_config
-                    )
-                    pbar.advance()
+            self._render_all_pages(pdf, translation_config, check_font_exists)
             translation_config.raise_if_cancelled()
             gc_level = 4 if self.translation_config.ocr_workaround else 1
-            with self.translation_config.progress_monitor.stage_start(
-                SUBSET_FONT_STAGE_NAME, 1
-            ) as pbar:
-                if not translation_config.skip_clean:
-                    pdf = self.subset_fonts_in_subprocess(
-                        pdf, translation_config, tag="mono"
-                    )
-                pbar.advance()
-            try:
-                self.restore_media_box(pdf, self.mediabox_data)
-            except Exception:
-                logger.exception("restore media box failed")
-
-            should_removed_page = []
-            if translation_config.only_include_translated_page:
-                pages_to_translate = {
-                    page.page_number
-                    for page in self.docs.page
-                    if self.translation_config.should_translate_page(
-                        page.page_number + 1
-                    )
-                }
-                should_removed_page = list(set(range(len(pdf))) - pages_to_translate)
-                pdf.delete_pages(should_removed_page)
-
-            with self.translation_config.progress_monitor.stage_start(
-                SAVE_PDF_STAGE_NAME, 2
-            ) as pbar:
-                if not translation_config.no_mono:
-                    self._save_mono_pdf(
-                        pdf, mono_out_path, gc_level, translation_config
-                    )
-                pbar.advance()
-                dual_out_path = None
-                if not translation_config.no_dual:
-                    dual_out_path = self._build_dual_pdf(
-                        pdf,
-                        translation_config,
-                        basename,
-                        debug_suffix,
-                        gc_level,
-                        should_removed_page,
-                    )
-                pbar.advance()
+            pdf = self._subset_and_restore(pdf, translation_config)
+            should_removed_page = self._remove_untranslated_pages(pdf, translation_config)
+            dual_out_path = self._save_output_pdfs(
+                pdf, mono_out_path, translation_config,
+                basename, debug_suffix, gc_level, should_removed_page
+            )
             if self.translation_config.no_mono:
                 mono_out_path = None
             if self.translation_config.no_dual:
@@ -1324,34 +1353,17 @@ class PDFCreater:
                 return self.write(translation_config, True)
             raise
 
-    def update_page_content_stream(
-        self, check_font_exists, page, pdf, translation_config, skip_char: bool = False
-    ):
-        assert page.cropbox is not None and page.cropbox.box is not None
-        page_crop_box = page.cropbox.box
-        ctm_for_ops = (
-            1,
-            0,
-            0,
-            1,
-            -page_crop_box.x,
-            -page_crop_box.y,
-        )
-        ctm_for_ops = f" {' '.join(f'{x:f}' for x in ctm_for_ops)} cm ".encode()
-        translation_config.raise_if_cancelled()
+    def _build_xobj_maps(self, page, pdf, available_font_list, page_encoding_length_map):
+        """Build xobj font/encoding/draw-op maps for all xobjects on the page."""
         xobj_available_fonts = {}
         xobj_draw_ops = {}
         xobj_encoding_length_map = {}
-        available_font_list = self.get_available_font_list(pdf, page)
-        page_encoding_length_map: dict[str | None, int | None] = {
-            f.font_id: f.encoding_length for f in page.pdf_font
-        }
         all_encoding_length_map = page_encoding_length_map.copy()
         for xobj in page.pdf_xobject:
             xobj_available_fonts[xobj.xobj_id] = available_font_list.copy()
             try:
                 xobj_available_fonts[xobj.xobj_id].update(
-                    self.get_xobj_available_fonts(xobj.xref_id, pdf),
+                    self.get_xobj_available_fonts(xobj.xref_id, pdf)
                 )
             except Exception:
                 pass
@@ -1361,14 +1373,41 @@ class PDFCreater:
             all_encoding_length_map.update(xobj_encoding_length_map[xobj.xobj_id])
             xobj_encoding_length_map[xobj.xobj_id].update(page_encoding_length_map)
             xobj_op = BitStream()
-            base_op = xobj.base_operations.value
-            base_op = zstd_decompress(base_op)
+            base_op = zstd_decompress(xobj.base_operations.value)
             xobj_op.append(base_op.encode())
             xobj_draw_ops[xobj.xobj_id] = xobj_op
+        return xobj_available_fonts, xobj_encoding_length_map, all_encoding_length_map, xobj_draw_ops
+
+    def _flush_xobj_streams(self, page, pdf, xobj_draw_ops):
+        """Write each xobject's draw BitStream back into the PDF."""
+        for xobj in page.pdf_xobject:
+            draw_op = xobj_draw_ops[xobj.xobj_id]
+            try:
+                pdf.update_stream(xobj.xref_id, draw_op.tobytes())
+            except Exception:
+                logger.warning(f"update xref {xobj.xref_id} stream fail, continue")
+
+    def update_page_content_stream(
+        self, check_font_exists, page, pdf, translation_config, skip_char: bool = False
+    ):
+        assert page.cropbox is not None and page.cropbox.box is not None
+        page_crop_box = page.cropbox.box
+        ctm_for_ops = (1, 0, 0, 1, -page_crop_box.x, -page_crop_box.y)
+        ctm_for_ops = f" {' '.join(f'{x:f}' for x in ctm_for_ops)} cm ".encode()
+        translation_config.raise_if_cancelled()
+        available_font_list = self.get_available_font_list(pdf, page)
+        page_encoding_length_map: dict[str | None, int | None] = {
+            f.font_id: f.encoding_length for f in page.pdf_font
+        }
+        (
+            xobj_available_fonts,
+            xobj_encoding_length_map,
+            all_encoding_length_map,
+            xobj_draw_ops,
+        ) = self._build_xobj_maps(page, pdf, available_font_list, page_encoding_length_map)
         page_op = BitStream()
         page_op.append(ctm_for_ops)
         page_op.append(b" \n")
-        # Create render context
         context = RenderContext(
             pdf_creator=self,
             page=page,
@@ -1380,7 +1419,6 @@ class PDFCreater:
             ctm_for_ops=ctm_for_ops,
             check_font_exists=check_font_exists,
         )
-        # Create render units for all renderable objects
         render_units = self.create_render_units_for_page(page, translation_config)
         if skip_char:
             render_units = [
@@ -1388,19 +1426,9 @@ class PDFCreater:
                 for unit in render_units
                 if not isinstance(unit, CharacterRenderUnit)
             ]
-        # Render all units to their appropriate streams
         self.render_units_to_stream(render_units, context, page_op, xobj_draw_ops)
-        # Update xobject streams
-        for xobj in page.pdf_xobject:
-            draw_op = xobj_draw_ops[xobj.xobj_id]
-            try:
-                pdf.update_stream(xobj.xref_id, draw_op.tobytes())
-            except Exception:
-                logger.warning(f"update xref {xobj.xref_id} stream fail, continue")
-        draw_op = page_op
+        self._flush_xobj_streams(page, pdf, xobj_draw_ops)
         op_container = pdf.get_new_xref()
-        # Since this is a draw instruction container,
-        # no additional information is needed
         pdf.update_object(op_container, "<<>>")
-        pdf.update_stream(op_container, draw_op.tobytes())
+        pdf.update_stream(op_container, page_op.tobytes())
         pdf[page.page_number].set_contents(op_container)

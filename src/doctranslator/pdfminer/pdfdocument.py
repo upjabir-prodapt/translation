@@ -120,7 +120,7 @@ class PDFBaseXRef:
     def get_pos(self, objid: int) -> tuple[int | None, int, int]:
         raise PDFKeyError(objid)
 
-    def load(self, parser: PDFParser) -> None:
+    def load(self, _parser: PDFParser) -> None:
         raise NotImplementedError
 
 
@@ -225,7 +225,7 @@ class PDFXRefFallback(PDFXRef):
 
     PDFOBJ_CUE = re.compile(r"^(\d+)\s+(\d+)\s+obj\b")
 
-    def _expand_objstm(self, parser: PDFParser, objid: int, obj: PDFStream) -> None:
+    def _expand_objstm(self, _parser: PDFParser, objid: int, obj: PDFStream) -> None:
         """Expand an ObjStm (object stream) and register contained object offsets."""
         stream = stream_value(obj)
         try:
@@ -557,7 +557,7 @@ class PDFStandardSecurityHandlerV4(PDFStandardSecurityHandler):
         # PDF spec section 7.6.5 (AESV2) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(key),
-            modes.CBC(initialization_vector),
+            modes.CBC(initialization_vector),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
             backend=default_backend(),
         )  # type: ignore
         return cipher.decryptor().update(ciphertext)  # type: ignore
@@ -590,9 +590,9 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
         if hash_val == self.o_hash:
             hash_val = self._password_hash(password_b, self.o_key_salt, self.u)
             # PDF spec section 7.6.4.3.3 (Algorithm 2.B) uses AES-CBC with zero IV
-            cipher = Cipher(  # noqa: S304
+            cipher = Cipher(  # noqa: S304 # NOSONAR - PDF spec mandates AES-CBC mode; cannot use alternative
                 algorithms.AES(hash_val),
-                modes.CBC(b"\0" * 16),
+                modes.CBC(b"\0" * 16),  # NOSONAR - PDF spec mandates AES-CBC mode
                 backend=default_backend(),
             )  # type: ignore
             return cipher.decryptor().update(self.oe)  # type: ignore
@@ -600,9 +600,9 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
         if hash_val == self.u_hash:
             hash_val = self._password_hash(password_b, self.u_key_salt)
             # PDF spec section 7.6.4.3.3 (Algorithm 2.B) uses AES-CBC with zero IV
-            cipher = Cipher(  # noqa: S304
+            cipher = Cipher(  # noqa: S304 # NOSONAR - PDF spec mandates AES-CBC mode; cannot use alternative
                 algorithms.AES(hash_val),
-                modes.CBC(b"\0" * 16),
+                modes.CBC(b"\0" * 16),  # NOSONAR - PDF spec mandates AES-CBC mode
                 backend=default_backend(),
             )  # type: ignore
             return cipher.decryptor().update(self.ue)  # type: ignore
@@ -674,7 +674,7 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
 
     def _aes_cbc_encrypt(self, key: bytes, iv: bytes, data: bytes) -> bytes:
         # PDF spec (Algorithm 2.B, ISO 32000-2) mandates AES-CBC for key derivation
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))  # noqa: S304
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))  # noqa: S304 # NOSONAR - PDF spec mandates AES-CBC mode; cannot use alternative
         encryptor = cipher.encryptor()  # type: ignore
         return encryptor.update(data) + encryptor.finalize()  # type: ignore
 
@@ -685,7 +685,7 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
         # PDF spec section 7.6.5 (AESV3) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(self.key),
-            modes.CBC(initialization_vector),
+            modes.CBC(initialization_vector),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
             backend=default_backend(),
         )  # type: ignore
         return cipher.decryptor().update(ciphertext)  # type: ignore
@@ -836,7 +836,7 @@ class PDFDocument:
         assert self._parser is not None
         self._parser.seek(pos)
         (_, objid1) = self._parser.nexttoken()  # objid
-        (_, genno) = self._parser.nexttoken()  # genno
+        (_, _genno) = self._parser.nexttoken()  # genno (unused in parse step)
         (_, kwd) = self._parser.nexttoken()
         # hack around malformed pdf files
         # copied from https://github.com/jaepil/pdfminer3k/blob/master/
@@ -892,7 +892,7 @@ class PDFDocument:
             raise PDFException("PDFDocument is not initialized")
         log.debug("getobj: objid=%r", objid)
         if objid in self._cached_objs:
-            (obj, genno) = self._cached_objs[objid]
+            (obj, _) = self._cached_objs[objid]
         else:
             (obj, genno) = self._resolve_obj_from_xrefs(objid)
             log.debug("register: objid=%r: %r", objid, obj)

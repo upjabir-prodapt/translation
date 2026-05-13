@@ -17,32 +17,6 @@ from src.doctranslator.format.pdf.document_il.il_version_1 import (
 )
 
 logger = logging.getLogger(__name__)
-# HEIGHT_NOT_USFUL_CHAR_IN_CHAR = (
-#     "∑︁",
-#     # 暂时假设 cid:17 和 cid 16 是特殊情况
-#     # 来源于 arXiv:2310.18608v2 第九页公式大括号
-#     "(cid:17)",
-#     "(cid:16)",
-#     # arXiv:2411.19509v2 第四页 []
-#     "(cid:104)",
-#     "(cid:105)",
-#     # arXiv:2411.19509v2 第四页 公式的 | 竖线
-#     "(cid:13)",
-#     "∑︁",
-#     # arXiv:2412.05265 27 页 累加号
-#     "(cid:88)",
-#     # arXiv:2412.05265 16 页 累乘号
-#     "(cid:89)",
-#     # arXiv:2412.05265 27 页 积分
-#     "(cid:90)",
-#     # arXiv:2412.05265 32 页 公式左右的中括号
-#     "(cid:2)",
-#     "(cid:3)",
-#     "·",
-#     "√",
-# )
-
-# 由于我们有一套 bbox 解析机制了，所以现在不需要这个东西了。
 HEIGHT_NOT_USFUL_CHAR_IN_CHAR = (None,)
 
 
@@ -50,7 +24,7 @@ LEFT_BRACKET = ("(cid:8)", "(", "(cid:16)", "{", "[", "(cid:104)", "(cid:2)")
 RIGHT_BRACKET = ("(cid:9)", ")", "(cid:17)", "}", "]", "(cid:105)", "(cid:3)")
 
 BULLET_POINT_PATTERN = re.compile(
-    r"[■•⚫⬤◆◇○●◦‣⁃▪▫∗†‡¹²³⁴⁵⁶⁷⁸⁹⁰₁₂₃₄₅₆₇₈₉₀ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ¶※⁑⁂⁕⁎⁜❧☙⁋‖‽·]"
+    r"[■•⚫⬤◆◇○●◦‣⁃▪▫∗†‡¹²³⁴⁵⁶⁷⁸⁹⁰₁₂₃₄₅₆₇₈₉₀ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ¶※⁑⁂⁕⁎⁜❧☙⁋‖‽·]"
 )
 
 
@@ -128,20 +102,12 @@ class Layout:
 
     @staticmethod
     def is_newline(prev_char: PdfCharacter, curr_char: PdfCharacter) -> bool:
-        # 如果没有前一个字符，不是换行
+        # å¦‚æžœæ²¡æœ‰å‰ä¸€ä¸ªå­—ç¬¦ï¼Œä¸æ˜¯æ¢è¡Œ
         if prev_char is None:
             return False
 
-        # 获取两个字符的中心 y 坐标
-        # prev_y = (prev_char.box.y + prev_char.box.y2) / 2
-        # curr_y = (curr_char.box.y + curr_char.box.y2) / 2
-
-        # 如果当前字符的 y 坐标明显低于前一个字符，说明换行了
-        # 这里使用字符高度的一半作为阈值
-        char_height = max(
-            curr_char.box.y2 - curr_char.box.y,
-            prev_char.box.y2 - prev_char.box.y,
-        )
+        # å¦‚æžœå½“å‰å­—ç¬¦çš„ y åæ ‡æ˜Žæ˜¾ä½ŽäºŽå‰ä¸€ä¸ªå­—ç¬¦ï¼Œè¯´æ˜Žæ¢è¡Œäº†
+        # è¿™é‡Œä½¿ç”¨å­—ç¬¦é«˜åº¦çš„ä¸€åŠä½œä¸ºé˜ˆå€¼
         char_width = max(
             curr_char.box.x2 - curr_char.box.x,
             prev_char.box.x2 - prev_char.box.x,
@@ -158,44 +124,55 @@ class Layout:
         return should_new_line
 
 
+def _composition_length_except(
+    composition: "PdfParagraphComposition",
+    paragraph: "PdfParagraph",
+    except_chars: str,
+    font: Font,
+) -> float:
+    """Return the pixel width contributed by *composition*, skipping *except_chars*."""
+    if composition.pdf_character:
+        return composition.pdf_character[0].box.x2 - composition.pdf_character[0].box.x
+    if composition.pdf_same_style_characters:
+        return sum(
+            pdf_char.box.x2 - pdf_char.box.x
+            for pdf_char in composition.pdf_same_style_characters.pdf_character
+            if pdf_char.char_unicode not in except_chars
+        )
+    if composition.pdf_same_style_unicode_characters:
+        return sum(
+            font.char_lengths(
+                char_unicode,
+                composition.pdf_same_style_unicode_characters.pdf_style.font_size,
+            )[0]
+            for char_unicode in composition.pdf_same_style_unicode_characters.unicode
+            if char_unicode not in except_chars
+        )
+    if composition.pdf_line:
+        return sum(
+            pdf_char.box.x2 - pdf_char.box.x
+            for pdf_char in composition.pdf_line.pdf_character
+            if pdf_char.char_unicode not in except_chars
+        )
+    if composition.pdf_formula:
+        return composition.pdf_formula.box.x2 - composition.pdf_formula.box.x
+    logger.error(
+        f"Unknown composition type. "
+        f"Composition: {composition}. "
+        f"Paragraph: {paragraph}. ",
+    )
+    return 0
+
+
 def get_paragraph_length_except(
     paragraph: PdfParagraph,
     except_chars: str,
     font: Font,
 ) -> int:
-    length = 0
-    for composition in paragraph.pdf_paragraph_composition:
-        if composition.pdf_character:
-            length += (
-                composition.pdf_character[0].box.x2 - composition.pdf_character[0].box.x
-            )
-        elif composition.pdf_same_style_characters:
-            for pdf_char in composition.pdf_same_style_characters.pdf_character:
-                if pdf_char.char_unicode in except_chars:
-                    continue
-                length += pdf_char.box.x2 - pdf_char.box.x
-        elif composition.pdf_same_style_unicode_characters:
-            for char_unicode in composition.pdf_same_style_unicode_characters.unicode:
-                if char_unicode in except_chars:
-                    continue
-                length += font.char_lengths(
-                    char_unicode,
-                    composition.pdf_same_style_unicode_characters.pdf_style.font_size,
-                )[0]
-        elif composition.pdf_line:
-            for pdf_char in composition.pdf_line.pdf_character:
-                if pdf_char.char_unicode in except_chars:
-                    continue
-                length += pdf_char.box.x2 - pdf_char.box.x
-        elif composition.pdf_formula:
-            length += composition.pdf_formula.box.x2 - composition.pdf_formula.box.x
-        else:
-            logger.error(
-                f"Unknown composition type. "
-                f"Composition: {composition}. "
-                f"Paragraph: {paragraph}. ",
-            )
-    return length
+    return sum(
+        _composition_length_except(composition, paragraph, except_chars, font)
+        for composition in paragraph.pdf_paragraph_composition
+    )
 
 
 def get_paragraph_unicode(paragraph: PdfParagraph) -> str:
@@ -223,18 +200,8 @@ def get_paragraph_unicode(paragraph: PdfParagraph) -> str:
 SPACE_REGEX = regex.compile(r"\s+", regex.UNICODE)
 
 
-def get_char_unicode_string(chars: list[PdfCharacter | str]) -> str:
-    """
-    将字符列表转换为 Unicode 字符串，根据字符间距自动插入空格。
-    有些 PDF 不会显式编码空格，这时需要根据间距自动插入空格。
-
-    Args:
-        chars: 字符列表，可以是 PdfCharacter 对象或字符串
-
-    Returns:
-        str: 处理后的 Unicode 字符串
-    """
-    # 计算字符间距的中位数
+def _compute_median_char_distance(chars: list) -> float:
+    """Return the second-smallest distinct positive inter-character gap (or 1 if none)."""
     distances = []
     for i in range(len(chars) - 1):
         if not (
@@ -243,48 +210,60 @@ def get_char_unicode_string(chars: list[PdfCharacter | str]) -> str:
         ):
             continue
         distance = chars[i + 1].box.x - chars[i].box.x2
-        if distance > 1:  # 只考虑正向距离
+        if distance > 1:
             distances.append(distance)
-
-    # 去重后的距离
     distinct_distances = sorted(set(distances))
-
     if not distinct_distances:
-        median_distance = 1
-    elif len(distinct_distances) == 1:
-        median_distance = distinct_distances[0]
-    else:
-        median_distance = distinct_distances[1]
+        return 1
+    if len(distinct_distances) == 1:
+        return distinct_distances[0]
+    return distinct_distances[1]
 
-    # 构建 unicode 字符串，根据间距插入空格
+
+def _normalize_char_unicode(char: PdfCharacter) -> str:
+    """Return NFKC-normalised, space-collapsed unicode for *char*."""
+    return regex.sub(r"\s+", " ", unicodedata.normalize("NFKC", char.char_unicode))
+
+
+def _needs_space_after(chars: list, i: int, median_distance: float) -> bool:
+    """Return True if a space should be inserted after chars[i]."""
+    if chars[i].char_unicode == " ":
+        return False
+    if i >= len(chars) - 1:
+        return False
+    if not isinstance(chars[i + 1], PdfCharacter):
+        return False
+    distance = chars[i + 1].box.x - chars[i].box.x2
+    return distance >= median_distance or Layout.is_newline(chars[i], chars[i + 1])
+
+
+def get_char_unicode_string(chars: list[PdfCharacter | str]) -> str:
+    """
+    å°†å­—ç¬¦åˆ—è¡¨è½¬æ¢ä¸º Unicode å­—ç¬¦ä¸²ï¼Œæ ¹æ®å­—ç¬¦é—´è·è‡ªåŠ¨æ’å…¥ç©ºæ ¼ã€‚
+    æœ‰äº› PDF ä¸ä¼šæ˜¾å¼ç¼–ç ç©ºæ ¼ï¼Œè¿™æ—¶éœ€è¦æ ¹æ®é—´è·è‡ªåŠ¨æ’å…¥ç©ºæ ¼ã€‚
+
+    Args:
+        chars: å­—ç¬¦åˆ—è¡¨ï¼Œå¯ä»¥æ˜¯ PdfCharacter å¯¹è±¡æˆ–å­—ç¬¦ä¸²
+
+    Returns:
+        str: å¤„ç†åŽçš„ Unicode å­—ç¬¦ä¸²
+    """
+    median_distance = _compute_median_char_distance(chars)
+
+    # æž„å»º unicode å­—ç¬¦ä¸²ï¼Œæ ¹æ®é—´è·æ’å…¥ç©ºæ ¼
     unicode_chars = []
     for i in range(len(chars)):
-        # 如果不是字符对象，直接添加，一般来说这个时候 chars[i] 是字符串
+        # å¦‚æžœä¸æ˜¯å­—ç¬¦å¯¹è±¡ï¼Œç›´æŽ¥æ·»åŠ ï¼Œä¸€èˆ¬æ¥è¯´è¿™ä¸ªæ—¶å€™ chars[i] æ˜¯å­—ç¬¦ä¸²
         if not isinstance(chars[i], PdfCharacter):
             unicode_chars.append(chars[i])
             continue
 
         # use unicode regex to replace all space with " "
-        unicode_chars.append(
-            regex.sub(
-                r"\s+",
-                " ",
-                unicodedata.normalize("NFKC", chars[i].char_unicode),
-            )
-        )
+        unicode_chars.append(_normalize_char_unicode(chars[i]))
 
-        # 如果是空格，跳过
-        if chars[i].char_unicode == " ":
-            continue
-
-        # 如果两个字符都是 PdfCharacter，检查间距
-        if i < len(chars) - 1 and isinstance(chars[i + 1], PdfCharacter):
-            distance = chars[i + 1].box.x - chars[i].box.x2
-            if distance >= median_distance or Layout.is_newline(  # 间距大于中位数
-                chars[i],
-                chars[i + 1],
-            ):  # 换行
-                unicode_chars.append(" ")  # 添加空格
+        # å¦‚æžœä¸¤ä¸ªå­—ç¬¦éƒ½æ˜¯ PdfCharacterï¼Œæ£€æŸ¥é—´è·
+        if _needs_space_after(chars, i, median_distance):
+            unicode_chars.append(" ")  # æ·»åŠ ç©ºæ ¼
 
     result = "".join(unicode_chars)
     # use unicode regex to replace all space with " "
@@ -293,55 +272,63 @@ def get_char_unicode_string(chars: list[PdfCharacter | str]) -> str:
     return result
 
 
+def _composition_max_height(
+    composition: "PdfParagraphComposition", paragraph: "PdfParagraph"
+) -> float:
+    """Return the maximum character/formula height within a single *composition*."""
+    if composition.pdf_character:
+        return composition.pdf_character[0].box.y2 - composition.pdf_character[0].box.y
+    if composition.pdf_same_style_characters:
+        return (
+            max(
+                (pdf_char.box.y2 - pdf_char.box.y)
+                for pdf_char in composition.pdf_same_style_characters.pdf_character
+            )
+            if composition.pdf_same_style_characters.pdf_character
+            else 0.0
+        )
+    if composition.pdf_same_style_unicode_characters:
+        # å¯¹äºŽçº¯ Unicode å­—ç¬¦ï¼Œæˆ‘ä»¬ä½¿ç”¨å…¶æ ·å¼ä¸­çš„å­—ä½“å¤§å°ä½œä¸ºé«˜åº¦ä¼°è®¡
+        return composition.pdf_same_style_unicode_characters.pdf_style.font_size
+    if composition.pdf_line:
+        return (
+            max(
+                (pdf_char.box.y2 - pdf_char.box.y)
+                for pdf_char in composition.pdf_line.pdf_character
+            )
+            if composition.pdf_line.pdf_character
+            else 0.0
+        )
+    if composition.pdf_formula:
+        return composition.pdf_formula.box.y2 - composition.pdf_formula.box.y
+    logger.error(
+        f"Unknown composition type. "
+        f"Composition: {composition}. "
+        f"Paragraph: {paragraph}. ",
+    )
+    return 0.0
+
+
 def get_paragraph_max_height(paragraph: PdfParagraph) -> float:
     """
-    获取段落中最高的排版单元高度。
+    èŽ·å–æ®µè½ä¸­æœ€é«˜çš„æŽ’ç‰ˆå•å…ƒé«˜åº¦ã€‚
 
     Args:
-        paragraph: PDF 段落对象
+        paragraph: PDF æ®µè½å¯¹è±¡
 
     Returns:
-        float: 最大高度值
+        float: æœ€å¤§é«˜åº¦å€¼
     """
     max_height = 0.0
     for composition in paragraph.pdf_paragraph_composition:
         if composition is None:
             continue
-        if composition.pdf_character:
-            char_height = (
-                composition.pdf_character[0].box.y2 - composition.pdf_character[0].box.y
-            )
-            max_height = max(max_height, char_height)
-        elif composition.pdf_same_style_characters:
-            for pdf_char in composition.pdf_same_style_characters.pdf_character:
-                char_height = pdf_char.box.y2 - pdf_char.box.y
-                max_height = max(max_height, char_height)
-        elif composition.pdf_same_style_unicode_characters:
-            # 对于纯 Unicode 字符，我们使用其样式中的字体大小作为高度估计
-            font_size = (
-                composition.pdf_same_style_unicode_characters.pdf_style.font_size
-            )
-            max_height = max(max_height, font_size)
-        elif composition.pdf_line:
-            for pdf_char in composition.pdf_line.pdf_character:
-                char_height = pdf_char.box.y2 - pdf_char.box.y
-                max_height = max(max_height, char_height)
-        elif composition.pdf_formula:
-            formula_height = (
-                composition.pdf_formula.box.y2 - composition.pdf_formula.box.y
-            )
-            max_height = max(max_height, formula_height)
-        else:
-            logger.error(
-                f"Unknown composition type. "
-                f"Composition: {composition}. "
-                f"Paragraph: {paragraph}. ",
-            )
+        max_height = max(max_height, _composition_max_height(composition, paragraph))
     return max_height
 
 
 def is_same_style(style1, style2) -> bool:
-    """判断两个样式是否相同"""
+    """åˆ¤æ–­ä¸¤ä¸ªæ ·å¼æ˜¯å¦ç›¸åŒ"""
     if style1 is None or style2 is None:
         return style1 is style2
 
@@ -353,7 +340,7 @@ def is_same_style(style1, style2) -> bool:
 
 
 def is_same_style_except_size(style1, style2) -> bool:
-    """判断两个样式是否相同"""
+    """åˆ¤æ–­ä¸¤ä¸ªæ ·å¼æ˜¯å¦ç›¸åŒ"""
     if style1 is None or style2 is None:
         return style1 is style2
 
@@ -365,7 +352,7 @@ def is_same_style_except_size(style1, style2) -> bool:
 
 
 def is_same_style_except_font(style1, style2) -> bool:
-    """判断两个样式是否相同"""
+    """åˆ¤æ–­ä¸¤ä¸ªæ ·å¼æ˜¯å¦ç›¸åŒ"""
     if style1 is None or style2 is None:
         return style1 is style2
 
@@ -375,7 +362,7 @@ def is_same_style_except_font(style1, style2) -> bool:
 
 
 def is_same_graphic_state(state1: GraphicState, state2: GraphicState) -> bool:
-    """判断两个 GraphicState 是否相同"""
+    """åˆ¤æ–­ä¸¤ä¸ª GraphicState æ˜¯å¦ç›¸åŒ"""
     if state1 is None or state2 is None:
         return state1 is state2
 
@@ -385,79 +372,88 @@ def is_same_graphic_state(state1: GraphicState, state2: GraphicState) -> bool:
     )
 
 
-def add_space_dummy_chars(paragraph: PdfParagraph) -> None:
-    """
-    在 PDF 段落中添加表示空格的 dummy 字符。
-    这个函数会直接修改传入的 paragraph 对象，在需要空格的地方添加 dummy 字符。
-    同时也会处理不同组成部分之间的空格。
-
-    Args:
-        paragraph: 需要处理的 PDF 段落对象
-    """
-    # 首先处理每个组成部分内部的空格
+def _add_intra_composition_spaces(paragraph: PdfParagraph) -> None:
+    """Insert space dummies within each composition of *paragraph*."""
     for composition in paragraph.pdf_paragraph_composition:
         if composition.pdf_line:
-            chars = composition.pdf_line.pdf_character
-            _add_space_dummy_chars_to_list(chars)
+            _add_space_dummy_chars_to_list(composition.pdf_line.pdf_character)
         elif composition.pdf_same_style_characters:
-            chars = composition.pdf_same_style_characters.pdf_character
-            _add_space_dummy_chars_to_list(chars)
+            _add_space_dummy_chars_to_list(
+                composition.pdf_same_style_characters.pdf_character
+            )
         elif composition.pdf_same_style_unicode_characters:
-            # 对于 unicode 字符，不需要处理。
-            # 这种类型只会出现在翻译好的结果中
+            # å¯¹äºŽ unicode å­—ç¬¦ï¼Œä¸éœ€è¦å¤„ç†ã€‚
+            # è¿™ç§ç±»åž‹åªä¼šå‡ºçŽ°åœ¨ç¿»è¯‘å¥½çš„ç»“æžœä¸­
             continue
         elif composition.pdf_formula:
-            chars = composition.pdf_formula.pdf_character
-            _add_space_dummy_chars_to_list(chars)
+            _add_space_dummy_chars_to_list(composition.pdf_formula.pdf_character)
 
-    # 然后处理组成部分之间的空格
+
+def _append_space_char_to_composition(
+    comp: "PdfParagraphComposition", space_char: PdfCharacter
+) -> None:
+    """Append *space_char* to the appropriate character list in *comp*."""
+    if comp.pdf_line:
+        comp.pdf_line.pdf_character.append(space_char)
+    elif comp.pdf_same_style_characters:
+        comp.pdf_same_style_characters.pdf_character.append(space_char)
+    elif comp.pdf_formula:
+        comp.pdf_formula.pdf_character.append(space_char)
+
+
+def _add_inter_composition_spaces(paragraph: PdfParagraph) -> None:
+    """Insert space dummies between adjacent compositions of *paragraph*."""
     for i in range(len(paragraph.pdf_paragraph_composition) - 1):
         curr_comp = paragraph.pdf_paragraph_composition[i]
         next_comp = paragraph.pdf_paragraph_composition[i + 1]
 
-        # 获取当前组成部分的最后一个字符
         curr_last_char = _get_last_char_from_composition(curr_comp)
         if not curr_last_char:
             continue
-
-        # 获取下一个组成部分的第一个字符
         next_first_char = _get_first_char_from_composition(next_comp)
         if not next_first_char:
             continue
 
-        # 检查两个组成部分之间是否需要添加空格
         distance = next_first_char.box.x - curr_last_char.box.x2
-        if distance > 1:  # 只考虑正向距离
-            # 创建一个 dummy 字符作为空格
-            space_box = Box(
-                x=curr_last_char.box.x2,
-                y=curr_last_char.box.y,
-                x2=curr_last_char.box.x2 + distance,
-                y2=curr_last_char.box.y2,
-            )
+        if distance <= 1:
+            continue
 
-            space_char = PdfCharacter(
-                pdf_style=curr_last_char.pdf_style,
-                box=space_box,
-                char_unicode=" ",
-                scale=curr_last_char.scale,
-                advance=space_box.x2 - space_box.x,
-                visual_bbox=il_version_1.VisualBbox(box=space_box),
-            )
+        space_box = Box(
+            x=curr_last_char.box.x2,
+            y=curr_last_char.box.y,
+            x2=curr_last_char.box.x2 + distance,
+            y2=curr_last_char.box.y2,
+        )
+        space_char = PdfCharacter(
+            pdf_style=curr_last_char.pdf_style,
+            box=space_box,
+            char_unicode=" ",
+            scale=curr_last_char.scale,
+            advance=space_box.x2 - space_box.x,
+            visual_bbox=il_version_1.VisualBbox(box=space_box),
+        )
+        _append_space_char_to_composition(curr_comp, space_char)
 
-            # 将空格添加到当前组成部分的末尾
-            if curr_comp.pdf_line:
-                curr_comp.pdf_line.pdf_character.append(space_char)
-            elif curr_comp.pdf_same_style_characters:
-                curr_comp.pdf_same_style_characters.pdf_character.append(space_char)
-            elif curr_comp.pdf_formula:
-                curr_comp.pdf_formula.pdf_character.append(space_char)
+
+def add_space_dummy_chars(paragraph: PdfParagraph) -> None:
+    """
+    åœ¨ PDF æ®µè½ä¸­æ·»åŠ è¡¨ç¤ºç©ºæ ¼çš„ dummy å­—ç¬¦ã€‚
+    è¿™ä¸ªå‡½æ•°ä¼šç›´æŽ¥ä¿®æ”¹ä¼ å…¥çš„ paragraph å¯¹è±¡ï¼Œåœ¨éœ€è¦ç©ºæ ¼çš„åœ°æ–¹æ·»åŠ  dummy å­—ç¬¦ã€‚
+    åŒæ—¶ä¹Ÿä¼šå¤„ç†ä¸åŒç»„æˆéƒ¨åˆ†ä¹‹é—´çš„ç©ºæ ¼ã€‚
+
+    Args:
+        paragraph: éœ€è¦å¤„ç†çš„ PDF æ®µè½å¯¹è±¡
+    """
+    # é¦–å…ˆå¤„ç†æ¯ä¸ªç»„æˆéƒ¨åˆ†å†…éƒ¨çš„ç©ºæ ¼
+    _add_intra_composition_spaces(paragraph)
+    # ç„¶åŽå¤„ç†ç»„æˆéƒ¨åˆ†ä¹‹é—´çš„ç©ºæ ¼
+    _add_inter_composition_spaces(paragraph)
 
 
 def _get_first_char_from_composition(
     comp: PdfParagraphComposition,
 ) -> PdfCharacter | None:
-    """获取组成部分的第一个字符"""
+    """èŽ·å–ç»„æˆéƒ¨åˆ†çš„ç¬¬ä¸€ä¸ªå­—ç¬¦"""
     if comp.pdf_line and comp.pdf_line.pdf_character:
         return comp.pdf_line.pdf_character[0]
     elif (
@@ -474,7 +470,7 @@ def _get_first_char_from_composition(
 def _get_last_char_from_composition(
     comp: PdfParagraphComposition,
 ) -> PdfCharacter | None:
-    """获取组成部分的最后一个字符"""
+    """èŽ·å–ç»„æˆéƒ¨åˆ†çš„æœ€åŽä¸€ä¸ªå­—ç¬¦"""
     if comp.pdf_line and comp.pdf_line.pdf_character:
         return comp.pdf_line.pdf_character[-1]
     elif (
@@ -490,22 +486,22 @@ def _get_last_char_from_composition(
 
 def _add_space_dummy_chars_to_list(chars: list[PdfCharacter]) -> None:
     """
-    在字符列表中的适当位置添加表示空格的 dummy 字符。
+    åœ¨å­—ç¬¦åˆ—è¡¨ä¸­çš„é€‚å½“ä½ç½®æ·»åŠ è¡¨ç¤ºç©ºæ ¼çš„ dummy å­—ç¬¦ã€‚
 
     Args:
-        chars: PdfCharacter 对象列表
+        chars: PdfCharacter å¯¹è±¡åˆ—è¡¨
     """
     if not chars:
         return
 
-    # 计算字符间距的中位数
+    # è®¡ç®—å­—ç¬¦é—´è·çš„ä¸­ä½æ•°
     distances = []
     for i in range(len(chars) - 1):
         distance = chars[i + 1].box.x - chars[i].box.x2
-        if distance > 1:  # 只考虑正向距离
+        if distance > 1:  # åªè€ƒè™‘æ­£å‘è·ç¦»
             distances.append(distance)
 
-    # 去重后的距离
+    # åŽ»é‡åŽçš„è·ç¦»
     distinct_distances = sorted(set(distances))
 
     if not distinct_distances:
@@ -515,7 +511,7 @@ def _add_space_dummy_chars_to_list(chars: list[PdfCharacter]) -> None:
     else:
         median_distance = distinct_distances[1]
 
-    # 在需要的地方插入空格字符
+    # åœ¨éœ€è¦çš„åœ°æ–¹æ’å…¥ç©ºæ ¼å­—ç¬¦
     i = 0
     while i < len(chars) - 1:
         curr_char = chars[i]
@@ -525,7 +521,7 @@ def _add_space_dummy_chars_to_list(chars: list[PdfCharacter]) -> None:
         if distance >= median_distance or Layout.is_newline(curr_char, next_char):
             if distance < 0:
                 distance = -distance
-            # 创建一个 dummy 字符作为空格
+            # åˆ›å»ºä¸€ä¸ª dummy å­—ç¬¦ä½œä¸ºç©ºæ ¼
             space_box = Box(
                 x=curr_char.box.x2,
                 y=curr_char.box.y,
@@ -542,9 +538,9 @@ def _add_space_dummy_chars_to_list(chars: list[PdfCharacter]) -> None:
                 visual_bbox=il_version_1.VisualBbox(box=space_box),
             )
 
-            # 在当前位置后插入空格字符
+            # åœ¨å½“å‰ä½ç½®åŽæ’å…¥ç©ºæ ¼å­—ç¬¦
             chars.insert(i + 1, space_char)
-            i += 2  # 跳过刚插入的空格
+            i += 2  # è·³è¿‡åˆšæ’å…¥çš„ç©ºæ ¼
         else:
             i += 1
 
@@ -728,20 +724,6 @@ def get_character_layout(
         ]
 
     char_box = char.visual_bbox.box
-    # char_box2 = char.box
-    # if bbox_mode == "auto":
-    #     # Calculate IOU to decide which box to use
-    #     intersection_area = max(
-    #         0, min(char_box.x2, char_box2.x2) - max(char_box.x, char_box2.x)
-    #     ) * max(0, min(char_box.y2, char_box2.y2) - max(char_box.y, char_box2.y))
-    #     char_box_area = (char_box.x2 - char_box.x) * (char_box.y2 - char_box.y)
-    #
-    #     if char_box_area > 0:
-    #         iou = intersection_area / char_box_area
-    #         if iou < 0.2:
-    #             char_box = char_box2
-    # elif bbox_mode == "box":
-    #     char_box = char_box2
 
     # Collect all intersecting layouts and their IoU values
     matching_layouts = []
@@ -776,24 +758,6 @@ def get_character_layout(
     # Sort by priority (ascending) and IoU value (descending)
     matching_layouts.sort(key=lambda x: (x["priority"], -x["iou"]))
 
-    # non_hybrid_table_label = None
-    # for layout in matching_layouts:
-    #     layout = layout["layout"]
-    #     label = layout.name
-    #     if is_text_layout(layout) and label not in (
-    #         "table_cell_hybrid",
-    #         "table_text",
-    #         "wireless_table_cell",
-    #         "wired_table_cell",
-    #         "fallback_line",
-    #         "unknown_hybrid",
-    #     ):
-    #         non_hybrid_table_label = layout
-    #         break
-    #
-    # if non_hybrid_table_label:
-    #     return non_hybrid_table_label
-
     return matching_layouts[0]["layout"]
 
 
@@ -808,7 +772,6 @@ def is_text_layout(layout: Layout):
         "table_caption",
         "table_text",
         "table_footnote",
-        # "reference",
         "title",
         "paragraph_title",
         "abstract",
@@ -954,6 +917,33 @@ def is_curve_overlapping_with_paragraphs(
     return False
 
 
+def _get_composition_box(composition: "PdfParagraphComposition") -> "Box | None":
+    """Extract a bounding Box from a single *composition*, or return None."""
+    if composition.pdf_line and composition.pdf_line.box:
+        return composition.pdf_line.box
+    if composition.pdf_formula and composition.pdf_formula.box:
+        return composition.pdf_formula.box
+    if (
+        composition.pdf_same_style_characters
+        and composition.pdf_same_style_characters.box
+    ):
+        return composition.pdf_same_style_characters.box
+    if composition.pdf_character and len(composition.pdf_character) > 0:
+        char_boxes = [
+            char.visual_bbox.box
+            for char in composition.pdf_character
+            if char.visual_bbox and char.visual_bbox.box
+        ]
+        if char_boxes:
+            return Box(
+                min(box.x for box in char_boxes),
+                min(box.y for box in char_boxes),
+                max(box.x2 for box in char_boxes),
+                max(box.y2 for box in char_boxes),
+            )
+    return None
+
+
 def get_paragraph_bounding_box(paragraph) -> Box | None:
     """Calculate the bounding box of a paragraph from its compositions.
 
@@ -970,35 +960,10 @@ def get_paragraph_bounding_box(paragraph) -> Box | None:
     min_y = float("inf")
     max_x = float("-inf")
     max_y = float("-inf")
-
     has_valid_box = False
 
     for composition in paragraph.pdf_paragraph_composition:
-        comp_box = None
-
-        if composition.pdf_line and composition.pdf_line.box:
-            comp_box = composition.pdf_line.box
-        elif composition.pdf_formula and composition.pdf_formula.box:
-            comp_box = composition.pdf_formula.box
-        elif (
-            composition.pdf_same_style_characters
-            and composition.pdf_same_style_characters.box
-        ):
-            comp_box = composition.pdf_same_style_characters.box
-        elif composition.pdf_character and len(composition.pdf_character) > 0:
-            # Calculate box from character list
-            char_boxes = [
-                char.visual_bbox.box
-                for char in composition.pdf_character
-                if char.visual_bbox and char.visual_bbox.box
-            ]
-            if char_boxes:
-                comp_min_x = min(box.x for box in char_boxes)
-                comp_min_y = min(box.y for box in char_boxes)
-                comp_max_x = max(box.x2 for box in char_boxes)
-                comp_max_y = max(box.y2 for box in char_boxes)
-                comp_box = Box(comp_min_x, comp_min_y, comp_max_x, comp_max_y)
-
+        comp_box = _get_composition_box(composition)
         if comp_box:
             min_x = min(min_x, comp_box.x)
             min_y = min(min_y, comp_box.y)

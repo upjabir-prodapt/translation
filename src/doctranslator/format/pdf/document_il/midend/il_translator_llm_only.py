@@ -560,11 +560,10 @@ class ILTranslatorLLMOnly:
             pbar
             and not is_cid_paragraph(paragraph)
             and len(paragraph.unicode) >= self.translation_config.min_text_length
+            and not is_pure_numeric_paragraph(paragraph)
+            and not is_placeholder_only_paragraph(paragraph)
         ):
-            if not is_pure_numeric_paragraph(
-                paragraph
-            ) and not is_placeholder_only_paragraph(paragraph):
-                return
+            return
         if pbar:
             pbar.advance(1)
 
@@ -693,37 +692,125 @@ class ILTranslatorLLMOnly:
         return inputs, llm_translate_trackers, paragraph_unicodes
 
     @staticmethod
+    def _unwrap_dict_output(parsed_output: dict, n_inputs: int) -> list:
+        """Extract a list from a dict-shaped LLM output."""
+        for key in ("translations", "results", "items", "data", "outputs"):
+            value = parsed_output.get(key)
+            if isinstance(value, list):
+                return value
+        if parsed_output.get("output", parsed_output.get("input", False)):
+            return [parsed_output]
+        for key in ("translation", "translated_text", "text"):
+            value = parsed_output.get(key)
+            if isinstance(value, str):
+                if n_inputs == 1:
+                    return [{"id": 0, "output": value}]
+                raise ValueError(
+                    "LLM output contains a single translation string while multiple inputs were provided"
+                )
+        raise ValueError(
+            "LLM output JSON object is missing expected translation fields"
+        )
+
+    @staticmethod
     def _unwrap_llm_output(parsed_output: object, n_inputs: int) -> list:
         """Normalise varied LLM JSON output shapes into a plain list of translation items."""
         if isinstance(parsed_output, dict):
-            for key in ("translations", "results", "items", "data", "outputs"):
-                value = parsed_output.get(key)
-                if isinstance(value, list):
-                    return value
-            if parsed_output.get("output", parsed_output.get("input", False)):
-                return [parsed_output]
-            for key in ("translation", "translated_text", "text"):
-                value = parsed_output.get(key)
-                if isinstance(value, str):
-                    if n_inputs == 1:
-                        return [{"id": 0, "output": value}]
-                    raise ValueError(
-                        "LLM output contains a single translation string while multiple inputs were provided"
-                    )
-            raise ValueError(
-                "LLM output JSON object is missing expected translation fields"
-            )
-        elif isinstance(parsed_output, str):
+            return ILTranslatorLLMOnly._unwrap_dict_output(parsed_output, n_inputs)
+        if isinstance(parsed_output, str):
             if n_inputs == 1:
                 return [{"id": 0, "output": parsed_output}]
             raise ValueError(
                 "LLM output JSON is a string while multiple inputs were provided"
             )
-        elif not isinstance(parsed_output, list):
+        if not isinstance(parsed_output, list):
             raise ValueError(
                 f"Unexpected LLM output JSON type: {type(parsed_output).__name__}"
             )
         return parsed_output
+
+    def _validate_translation_quality(
+        self,
+        input_unicode: str,
+        output_unicode: str,
+        llm_translate_tracker,
+    ) -> bool:
+        """Check translation quality heuristics. Returns True if should fallback."""
+        trimed_input = re.sub(r"[. 。…，]{20,}", ".", input_unicode)
+        input_token_count = self.calc_token_count(trimed_input)
+        output_token_count = self.calc_token_count(output_unicode)
+        same_as_input = trimed_input == output_unicode
+
+        if (
+            same_as_input
+            and input_token_count > 10
+            and not self.translation_config.disable_same_text_fallback
+        ):
+            llm_translate_tracker.set_error_message(
+                "Translation result is the same as input, fallback."
+            )
+            llm_translate_tracker.set_placeholder_full_match()
+            logger.warning("Translation result is the same as input, fallback.")
+            return True
+
+        if not (0.3 < output_token_count / input_token_count < 3):
+            llm_translate_tracker.set_error_message(
+                f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
+            )
+            logger.warning(
+                f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
+            )
+            llm_translate_tracker.set_placeholder_full_match()
+            return True
+
+        if not self.translation_config.disable_same_text_fallback:
+            edit_distance = Levenshtein.distance(input_unicode, output_unicode)
+            if edit_distance < 5 and input_token_count > 20:
+                llm_translate_tracker.set_error_message(
+                    f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
+                )
+                logger.warning(
+                    f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
+                )
+                llm_translate_tracker.set_placeholder_full_match()
+                return True
+
+        return False
+
+    def _submit_fallback_translation(
+        self,
+        id_: int,
+        inputs: list,
+        batch_paragraph: "BatchParagraph",
+        pbar,
+        page_font_map: dict,
+        xobj_font_map: dict,
+        title_paragraph,
+        local_title_paragraph,
+        executor,
+    ) -> None:
+        """Submit a fallback single-paragraph translation task."""
+        self.fallback_count += 1
+        inputs[id_][4].set_fallback_to_translate()
+        logger.warning(
+            f"Fallback to simple translation. paragraph id: {inputs[id_][2].debug_id}"
+        )
+        para_token_count = self.calc_token_count(inputs[id_][2].unicode)
+        paragraph_unicodes = inputs[id_][5]
+        inputs[id_][2].unicode = paragraph_unicodes[id_]
+        executor.submit(
+            self.il_translator.translate_paragraph,
+            inputs[id_][2],
+            batch_paragraph.pages[id_],
+            pbar,
+            inputs[id_][3],
+            page_font_map,
+            xobj_font_map,
+            priority=1048576 - para_token_count,
+            paragraph_token_count=para_token_count,
+            title_paragraph=title_paragraph,
+            local_title_paragraph=local_title_paragraph,
+        )
 
     def _apply_single_translation(
         self,
@@ -738,7 +825,6 @@ class ILTranslatorLLMOnly:
         title_paragraph,
         local_title_paragraph,
         executor,
-        paragraph_token_count: int,
     ) -> bool:
         """Validate and apply a single translation result. Returns True if a fallback was used."""
         should_fallback = True
@@ -755,41 +841,12 @@ class ILTranslatorLLMOnly:
             llm_translate_tracker = inputs[id_][4]
             input_unicode = inputs[id_][0]
             output_unicode = translated_text
-            trimed_input = re.sub(r"[. 。…，]{20,}", ".", input_unicode)
-            input_token_count = self.calc_token_count(trimed_input)
-            output_token_count = self.calc_token_count(output_unicode)
-            same_as_input = trimed_input == output_unicode
-            if (
-                same_as_input
-                and input_token_count > 10
-                and not self.translation_config.disable_same_text_fallback
+
+            if self._validate_translation_quality(
+                input_unicode, output_unicode, llm_translate_tracker
             ):
-                llm_translate_tracker.set_error_message(
-                    "Translation result is the same as input, fallback."
-                )
-                llm_translate_tracker.set_placeholder_full_match()
-                logger.warning("Translation result is the same as input, fallback.")
                 return should_fallback
-            if not (0.3 < output_token_count / input_token_count < 3):
-                llm_translate_tracker.set_error_message(
-                    f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
-                )
-                logger.warning(
-                    f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
-                )
-                llm_translate_tracker.set_placeholder_full_match()
-                return should_fallback
-            if not self.translation_config.disable_same_text_fallback:
-                edit_distance = Levenshtein.distance(input_unicode, output_unicode)
-                if edit_distance < 5 and input_token_count > 20:
-                    llm_translate_tracker.set_error_message(
-                        f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
-                    )
-                    logger.warning(
-                        f"Translation result edit distance is too small. distance: {edit_distance}, input: {input_unicode}, output: {output_unicode}"
-                    )
-                    llm_translate_tracker.set_placeholder_full_match()
-                    return should_fallback
+
             self.il_translator.post_translate_paragraph(
                 inputs[id_][2],
                 inputs[id_][3],
@@ -807,26 +864,16 @@ class ILTranslatorLLMOnly:
         finally:
             self.total_count += 1
             if should_fallback:
-                self.fallback_count += 1
-                inputs[id_][4].set_fallback_to_translate()
-                logger.warning(
-                    f"Fallback to simple translation. paragraph id: {inputs[id_][2].debug_id}"
-                )
-                para_token_count = self.calc_token_count(inputs[id_][2].unicode)
-                paragraph_unicodes = inputs[id_][5]
-                inputs[id_][2].unicode = paragraph_unicodes[id_]
-                executor.submit(
-                    self.il_translator.translate_paragraph,
-                    inputs[id_][2],
-                    batch_paragraph.pages[id_],
+                self._submit_fallback_translation(
+                    id_,
+                    inputs,
+                    batch_paragraph,
                     pbar,
-                    inputs[id_][3],
                     page_font_map,
                     xobj_font_map,
-                    priority=1048576 - para_token_count,
-                    paragraph_token_count=para_token_count,
-                    title_paragraph=title_paragraph,
-                    local_title_paragraph=local_title_paragraph,
+                    title_paragraph,
+                    local_title_paragraph,
+                    executor,
                 )
             else:
                 self.ok_count += 1
@@ -840,7 +887,9 @@ class ILTranslatorLLMOnly:
         results = {}
         for item in parsed:
             if not isinstance(item, dict):
-                raise ValueError(f"Invalid translation item type: {type(item).__name__}")
+                raise ValueError(
+                    f"Invalid translation item type: {type(item).__name__}"
+                )
             if "id" not in item:
                 raise ValueError("Translation item missing id field")
             results[item["id"]] = item.get("output", item.get("input"))
@@ -895,6 +944,29 @@ class ILTranslatorLLMOnly:
                 local_title_paragraph=local_title_paragraph,
             )
 
+    def _build_json_format_input(self, inputs: list) -> tuple[list, list]:
+        """Build the JSON input list for the LLM and the list of ids to translate.
+
+        Returns (json_format_input, should_translate_paragraph).
+        """
+        json_format_input = []
+        should_translate_paragraph = []
+        for id_, input_text in enumerate(inputs):
+            ti = input_text[1]
+            tracker = input_text[3]
+            tracker.record_multi_paragraph_index(id_)
+            placeholders_hint = ti.get_placeholders_hint()
+            obj = {
+                "id": id_,
+                "input": input_text[0],
+                "layout_label": input_text[2].layout_label,
+            }
+            if placeholders_hint and self.translation_config.add_formula_placehold_hint:
+                obj["formula_placeholders_hint"] = placeholders_hint
+            json_format_input.append(obj)
+            should_translate_paragraph.append(id_)
+        return json_format_input, should_translate_paragraph
+
     def translate_paragraph(
         self,
         batch_paragraph: "BatchParagraph",
@@ -919,25 +991,9 @@ class ILTranslatorLLMOnly:
             if not inputs:
                 return
 
-            json_format_input = []
-            for id_, input_text in enumerate(inputs):
-                ti = input_text[1]
-                tracker = input_text[3]
-                tracker.record_multi_paragraph_index(id_)
-                placeholders_hint = ti.get_placeholders_hint()
-                obj = {
-                    "id": id_,
-                    "input": input_text[0],
-                    "layout_label": input_text[2].layout_label,
-                }
-                if (
-                    placeholders_hint
-                    and self.translation_config.add_formula_placehold_hint
-                ):
-                    obj["formula_placeholders_hint"] = placeholders_hint
-                json_format_input.append(obj)
-                should_translate_paragraph.append(id_)
-
+            json_format_input, should_translate_paragraph = (
+                self._build_json_format_input(inputs)
+            )
             json_format_input_str = json.dumps(
                 json_format_input, ensure_ascii=False, indent=2
             )
@@ -961,7 +1017,9 @@ class ILTranslatorLLMOnly:
             )
             for llm_translate_tracker in llm_translate_trackers:
                 llm_translate_tracker.set_output(llm_output)
-            translation_results = self._parse_translation_results(llm_output, len(inputs))
+            translation_results = self._parse_translation_results(
+                llm_output, len(inputs)
+            )
             for id_, output in translation_results.items():
                 self._apply_single_translation(
                     id_,
@@ -975,15 +1033,8 @@ class ILTranslatorLLMOnly:
                     title_paragraph,
                     local_title_paragraph,
                     executor,
-                    paragraph_token_count,
                 )
-        except (
-            json.JSONDecodeError,
-            ValueError,
-            TypeError,
-            KeyError,
-            RuntimeError,
-        ) as e:
+        except (ValueError, TypeError, KeyError, RuntimeError) as e:
             self._handle_translate_paragraph_error(
                 e,
                 llm_translate_trackers,
@@ -997,15 +1048,8 @@ class ILTranslatorLLMOnly:
                 local_title_paragraph,
             )
 
-    def _build_llm_prompt(
-        self,
-        json_input_str: str,
-        title_paragraph: PdfParagraph | None,
-        local_title_paragraph: PdfParagraph | None,
-        batch_text_for_glossary_matching: str,
-    ) -> str:
-        """Build LLM prompt using a single template for easier maintenance."""
-        # Build role block, honoring custom_system_prompt if provided.
+    def _build_llm_role_block(self) -> str:
+        """Build the role/system block for the LLM prompt."""
         custom_prompt = getattr(self.translation_config, "custom_system_prompt", None)
         if custom_prompt:
             role_block = custom_prompt.strip()
@@ -1019,8 +1063,14 @@ class ILTranslatorLLMOnly:
                 f"into {self.translation_config.lang_out}.\n\n"
                 "Follow all rules strictly."
             )
+        return role_block
 
-        # Build contextual hints section.
+    def _build_llm_contextual_hints_block(
+        self,
+        title_paragraph: PdfParagraph | None,
+        local_title_paragraph: PdfParagraph | None,
+    ) -> str:
+        """Build the contextual hints block for the LLM prompt."""
         contextual_lines: list[str] = []
         hint_idx = 1
         if title_paragraph:
@@ -1029,31 +1079,30 @@ class ILTranslatorLLMOnly:
             )
             hint_idx += 1
 
-        if local_title_paragraph:
-            is_different_from_global = True
-            if title_paragraph:
-                if local_title_paragraph.debug_id == title_paragraph.debug_id:
-                    is_different_from_global = False
-
-            if is_different_from_global:
-                contextual_lines.append(
-                    f"{hint_idx}. The most recent title is: {local_title_paragraph.unicode}"
-                )
+        if local_title_paragraph and not (
+            title_paragraph
+            and local_title_paragraph.debug_id == title_paragraph.debug_id
+        ):
+            contextual_lines.append(
+                f"{hint_idx}. The most recent title is: {local_title_paragraph.unicode}"
+            )
 
         if contextual_lines:
-            contextual_hints_block = (
+            return (
                 "## Contextual Hints for Better Translation\n"
                 + "\n".join(contextual_lines)
                 + "\n"
             )
-        else:
-            contextual_hints_block = ""
+        return ""
 
-        # Build glossary usage rules and glossary tables.
-        glossary_usage_rules_block = ""
-        glossary_tables_block = ""
+    def _build_llm_glossary_blocks(
+        self, batch_text_for_glossary_matching: str
+    ) -> tuple[str, str]:
+        """Build glossary usage rules and glossary table blocks for the LLM prompt.
+
+        Returns (glossary_usage_rules_block, glossary_tables_block).
+        """
         glossary_entries_per_glossary: dict[str, list[tuple[str, str]]] = {}
-
         if self._cached_glossaries:
             for glossary in self._cached_glossaries:
                 active_entries = glossary.get_active_entries_for_text(
@@ -1064,28 +1113,44 @@ class ILTranslatorLLMOnly:
                         active_entries
                     )
 
-        if glossary_entries_per_glossary:
-            glossary_usage_rules_block = (
-                "## Glossary\n"
-                "If a glossary is provided:\n"
-                "- Always use the exact target term.\n"
-                "- Apply glossary items even inside tags or when broken by hyphens/line breaks.\n"
-                "- If glossary does NOT include a term, translate it naturally.\n\n"
-            )
+        if not glossary_entries_per_glossary:
+            return "", ""
 
-            glossary_table_lines: list[str] = ["## Glossary Tables", ""]
-            for glossary_name, entries in glossary_entries_per_glossary.items():
-                glossary_table_lines.append(f"### Glossary: {glossary_name}")
-                glossary_table_lines.append("")
-                glossary_table_lines.append(
-                    "| Source Term | Target Term |\n|-------------|-------------|"
-                )
-                for original_source, target_text in entries:
-                    glossary_table_lines.append(
-                        f"| {original_source} | {target_text} |"
-                    )
-                glossary_table_lines.append("")
-            glossary_tables_block = "\n".join(glossary_table_lines)
+        glossary_usage_rules_block = (
+            "## Glossary\n"
+            "If a glossary is provided:\n"
+            "- Always use the exact target term.\n"
+            "- Apply glossary items even inside tags or when broken by hyphens/line breaks.\n"
+            "- If glossary does NOT include a term, translate it naturally.\n\n"
+        )
+        glossary_table_lines: list[str] = ["## Glossary Tables", ""]
+        for glossary_name, entries in glossary_entries_per_glossary.items():
+            glossary_table_lines.append(f"### Glossary: {glossary_name}")
+            glossary_table_lines.append("")
+            glossary_table_lines.append(
+                "| Source Term | Target Term |\n|-------------|-------------|"
+            )
+            for original_source, target_text in entries:
+                glossary_table_lines.append(f"| {original_source} | {target_text} |")
+            glossary_table_lines.append("")
+        glossary_tables_block = "\n".join(glossary_table_lines)
+        return glossary_usage_rules_block, glossary_tables_block
+
+    def _build_llm_prompt(
+        self,
+        json_input_str: str,
+        title_paragraph: PdfParagraph | None,
+        local_title_paragraph: PdfParagraph | None,
+        batch_text_for_glossary_matching: str,
+    ) -> str:
+        """Build LLM prompt using a single template for easier maintenance."""
+        role_block = self._build_llm_role_block()
+        contextual_hints_block = self._build_llm_contextual_hints_block(
+            title_paragraph, local_title_paragraph
+        )
+        glossary_usage_rules_block, glossary_tables_block = (
+            self._build_llm_glossary_blocks(batch_text_for_glossary_matching)
+        )
 
         return PROMPT_TEMPLATE.substitute(
             role_block=role_block,

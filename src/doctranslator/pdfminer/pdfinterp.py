@@ -205,17 +205,30 @@ class PDFResourceManager:
                 raise
             return CMap()
 
+    def _get_font_subtype(self, spec: Mapping[str, object]) -> str:
+        """Determine the font subtype from a font spec dictionary."""
+        if "Subtype" in spec:
+            return literal_name(spec["Subtype"])
+        if settings.STRICT:
+            raise PDFFontError("Font Subtype is not specified.")
+        return "Type1"
+
+    def _create_type0_font(self, spec: Mapping[str, object]) -> PDFFont:
+        """Build a Type0 (composite) font by delegating to its descendant font."""
+        dfonts = list_value(spec["DescendantFonts"])
+        assert dfonts
+        subspec = dict_value(dfonts[0]).copy()
+        for k in ("Encoding", "ToUnicode"):
+            if k in spec:
+                subspec[k] = resolve1(spec[k])
+        return self.get_font(None, subspec)
+
     def _create_font(self, spec: Mapping[str, object]) -> PDFFont:
         """Create a new PDFFont instance from a font spec dictionary."""
         if settings.STRICT and spec["Type"] is not LITERAL_FONT:
             raise PDFFontError("Type is not /Font")
 
-        if "Subtype" in spec:
-            subtype = literal_name(spec["Subtype"])
-        elif settings.STRICT:
-            raise PDFFontError("Font Subtype is not specified.")
-        else:
-            subtype = "Type1"
+        subtype = self._get_font_subtype(spec)
 
         if subtype in ("Type1", "MMType1"):
             return PDFType1Font(self, spec)
@@ -226,13 +239,7 @@ class PDFResourceManager:
         if subtype in ("CIDFontType0", "CIDFontType2"):
             return PDFCIDFont(self, spec)
         if subtype == "Type0":
-            dfonts = list_value(spec["DescendantFonts"])
-            assert dfonts
-            subspec = dict_value(dfonts[0]).copy()
-            for k in ("Encoding", "ToUnicode"):
-                if k in spec:
-                    subspec[k] = resolve1(spec[k])
-            return self.get_font(None, subspec)
+            return self._create_type0_font(spec)
         if settings.STRICT:
             raise PDFFontError("Invalid Font spec: %r" % spec)
         return PDFType1Font(self, spec)  # this is so wrong!
@@ -473,8 +480,8 @@ class PDFPageInterpreter:
         if self.gstack:
             self.set_current_state(self.gstack.pop())
 
-    # PDF operator dispatch alias – 'Q' maps to do_Q via getattr
-    do_Q = do_q_upper
+    # PDF operator dispatch alias â€“ 'Q' maps to do_Q via getattr
+    do_Q = do_q_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_cm(
         self,
@@ -510,10 +517,12 @@ class PDFPageInterpreter:
         """Set line cap style (PDF operator J, uppercase)"""
         self.graphicstate.linecap = linecap
 
-    # PDF operator dispatch alias – 'J' maps to do_J via getattr
-    do_J = do_j_upper
+    # PDF operator dispatch alias â€“ 'J' maps to do_J via getattr
+    do_J = do_j_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_j(self, linejoin: PDFStackT) -> None:
+    def do_j(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, linejoin: PDFStackT
+    ) -> None:
         """Set line join style"""
         self.graphicstate.linejoin = linejoin
 
@@ -521,8 +530,8 @@ class PDFPageInterpreter:
         """Set miter limit (PDF operator M, uppercase)"""
         self.graphicstate.miterlimit = miterlimit
 
-    # PDF operator dispatch alias – 'M' maps to do_M via getattr
-    do_M = do_m_upper
+    # PDF operator dispatch alias â€“ 'M' maps to do_M via getattr
+    do_M = do_m_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_d(self, dash: PDFStackT, phase: PDFStackT) -> None:
         """Set line dash pattern"""
@@ -545,7 +554,9 @@ class PDFPageInterpreter:
         extended graphic-state parameters.
         """
 
-    def do_m(self, x: PDFStackT, y: PDFStackT) -> None:
+    def do_m(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, x: PDFStackT, y: PDFStackT
+    ) -> None:
         """Begin new subpath"""
         x_f = safe_float(x)
         y_f = safe_float(y)
@@ -662,10 +673,12 @@ class PDFPageInterpreter:
         self.device.paint_path(self.graphicstate, True, False, False, self.curpath)
         self.curpath = []
 
-    # PDF operator dispatch alias – 'S' maps to do_S via getattr
-    do_S = do_s_upper
+    # PDF operator dispatch alias â€“ 'S' maps to do_S via getattr
+    do_S = do_s_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_s(self) -> None:
+    def do_s(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Close and stroke path"""
         self.do_h()
         self.do_S()
@@ -682,8 +695,8 @@ class PDFPageInterpreter:
         The current path is cleared but no painting action is taken by this no-op handler.
         """
 
-    # PDF operator dispatch alias – 'F' maps to do_F via getattr
-    do_F = do_f_upper
+    # PDF operator dispatch alias â€“ 'F' maps to do_F via getattr
+    do_F = do_f_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_f_a(self) -> None:
         """Fill path using even-odd rule"""
@@ -695,23 +708,27 @@ class PDFPageInterpreter:
         self.device.paint_path(self.graphicstate, True, True, False, self.curpath)
         self.curpath = []
 
-    # PDF operator dispatch alias – 'B' maps to do_B via getattr
-    do_B = do_b_upper
+    # PDF operator dispatch alias â€“ 'B' maps to do_B via getattr
+    do_B = do_b_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_b_upper_a(self) -> None:
         """Fill and stroke path using even-odd rule (PDF operator B*, uppercase)"""
         self.device.paint_path(self.graphicstate, True, True, True, self.curpath)
         self.curpath = []
 
-    # PDF operator dispatch alias – 'B*' maps to do_B_a via getattr
-    do_B_a = do_b_upper_a
+    # PDF operator dispatch alias â€“ 'B*' maps to do_B_a via getattr
+    do_B_a = do_b_upper_a  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_b(self) -> None:
+    def do_b(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Close, fill, and stroke path using nonzero winding number rule"""
         self.do_h()
         self.do_B()
 
-    def do_b_a(self) -> None:
+    def do_b_a(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Close, fill, and stroke path using even-odd rule"""
         self.do_h()
         self.do_B_a()
@@ -727,8 +744,8 @@ class PDFPageInterpreter:
         pipeline; this is an intentional no-op to preserve dispatch compatibility.
         """
 
-    # PDF operator dispatch alias – 'W' maps to do_W via getattr
-    do_W = do_w_upper
+    # PDF operator dispatch alias â€“ 'W' maps to do_W via getattr
+    do_W = do_w_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_w_upper_a(self) -> None:
         """Set clipping path using even-odd rule (PDF operator W*, uppercase).
@@ -737,8 +754,8 @@ class PDFPageInterpreter:
         pipeline; this is an intentional no-op to preserve dispatch compatibility.
         """
 
-    # PDF operator dispatch alias – 'W*' maps to do_W_a via getattr
-    do_W_a = do_w_upper_a
+    # PDF operator dispatch alias â€“ 'W*' maps to do_W_a via getattr
+    do_W_a = do_w_upper_a  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
     def do_cs_upper(self, name: PDFStackT) -> None:
         """Set color space for stroking operations (PDF operator CS, uppercase).
@@ -751,10 +768,12 @@ class PDFPageInterpreter:
             if settings.STRICT:
                 raise PDFInterpreterError("Undefined ColorSpace: %r" % name)
 
-    # PDF operator dispatch alias – 'CS' maps to do_CS via getattr
-    do_CS = do_cs_upper
+    # PDF operator dispatch alias â€“ 'CS' maps to do_CS via getattr
+    do_CS = do_cs_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_cs(self, name: PDFStackT) -> None:
+    def do_cs(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, name: PDFStackT
+    ) -> None:
         """Set color space for nonstroking operations"""
         try:
             self.ncs = self.csmap[literal_name(name)]
@@ -774,10 +793,12 @@ class PDFPageInterpreter:
             self.graphicstate.scolor = gray_f
             self.scs = self.csmap["DeviceGray"]
 
-    # PDF operator dispatch alias – 'G' maps to do_G via getattr
-    do_G = do_g_upper
+    # PDF operator dispatch alias â€“ 'G' maps to do_G via getattr
+    do_G = do_g_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_g(self, gray: PDFStackT) -> None:
+    def do_g(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, gray: PDFStackT
+    ) -> None:
         """Set gray level for nonstroking operations"""
         gray_f = safe_float(gray)
 
@@ -801,10 +822,12 @@ class PDFPageInterpreter:
             self.graphicstate.scolor = rgb
             self.scs = self.csmap["DeviceRGB"]
 
-    # PDF operator dispatch alias – 'RG' maps to do_RG via getattr
-    do_RG = do_rg_upper
+    # PDF operator dispatch alias â€“ 'RG' maps to do_RG via getattr
+    do_RG = do_rg_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_rg(self, r: PDFStackT, g: PDFStackT, b: PDFStackT) -> None:
+    def do_rg(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, r: PDFStackT, g: PDFStackT, b: PDFStackT
+    ) -> None:
         """Set RGB color for nonstroking operations"""
         rgb = safe_rgb(r, g, b)
 
@@ -830,10 +853,12 @@ class PDFPageInterpreter:
             self.graphicstate.scolor = cmyk
             self.scs = self.csmap["DeviceCMYK"]
 
-    # PDF operator dispatch alias – 'K' maps to do_K via getattr
-    do_K = do_k_upper
+    # PDF operator dispatch alias â€“ 'K' maps to do_K via getattr
+    do_K = do_k_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_k(self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT) -> None:
+    def do_k(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, c: PDFStackT, m: PDFStackT, y: PDFStackT, k: PDFStackT
+    ) -> None:
         """Set CMYK color for nonstroking operations"""
         cmyk = safe_cmyk(c, m, y, k)
 
@@ -845,41 +870,54 @@ class PDFPageInterpreter:
             self.graphicstate.ncolor = cmyk
             self.ncs = self.csmap["DeviceCMYK"]
 
+    def _set_color_value(self, color: "Color", is_stroke: bool) -> None:
+        """Assign the resolved color to stroking or nonstroking graphic state."""
+        if is_stroke:
+            self.graphicstate.scolor = color
+        else:
+            self.graphicstate.ncolor = color
+
+    def _apply_gray_color(self, is_stroke: bool, label: str) -> None:
+        """Pop one value and apply as grayscale color."""
+        gray = self.pop(1)[0]
+        gray_f = safe_float(gray)
+        if gray_f is None:
+            log.warning(
+                f"Cannot set gray {label} color because {gray!r} is an invalid float value"
+            )
+        else:
+            self._set_color_value(gray_f, is_stroke)
+
+    def _apply_rgb_color(self, is_stroke: bool, label: str) -> None:
+        """Pop three values and apply as RGB color."""
+        values = self.pop(3)
+        rgb = safe_rgb(*values)
+        if rgb is None:
+            log.warning(
+                f"Cannot set RGB {label} color because not all values in {values!r} can be parsed as floats"
+            )
+        else:
+            self._set_color_value(rgb, is_stroke)
+
+    def _apply_cmyk_color(self, is_stroke: bool, label: str) -> None:
+        """Pop four values and apply as CMYK color."""
+        values = self.pop(4)
+        cmyk = safe_cmyk(*values)
+        if cmyk is None:
+            log.warning(
+                f"Cannot set CMYK {label} color because not all values in {values!r} can be parsed as floats"
+            )
+        else:
+            self._set_color_value(cmyk, is_stroke)
+
     def _apply_color(self, n: int, is_stroke: bool, label: str) -> None:
         """Apply a color value with n components to stroking or nonstroking state."""
         if n == 1:
-            gray = self.pop(1)[0]
-            gray_f = safe_float(gray)
-            if gray_f is None:
-                log.warning(
-                    f"Cannot set gray {label} color because {gray!r} is an invalid float value"
-                )
-            elif is_stroke:
-                self.graphicstate.scolor = gray_f
-            else:
-                self.graphicstate.ncolor = gray_f
+            self._apply_gray_color(is_stroke, label)
         elif n == 3:
-            values = self.pop(3)
-            rgb = safe_rgb(*values)
-            if rgb is None:
-                log.warning(
-                    f"Cannot set RGB {label} color because not all values in {values!r} can be parsed as floats"
-                )
-            elif is_stroke:
-                self.graphicstate.scolor = rgb
-            else:
-                self.graphicstate.ncolor = rgb
+            self._apply_rgb_color(is_stroke, label)
         elif n == 4:
-            values = self.pop(4)
-            cmyk = safe_cmyk(*values)
-            if cmyk is None:
-                log.warning(
-                    f"Cannot set CMYK {label} color because not all values in {values!r} can be parsed as floats"
-                )
-            elif is_stroke:
-                self.graphicstate.scolor = cmyk
-            else:
-                self.graphicstate.ncolor = cmyk
+            self._apply_cmyk_color(is_stroke, label)
         else:
             log.warning(
                 f"Cannot set {label} color because {n} components are specified "
@@ -896,10 +934,12 @@ class PDFPageInterpreter:
             n = 1
         self._apply_color(n, is_stroke=True, label="stroke")
 
-    # PDF operator dispatch alias – 'SCN' maps to do_SCN via getattr
-    do_SCN = do_scn_upper
+    # PDF operator dispatch alias â€“ 'SCN' maps to do_SCN via getattr
+    do_SCN = do_scn_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_scn(self) -> None:
+    def do_scn(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Set color for nonstroking operations"""
         if self.ncs:
             n = self.ncs.ncomponents
@@ -913,10 +953,12 @@ class PDFPageInterpreter:
         """Set color for stroking operations (PDF operator SC, uppercase)"""
         self.do_SCN()
 
-    # PDF operator dispatch alias – 'SC' maps to do_SC via getattr
-    do_SC = do_sc_upper
+    # PDF operator dispatch alias â€“ 'SC' maps to do_SC via getattr
+    do_SC = do_sc_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_sc(self) -> None:
+    def do_sc(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Set color for nonstroking operations"""
         self.do_scn()
 
@@ -928,7 +970,9 @@ class PDFPageInterpreter:
         text extraction and translation without loss of textual content.
         """
 
-    def do_BT(self) -> None:
+    def do_BT(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Begin text object
 
         Initializing the text matrix, Tm, and the text line matrix, Tlm, to
@@ -937,14 +981,18 @@ class PDFPageInterpreter:
         """
         self.textstate.reset()
 
-    def do_ET(self) -> None:
+    def do_ET(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """End a text object.
 
         Text state clean-up after a BT/ET block is handled at the device level
         via the renderer; the base interpreter needs no additional action here.
         """
 
-    def do_BX(self) -> None:
+    def do_BX(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Begin compatibility section.
 
         Content inside a BX/EX pair is implementation-defined and may be
@@ -952,14 +1000,18 @@ class PDFPageInterpreter:
         The base interpreter intentionally ignores the BX marker.
         """
 
-    def do_EX(self) -> None:
+    def do_EX(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """End compatibility section.
 
         Marks the end of a BX/EX compatibility block; ignored by the base
         interpreter as it does not process implementation-specific extensions.
         """
 
-    def do_MP(self, tag: PDFStackT) -> None:
+    def do_MP(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, tag: PDFStackT
+    ) -> None:
         """Define marked-content point"""
         if isinstance(tag, PSLiteral):
             self.device.do_tag(tag)
@@ -968,7 +1020,9 @@ class PDFPageInterpreter:
                 f"Cannot define marked-content point because {tag!r} is not a PSLiteral"
             )
 
-    def do_DP(self, tag: PDFStackT, props: PDFStackT) -> None:
+    def do_DP(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, tag: PDFStackT, props: PDFStackT
+    ) -> None:
         """Define marked-content point with property list"""
         if isinstance(tag, PSLiteral):
             self.device.do_tag(tag, props)
@@ -977,7 +1031,9 @@ class PDFPageInterpreter:
                 f"Cannot define marked-content point with property list because {tag!r} is not a PSLiteral"
             )
 
-    def do_BMC(self, tag: PDFStackT) -> None:
+    def do_BMC(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, tag: PDFStackT
+    ) -> None:
         """Begin marked-content sequence"""
         if isinstance(tag, PSLiteral):
             self.device.begin_tag(tag)
@@ -986,7 +1042,9 @@ class PDFPageInterpreter:
                 f"Cannot begin marked-content sequence because {tag!r} is not a PSLiteral"
             )
 
-    def do_BDC(self, tag: PDFStackT, props: PDFStackT) -> None:
+    def do_BDC(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, tag: PDFStackT, props: PDFStackT
+    ) -> None:
         """Begin marked-content sequence with property list"""
         if isinstance(tag, PSLiteral):
             self.device.begin_tag(tag, props)
@@ -995,11 +1053,15 @@ class PDFPageInterpreter:
                 f"Cannot begin marked-content sequence with property list because {tag!r} is not a PSLiteral"
             )
 
-    def do_EMC(self) -> None:
+    def do_EMC(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """End marked-content sequence"""
         self.device.end_tag()
 
-    def do_Tc(self, space: PDFStackT) -> None:
+    def do_Tc(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, space: PDFStackT
+    ) -> None:
         """Set character spacing.
 
         Character spacing is used by the Tj, TJ, and ' operators.
@@ -1014,7 +1076,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.charspace = charspace
 
-    def do_Tw(self, space: PDFStackT) -> None:
+    def do_Tw(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, space: PDFStackT
+    ) -> None:
         """Set the word spacing.
 
         Word spacing is used by the Tj, TJ, and ' operators.
@@ -1029,7 +1093,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.wordspace = wordspace
 
-    def do_Tz(self, scale: PDFStackT) -> None:
+    def do_Tz(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, scale: PDFStackT
+    ) -> None:
         """Set the horizontal scaling.
 
         :param scale: is a number specifying the percentage of the normal width
@@ -1043,7 +1109,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.scaling = scale_f
 
-    def do_TL(self, leading: PDFStackT) -> None:
+    def do_TL(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, leading: PDFStackT
+    ) -> None:
         """Set the text leading.
 
         Text leading is used only by the T*, ', and " operators.
@@ -1058,7 +1126,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.leading = -leading_f
 
-    def do_Tf(self, fontid: PDFStackT, fontsize: PDFStackT) -> None:
+    def do_Tf(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, fontid: PDFStackT, fontsize: PDFStackT
+    ) -> None:
         """Set the text font
 
         :param fontid: the name of a font resource in the Font subdictionary
@@ -1081,7 +1151,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.fontsize = fontsize_f
 
-    def do_Tr(self, render: PDFStackT) -> None:
+    def do_Tr(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, render: PDFStackT
+    ) -> None:
         """Set the text rendering mode"""
         render_i = safe_int(render)
 
@@ -1092,7 +1164,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.render = render_i
 
-    def do_Ts(self, rise: PDFStackT) -> None:
+    def do_Ts(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, rise: PDFStackT
+    ) -> None:
         """Set the text rise
 
         :param rise: a number expressed in unscaled text space units
@@ -1106,7 +1180,9 @@ class PDFPageInterpreter:
         else:
             self.textstate.rise = rise_f
 
-    def do_Td(self, tx: PDFStackT, ty: PDFStackT) -> None:
+    def do_Td(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, tx: PDFStackT, ty: PDFStackT
+    ) -> None:
         """Move to the start of the next line
 
         Offset from the start of the current line by (tx , ty).
@@ -1146,10 +1222,10 @@ class PDFPageInterpreter:
 
         self.textstate.linematrix = (0, 0)
 
-    # PDF operator dispatch alias – 'TD' maps to do_TD via getattr
-    do_TD = do_td_upper
+    # PDF operator dispatch alias â€“ 'TD' maps to do_TD via getattr
+    do_TD = do_td_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_Tm(
+    def do_Tm(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
         self,
         a: PDFStackT,
         b: PDFStackT,
@@ -1170,7 +1246,9 @@ class PDFPageInterpreter:
             self.textstate.matrix = matrix
             self.textstate.linematrix = (0, 0)
 
-    def do_T_a(self) -> None:
+    def do_T_a(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Move to start of next text line"""
         (a, b, c, d, e, f) = self.textstate.matrix
         self.textstate.matrix = (
@@ -1197,10 +1275,12 @@ class PDFPageInterpreter:
             self.graphicstate.copy(),
         )
 
-    # PDF operator dispatch alias – 'TJ' maps to do_TJ via getattr
-    do_TJ = do_tj_upper
+    # PDF operator dispatch alias â€“ 'TJ' maps to do_TJ via getattr
+    do_TJ = do_tj_upper  # NOSONAR - PDF spec mandates this name; dispatch relies on exact method name
 
-    def do_Tj(self, s: PDFStackT) -> None:
+    def do_Tj(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, s: PDFStackT
+    ) -> None:
         """Show text"""
         self.do_TJ([s])
 
@@ -1221,21 +1301,27 @@ class PDFPageInterpreter:
         self.do_Tc(ac)
         self.do_TJ([s])
 
-    def do_BI(self) -> None:
+    def do_BI(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Begin inline image object.
 
         The inline image data is parsed by PDFContentParser before this method
         is called; the base interpreter needs no additional action here.
         """
 
-    def do_ID(self) -> None:
+    def do_ID(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Begin inline image data.
 
         Inline image data is handled entirely by PDFContentParser._handle_inline_image;
         this dispatch handler is an intentional no-op in the base interpreter.
         """
 
-    def do_EI(self, obj: PDFStackT) -> None:
+    def do_EI(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, obj: PDFStackT
+    ) -> None:
         """End inline image object"""
         if isinstance(obj, PDFStream) and "W" in obj and "H" in obj:
             iobjid = str(id(obj))
@@ -1243,7 +1329,9 @@ class PDFPageInterpreter:
             self.device.render_image(iobjid, obj)
             self.device.end_figure(iobjid)
 
-    def do_Do(self, xobjid_arg: PDFStackT) -> None:
+    def do_Do(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, xobjid_arg: PDFStackT
+    ) -> None:
         """Invoke named XObject"""
         xobjid = literal_name(xobjid_arg)
         try:

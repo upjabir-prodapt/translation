@@ -784,6 +784,56 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             line.add(obj0)
         yield line
 
+    def _collect_line_members(
+        self,
+        line: LTTextLine,
+        plane: "Plane[LTTextLine]",
+        boxes: "dict[LTTextLine, LTTextBox]",
+        laparams: LAParams,
+    ) -> "list[LTTextLine]":
+        """Collect line and its neighbors, pulling in already-grouped members."""
+        neighbors = line.find_neighbors(plane, laparams.line_margin)
+        members = [line]
+        for obj1 in neighbors:
+            members.append(obj1)
+            if obj1 in boxes:
+                members.extend(boxes.pop(obj1))
+        return members
+
+    def _make_textbox_for_line(self, line: LTTextLine) -> LTTextBox:
+        """Create the appropriate LTTextBox subclass for a given text line."""
+        if isinstance(line, LTTextLineHorizontal):
+            return LTTextBoxHorizontal()
+        return LTTextBoxVertical()
+
+    def _assign_members_to_box(
+        self,
+        members: "list[LTTextLine]",
+        box: LTTextBox,
+        boxes: "dict[LTTextLine, LTTextBox]",
+    ) -> None:
+        """Add unique members to a box and register them in the boxes dict."""
+        for obj in uniq(members):
+            box.add(obj)
+            boxes[obj] = box
+
+    def _yield_non_empty_boxes(
+        self,
+        lines: Iterable[LTTextLine],
+        boxes: "dict[LTTextLine, LTTextBox]",
+    ) -> "Iterator[LTTextBox]":
+        """Yield each unique non-empty box, in line order."""
+        done: set[LTTextBox] = set()
+        for line in lines:
+            if line not in boxes:
+                continue
+            box = boxes[line]
+            if box in done:
+                continue
+            done.add(box)
+            if not box.is_empty():
+                yield box
+
     def group_textlines(
         self,
         laparams: LAParams,
@@ -794,29 +844,98 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         plane.extend(lines)
         boxes: dict[LTTextLine, LTTextBox] = {}
         for line in lines:
-            neighbors = line.find_neighbors(plane, laparams.line_margin)
-            members = [line]
-            for obj1 in neighbors:
-                members.append(obj1)
-                if obj1 in boxes:
-                    members.extend(boxes.pop(obj1))
-            if isinstance(line, LTTextLineHorizontal):
-                box: LTTextBox = LTTextBoxHorizontal()
-            else:
-                box = LTTextBoxVertical()
-            for obj in uniq(members):
-                box.add(obj)
-                boxes[obj] = box
-        done = set()
-        for line in lines:
-            if line not in boxes:
+            members = self._collect_line_members(line, plane, boxes, laparams)
+            box: LTTextBox = self._make_textbox_for_line(line)
+            self._assign_members_to_box(members, box, boxes)
+        yield from self._yield_non_empty_boxes(lines, boxes)
+
+    @staticmethod
+    def _box_gap_dist(obj1: LTComponent, obj2: LTComponent) -> float:
+        """Bounding-box area minus the areas of the two objects (gap metric)."""
+        x0 = min(obj1.x0, obj2.x0)
+        y0 = min(obj1.y0, obj2.y0)
+        x1 = max(obj1.x1, obj2.x1)
+        y1 = max(obj1.y1, obj2.y1)
+        return (
+            (x1 - x0) * (y1 - y0)
+            - obj1.width * obj1.height
+            - obj2.width * obj2.height
+        )
+
+    @staticmethod
+    def _make_textbox_group(
+        obj1: "Union[LTTextBox, LTTextGroup]",
+        obj2: "Union[LTTextBox, LTTextGroup]",
+    ) -> LTTextGroup:
+        """Create the appropriate LTTextGroup subclass for a pair of objects."""
+        if isinstance(obj1, (LTTextBoxVertical, LTTextGroupTBRL)) or isinstance(
+            obj2, (LTTextBoxVertical, LTTextGroupTBRL)
+        ):
+            return LTTextGroupTBRL([obj1, obj2])
+        return LTTextGroupLRTB([obj1, obj2])
+
+    def _find_objects_between(
+        self,
+        plane: "Plane[Union[LTTextBox, LTTextGroup]]",
+        obj1: "Union[LTTextBox, LTTextGroup]",
+        obj2: "Union[LTTextBox, LTTextGroup]",
+    ) -> "set[Union[LTTextBox, LTTextGroup]]":
+        """Return any objects occupying the bounding box between obj1 and obj2."""
+        x0 = min(obj1.x0, obj2.x0)
+        y0 = min(obj1.y0, obj2.y0)
+        x1 = max(obj1.x1, obj2.x1)
+        y1 = max(obj1.y1, obj2.y1)
+        return set(plane.find((x0, y0, x1, y1))).difference((obj1, obj2))
+
+    def _build_initial_dists(
+        self,
+        boxes: Sequence[LTTextBox],
+    ) -> "list[tuple[bool, float, int, int, Union[LTTextBox, LTTextGroup], Union[LTTextBox, LTTextGroup]]]":
+        """Build the initial list of pair-wise distances for all box pairs."""
+        return [
+            (
+                False,
+                self._box_gap_dist(boxes[i], boxes[j]),
+                id(boxes[i]),
+                id(boxes[j]),
+                boxes[i],
+                boxes[j],
+            )
+            for i in range(len(boxes))
+            for j in range(i + 1, len(boxes))
+        ]
+
+    def _merge_groups_loop(
+        self,
+        plane: "Plane[Union[LTTextBox, LTTextGroup]]",
+        dists: "list[tuple[bool, float, int, int, Union[LTTextBox, LTTextGroup], Union[LTTextBox, LTTextGroup]]]",
+    ) -> None:
+        """Merge objects pairwise in distance order until all are grouped."""
+        done: set[int] = set()
+        while dists:
+            (skip_isany, d, id1, id2, obj1, obj2) = heapq.heappop(dists)
+            if id1 in done or id2 in done:
                 continue
-            box = boxes[line]
-            if box in done:
+            if not skip_isany and self._find_objects_between(plane, obj1, obj2):
+                heapq.heappush(dists, (True, d, id1, id2, obj1, obj2))
                 continue
-            done.add(box)
-            if not box.is_empty():
-                yield box
+            group = self._make_textbox_group(obj1, obj2)
+            plane.remove(obj1)
+            plane.remove(obj2)
+            done.update([id1, id2])
+            for other in plane:
+                heapq.heappush(
+                    dists,
+                    (
+                        False,
+                        self._box_gap_dist(group, other),
+                        id(group),
+                        id(other),
+                        group,
+                        other,
+                    ),
+                )
+            plane.add(group)
 
     def group_textboxes(
         self,
@@ -842,69 +961,38 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         """
         element_t = Union[LTTextBox, LTTextGroup]
         plane: Plane[element_t] = Plane(self.bbox)
-
-        def dist(obj1: LTComponent, obj2: LTComponent) -> float:
-            """Bounding-box area minus the areas of the two objects (gap metric)."""
-            x0 = min(obj1.x0, obj2.x0)
-            y0 = min(obj1.y0, obj2.y0)
-            x1 = max(obj1.x1, obj2.x1)
-            y1 = max(obj1.y1, obj2.y1)
-            return (
-                (x1 - x0) * (y1 - y0)
-                - obj1.width * obj1.height
-                - obj2.width * obj2.height
-            )
-
-        def isany(obj1: element_t, obj2: element_t) -> set[element_t]:
-            """Return any objects occupying the bounding box between obj1 and obj2."""
-            x0 = min(obj1.x0, obj2.x0)
-            y0 = min(obj1.y0, obj2.y0)
-            x1 = max(obj1.x1, obj2.x1)
-            y1 = max(obj1.y1, obj2.y1)
-            return set(plane.find((x0, y0, x1, y1))).difference((obj1, obj2))
-
-        def _make_group(obj1: element_t, obj2: element_t) -> LTTextGroup:
-            """Create the appropriate LTTextGroup subclass for a pair of objects."""
-            if isinstance(obj1, (LTTextBoxVertical, LTTextGroupTBRL)) or isinstance(
-                obj2, (LTTextBoxVertical, LTTextGroupTBRL)
-            ):
-                return LTTextGroupTBRL([obj1, obj2])
-            return LTTextGroupLRTB([obj1, obj2])
-
-        dists: list[tuple[bool, float, int, int, element_t, element_t]] = [
-            (
-                False,
-                dist(boxes[i], boxes[j]),
-                id(boxes[i]),
-                id(boxes[j]),
-                boxes[i],
-                boxes[j],
-            )
-            for i in range(len(boxes))
-            for j in range(i + 1, len(boxes))
-        ]
+        dists = self._build_initial_dists(boxes)
         heapq.heapify(dists)
-
         plane.extend(boxes)
-        done: set[int] = set()
-        while dists:
-            (skip_isany, d, id1, id2, obj1, obj2) = heapq.heappop(dists)
-            if id1 in done or id2 in done:
-                continue
-            if not skip_isany and isany(obj1, obj2):
-                heapq.heappush(dists, (True, d, id1, id2, obj1, obj2))
-                continue
-            group = _make_group(obj1, obj2)
-            plane.remove(obj1)
-            plane.remove(obj2)
-            done.update([id1, id2])
-            for other in plane:
-                heapq.heappush(
-                    dists,
-                    (False, dist(group, other), id(group), id(other), group, other),
-                )
-            plane.add(group)
+        self._merge_groups_loop(plane, dists)
         return list(cast(LTTextGroup, g) for g in plane)
+
+    @staticmethod
+    def _textbox_sort_key(box: LTTextBox) -> tuple[int, float, float]:
+        """Sort key for textboxes when boxes_flow is None."""
+        if isinstance(box, LTTextBoxVertical):
+            return (0, -box.x1, -box.y0)
+        else:
+            return (1, -box.y0, box.x0)
+
+    def _sort_textboxes_no_flow(
+        self, laparams: LAParams, textboxes: list[LTTextBox]
+    ) -> None:
+        """Analyze and sort textboxes when boxes_flow is disabled."""
+        for textbox in textboxes:
+            textbox.analyze(laparams)
+        textboxes.sort(key=self._textbox_sort_key)
+
+    def _sort_textboxes_with_flow(
+        self, laparams: LAParams, textboxes: list[LTTextBox]
+    ) -> None:
+        """Group, analyze and index-sort textboxes when boxes_flow is enabled."""
+        self.groups = self.group_textboxes(laparams, textboxes)
+        assigner = IndexAssigner()
+        for group in self.groups:
+            group.analyze(laparams)
+            assigner.run(group)
+        textboxes.sort(key=lambda box: box.index)
 
     def analyze(self, laparams: LAParams) -> None:
         # textobjs is a list of LTChar objects, i.e.
@@ -920,23 +1008,9 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             obj.analyze(laparams)
         textboxes = list(self.group_textlines(laparams, textlines))
         if laparams.boxes_flow is None:
-            for textbox in textboxes:
-                textbox.analyze(laparams)
-
-            def getkey(box: LTTextBox) -> tuple[int, float, float]:
-                if isinstance(box, LTTextBoxVertical):
-                    return (0, -box.x1, -box.y0)
-                else:
-                    return (1, -box.y0, box.x0)
-
-            textboxes.sort(key=getkey)
+            self._sort_textboxes_no_flow(laparams, textboxes)
         else:
-            self.groups = self.group_textboxes(laparams, textboxes)
-            assigner = IndexAssigner()
-            for group in self.groups:
-                group.analyze(laparams)
-                assigner.run(group)
-            textboxes.sort(key=lambda box: box.index)
+            self._sort_textboxes_with_flow(laparams, textboxes)
         self._objs = (
             cast(list[LTComponent], textboxes)
             + otherobjs

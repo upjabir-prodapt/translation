@@ -60,45 +60,63 @@ class FontMapper:
 
         self.fonts: dict[str, pymupdf.Font] = {}
         self.fontid2fontpath: dict[str, Path] = {}
-        for font_file_name in self.font_file_names:
-            if font_file_name in self.fontid2fontpath:
-                continue
-            try:
-                font_path, font_metadata = assets.get_font_and_metadata(font_file_name)
-            except MetadataNotFoundError as exc:
-                logger.warning(
-                    f"Skipping unavailable font metadata for {font_file_name}: {exc}"
-                )
-                continue
-            pymupdf_font = pymupdf.Font(fontfile=str(font_path))
-            pymupdf_font.has_glyph = functools.lru_cache(maxsize=10240, typed=True)(
-                pymupdf_font.has_glyph,
-            )
-            pymupdf_font.char_lengths = functools.lru_cache(maxsize=10240, typed=True)(
-                pymupdf_font.char_lengths,
-            )
-            self.fonts[font_file_name] = pymupdf_font
-            self.fontid2fontpath[font_file_name] = font_path
-            self.fonts[font_file_name].font_id = font_file_name
-            self.fonts[font_file_name].font_path = font_path
-            ascent = font_metadata.get("ascent")
-            if ascent is None:
-                ascent = pymupdf_font.ascender
-            descent = font_metadata.get("descent")
-            if descent is None:
-                descent = pymupdf_font.descender
-            encoding_length = font_metadata.get("encoding_length")
-            if encoding_length is None:
-                # DocTranslator glyph hex width; 2 matches most bundled CJK / ToUnicode layouts.
-                encoding_length = 2
-            self.fonts[font_file_name].ascent_fontmap = ascent
-            self.fonts[font_file_name].descent_fontmap = descent
-            self.fonts[font_file_name].encoding_length = encoding_length
+        self._load_fonts_from_file_names()
 
         if not self.fonts:
             raise RuntimeError("No usable fonts loaded from metadata/cache")
 
         loaded_font_ids = set(self.fontid2fontpath.keys())
+        self._init_font_id_lists(font_family, loaded_font_ids)
+        self._init_font_lookup_tables()
+
+        self.has_char = functools.lru_cache(maxsize=10240, typed=True)(self.has_char)
+        self.map_in_type = functools.lru_cache(maxsize=10240, typed=True)(
+            self.map_in_type
+        )
+
+    def _load_single_font(self, font_file_name: str) -> None:
+        """Load one font file into self.fonts and self.fontid2fontpath."""
+        if font_file_name in self.fontid2fontpath:
+            return
+        try:
+            font_path, font_metadata = assets.get_font_and_metadata(font_file_name)
+        except MetadataNotFoundError as exc:
+            logger.warning(
+                f"Skipping unavailable font metadata for {font_file_name}: {exc}"
+            )
+            return
+        pymupdf_font = pymupdf.Font(fontfile=str(font_path))
+        pymupdf_font.has_glyph = functools.lru_cache(maxsize=10240, typed=True)(
+            pymupdf_font.has_glyph,
+        )
+        pymupdf_font.char_lengths = functools.lru_cache(maxsize=10240, typed=True)(
+            pymupdf_font.char_lengths,
+        )
+        self.fonts[font_file_name] = pymupdf_font
+        self.fontid2fontpath[font_file_name] = font_path
+        self.fonts[font_file_name].font_id = font_file_name
+        self.fonts[font_file_name].font_path = font_path
+        ascent = font_metadata.get("ascent")
+        if ascent is None:
+            ascent = pymupdf_font.ascender
+        descent = font_metadata.get("descent")
+        if descent is None:
+            descent = pymupdf_font.descender
+        encoding_length = font_metadata.get("encoding_length")
+        if encoding_length is None:
+            # DocTranslator glyph hex width; 2 matches most bundled CJK / ToUnicode layouts.
+            encoding_length = 2
+        self.fonts[font_file_name].ascent_fontmap = ascent
+        self.fonts[font_file_name].descent_fontmap = descent
+        self.fonts[font_file_name].encoding_length = encoding_length
+
+    def _load_fonts_from_file_names(self) -> None:
+        """Iterate self.font_file_names and load each font."""
+        for font_file_name in self.font_file_names:
+            self._load_single_font(font_file_name)
+
+    def _init_font_id_lists(self, font_family, loaded_font_ids: set) -> None:
+        """Populate normal/script/fallback/base font ID lists from *font_family*."""
         self.normal_font_ids = [
             font_id for font_id in font_family.normal if font_id in loaded_font_ids
         ]
@@ -120,12 +138,13 @@ class FontMapper:
             # Use first loaded font as base when configured base font is unavailable.
             self.base_font_ids = [next(iter(loaded_font_ids))]
 
+    def _init_font_lookup_tables(self) -> None:
+        """Build fontid2fontpath 'base' alias and all convenience font lists."""
         self.fontid2fontpath["base"] = self.fontid2fontpath[self.base_font_ids[0]]
 
         self.fontid2font: dict[str, pymupdf.Font] = {
             f.font_id: f for f in self.fonts.values()
         }
-
         self.fontid2font["base"] = self.fontid2font[self.base_font_ids[0]]
 
         self.normal_fonts: list[pymupdf.Font] = [
@@ -146,11 +165,6 @@ class FontMapper:
             "fallback": self.fallback_fonts,
             "base": [self.base_font],
         }
-
-        self.has_char = functools.lru_cache(maxsize=10240, typed=True)(self.has_char)
-        self.map_in_type = functools.lru_cache(maxsize=10240, typed=True)(
-            self.map_in_type
-        )
 
     def has_char(self, char_unicode: str):
         if len(char_unicode) != 1:
@@ -187,26 +201,31 @@ class FontMapper:
 
         return None
 
-    def map(self, original_font: PdfFont, char_unicode: str):
-        current_char = ord(char_unicode)
+    def _extract_font_attributes(self, original_font: PdfFont, char_unicode: str):
+        """Return (bold, italic, monospaced, serif) from *original_font*, or None on error."""
         if isinstance(original_font, pymupdf.Font):
-            bold = original_font.is_bold
-            italic = original_font.is_italic
-            monospaced = original_font.is_monospaced
-            serif = original_font.is_serif
-        elif isinstance(original_font, PdfFont):
-            bold = original_font.bold
-            italic = original_font.italic
-            monospaced = original_font.monospace
-            serif = original_font.serif
-        else:
-            logger.error(
-                f"Unknown font type: {type(original_font)}. "
-                f"Original font: {original_font}. "
-                f"Char unicode: {char_unicode}. ",
+            return (
+                original_font.is_bold,
+                original_font.is_italic,
+                original_font.is_monospaced,
+                original_font.is_serif,
             )
-            return None
+        if isinstance(original_font, PdfFont):
+            return (
+                original_font.bold,
+                original_font.italic,
+                original_font.monospace,
+                original_font.serif,
+            )
+        logger.error(
+            f"Unknown font type: {type(original_font)}. "
+            f"Original font: {original_font}. "
+            f"Char unicode: {char_unicode}. ",
+        )
+        return None
 
+    def _apply_primary_family_override(self, bold, italic, monospaced, serif):
+        """Adjust (bold, italic, monospaced, serif) for the configured primary font family."""
         if self.primary_font_family == PrimaryFontFamily.SERIF:
             serif = True
         elif self.primary_font_family == PrimaryFontFamily.SANS_SERIF:
@@ -214,6 +233,14 @@ class FontMapper:
         elif self.primary_font_family == PrimaryFontFamily.SCRIPT:
             serif = False
             italic = True
+        return bold, italic, monospaced, serif
+
+    def map(self, original_font: PdfFont, char_unicode: str):
+        attrs = self._extract_font_attributes(original_font, char_unicode)
+        if attrs is None:
+            return None
+        bold, italic, monospaced, serif = self._apply_primary_family_override(*attrs)
+        current_char = ord(char_unicode)
 
         script_font_map_result = self.map_in_type(
             bold, italic, monospaced, serif, char_unicode, "script"
@@ -248,18 +275,37 @@ class FontMapper:
         )
         return None
 
+    def _collect_font_ids_from_page(self, page, result: set) -> None:
+        """Add all font IDs referenced on *page* into *result*."""
+        for char in page.pdf_character:
+            if char.pdf_style and char.pdf_style.font_id:
+                result.add(char.pdf_style.font_id)
+        for para in page.pdf_paragraph:
+            for comp in para.pdf_paragraph_composition:
+                if char := comp.pdf_character:
+                    if char.pdf_style and char.pdf_style.font_id:
+                        result.add(char.pdf_style.font_id)
+
     def get_used_font_ids(self, il: il_version_1.Document) -> set[str]:
         result = set()
         for page in il.page:
-            for char in page.pdf_character:
-                if char.pdf_style and char.pdf_style.font_id:
-                    result.add(char.pdf_style.font_id)
-            for para in page.pdf_paragraph:
-                for comp in para.pdf_paragraph_composition:
-                    if char := comp.pdf_character:
-                        if char.pdf_style and char.pdf_style.font_id:
-                            result.add(char.pdf_style.font_id)
+            self._collect_font_ids_from_page(page, result)
         return result
+
+    def _insert_fonts_into_dict_xref(
+        self,
+        doc_zh: pymupdf.Document,
+        xref: int,
+        target_key_prefix: str,
+        font_list: list,
+        font_id: dict,
+    ) -> None:
+        """Write missing font entries into an xref that is known to be a dict."""
+        for font in font_list:
+            target_key = f"{target_key_prefix}{font[0]}"
+            font_exist = doc_zh.xref_get_key(xref, target_key)
+            if font_exist[0] == "null":
+                doc_zh.xref_set_key(xref, target_key, f"{font_id[font[0]]} 0 R")
 
     def _register_font_in_xref(
         self,
@@ -281,11 +327,9 @@ class FontMapper:
                     font_res = ("dict", doc_zh.xref_object(xref))
                     target_key_prefix = ""
                 if font_res[0] == "dict":
-                    for font in font_list:
-                        target_key = f"{target_key_prefix}{font[0]}"
-                        font_exist = doc_zh.xref_get_key(xref, target_key)
-                        if font_exist[0] == "null":
-                            doc_zh.xref_set_key(xref, target_key, f"{font_id[font[0]]} 0 R")
+                    self._insert_fonts_into_dict_xref(
+                        doc_zh, xref, target_key_prefix, font_list, font_id
+                    )
             except Exception:
                 pass
 

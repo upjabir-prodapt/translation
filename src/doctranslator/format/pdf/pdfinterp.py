@@ -56,6 +56,28 @@ class PDFContentParserEx(PDFContentParser):
     def __init__(self, streams: Sequence[object]) -> None:
         super().__init__(streams)
 
+    @staticmethod
+    def _resolve_inline_eos(d: dict) -> bytes:
+        """Return the end-of-stream marker for an inline image dict."""
+        filter_ = d.get("F", None)
+        if not filter_:
+            return b"EI"
+        if isinstance(filter_, PSLiteral):
+            filter_ = [filter_]
+        if filter_[0] in LITERALS_ASCII85_DECODE:
+            return b"~>"
+        return b"EI"
+
+    def _push_inline_image_objects(self, pos: int, d: dict, eos: bytes) -> None:
+        """Fetch inline image data and push the resulting stream objects."""
+        (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
+        if eos != b"EI":  # it may be necessary for decoding
+            data += eos
+        obj = PDFStream(d, data)
+        self.push((pos, obj))
+        if eos == b"EI":  # otherwise it is still in the stream
+            self.push((pos, self.KEYWORD_EI))
+
     def _handle_keyword_id(self, pos: int) -> None:
         """Handle the ID keyword for inline images."""
         try:
@@ -64,20 +86,8 @@ class PDFContentParserEx(PDFContentParser):
                 error_msg = f"Invalid dictionary construct: {objs!r}"
                 raise PSTypeError(error_msg)
             d = {literal_name(k): resolve1(v) for (k, v) in choplist(2, objs)}
-            eos = b"EI"
-            filter_ = d.get("F", None)
-            if filter_:
-                if isinstance(filter_, PSLiteral):
-                    filter_ = [filter_]
-                if filter_[0] in LITERALS_ASCII85_DECODE:
-                    eos = b"~>"
-            (pos, data) = self.get_inline_data(pos + len(b"ID "), target=eos)
-            if eos != b"EI":  # it may be necessary for decoding
-                data += eos
-            obj = PDFStream(d, data)
-            self.push((pos, obj))
-            if eos == b"EI":  # otherwise it is still in the stream
-                self.push((pos, self.KEYWORD_EI))
+            eos = self._resolve_inline_eos(d)
+            self._push_inline_image_objects(pos, d, eos)
         except PSTypeError:
             if settings.STRICT:
                 raise
@@ -157,6 +167,22 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             if colorspace is not None:
                 self.csmap[csid] = colorspace
 
+    def _load_xobject_resources(self, v: object) -> None:
+        """Populate xobjmap from an XObject resource dict."""
+        for xobjid, xobjstrm in dict_value(v).items():
+            self.xobjmap[xobjid] = xobjstrm
+
+    def _dispatch_resource_entry(self, k: str, v: object) -> None:
+        """Load a single resource dict entry into the appropriate map."""
+        if k == "Font":
+            self._load_font_resources(v)
+        elif k == "ColorSpace":
+            self._load_colorspace_resources(v)
+        elif k == "ProcSet":
+            self.rsrcmgr.get_procset(list_value(v))
+        elif k == "XObject":
+            self._load_xobject_resources(v)
+
     def init_resources(self, resources: dict[object, object]) -> None:
         # 重载设置 fontid 和 descent
         """Prepare the fonts and XObjects listed in the Resource attribute."""
@@ -169,15 +195,7 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             return
 
         for k, v in dict_value(resources).items():
-            if k == "Font":
-                self._load_font_resources(v)
-            elif k == "ColorSpace":
-                self._load_colorspace_resources(v)
-            elif k == "ProcSet":
-                self.rsrcmgr.get_procset(list_value(v))
-            elif k == "XObject":
-                for xobjid, xobjstrm in dict_value(v).items():
-                    self.xobjmap[xobjid] = xobjstrm
+            self._dispatch_resource_entry(k, v)
 
     def do_CS(self, name: PDFStackT) -> None:
         """Set color space for stroking operations
@@ -191,7 +209,9 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             if settings.STRICT:
                 raise PDFInterpreterError(f"Undefined ColorSpace: {name!r}") from None
 
-    def do_cs_op(self, name: PDFStackT) -> None:
+    def do_cs(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self, name: PDFStackT
+    ) -> None:
         """Set color space for nonstroking operations"""
         try:
             self.il_creater.on_non_stroking_color_space(literal_name(name))
@@ -200,35 +220,29 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             if settings.STRICT:
                 raise PDFInterpreterError(f"Undefined ColorSpace: {name!r}") from None
 
-    # Keep the original name as an alias so existing callers continue to work
-    do_cs = do_cs_op
-
     ############################################################
     # 重载返回调用参数（SCN）
     def do_SCN(self) -> None:
         """Set color for stroking operations."""
-        if not self.scs:
-            if settings.STRICT:
-                raise PDFInterpreterError("No colorspace specified!")
+        if not self.scs and settings.STRICT:
+            raise PDFInterpreterError("No colorspace specified!")
         n = len(self.argstack)
         args = self.pop(n)
         self.il_creater.on_passthrough_per_char("SCN", args)
         self.graphicstate.scolor = cast(Color, args)
         return args
 
-    def do_scn_op(self) -> None:
+    def do_scn(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Set color for nonstroking operations"""
-        if not self.ncs:
-            if settings.STRICT:
-                raise PDFInterpreterError("No colorspace specified!")
+        if not self.ncs and settings.STRICT:
+            raise PDFInterpreterError("No colorspace specified!")
         n = len(self.argstack)
         args = self.pop(n)
         self.il_creater.on_passthrough_per_char("scn", args)
         self.graphicstate.ncolor = cast(Color, args)
         return args
-
-    # Keep the original name as an alias so existing callers continue to work
-    do_scn = do_scn_op
 
     def do_SC(self) -> None:
         """Set color for stroking operations"""
@@ -237,15 +251,14 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         self.il_creater.on_passthrough_per_char("SC", args)
         return args
 
-    def do_sc_op(self) -> None:
+    def do_sc(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Set color for nonstroking operations"""
-        args = self.do_scn_op()
+        args = self.do_scn()
         self.il_creater.remove_latest_passthrough_per_char_instruction()
         self.il_creater.on_passthrough_per_char("sc", args)
         return args
-
-    # Keep the original name as an alias so existing callers continue to work
-    do_sc = do_sc_op
 
     @staticmethod
     def _compute_ctm_inverse(ctm) -> tuple | None:
@@ -394,35 +407,30 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
 
         This method may be called recursively.
         """
-        # log.debug(
-        #     "render_contents: resources=%r, streams=%r, ctm=%r",
-        #     resources,
-        #     streams,
-        #     ctm,
-        # )
         self.init_resources(resources)
         self.init_state(ctm)
         return self.execute(list_value(streams))
 
-    def do_q(self) -> None:
+    def do_q(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Save graphics state"""
         self.gstack.append(self.get_current_state())
         self.il_creater.push_passthrough_per_char_instruction()
 
-    def do_Q_op(self) -> None:
+    def do_Q(  # NOSONAR - PDF operator dispatch requires this exact case-sensitive name
+        self,
+    ) -> None:
         """Restore graphics state"""
         if self.gstack:
             self.set_current_state(self.gstack.pop())
         self.il_creater.pop_passthrough_per_char_instruction()
 
-    # Keep the original name as an alias so existing callers continue to work
-    do_Q = do_Q_op
-
     def do_TJ(self, seq: PDFStackT) -> None:
         """Show text, allowing individual glyph positioning"""
+        if self.textstate.font is None and settings.STRICT:
+            raise PDFInterpreterError("No font specified!")
         if self.textstate.font is None:
-            if settings.STRICT:
-                raise PDFInterpreterError("No font specified!")
             return
         if isinstance(seq, PSLiteral):
             return
@@ -485,9 +493,9 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         """Dispatch a single PDF keyword; return (should_continue, ops_fragment)."""
         act_name = name.replace("*", "_a").replace('"', "_w").replace("'", "_q")
         method = f"do_{act_name}"
+        if not hasattr(self, method) and settings.STRICT:
+            raise PDFInterpreterError(f"Unknown operator: {name!r}")
         if not hasattr(self, method):
-            if settings.STRICT:
-                raise PDFInterpreterError(f"Unknown operator: {name!r}")
             return False, ""
 
         func = getattr(self, method)
@@ -510,6 +518,24 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
 
         return should_continue, ops_fragment
 
+    def _execute_stream(self, parser: "PDFContentParserEx") -> str:
+        """Process all objects from a single parsed content stream; return ops fragment."""
+        ops = ""
+        while True:
+            try:
+                (_, obj) = parser.nextobject()
+            except PSEOF:
+                break
+            if isinstance(obj, PSKeyword):
+                name = keyword_name(obj)
+                should_continue, ops_fragment = self._dispatch_keyword(name)
+                if should_continue:
+                    continue
+                ops += ops_fragment
+            else:
+                self.push(obj)
+        return ops
+
     # Run PostScript commands
     # The Do_xxx method is the method for executing corresponding postscript instructions
     def execute(self, streams: Sequence[object]) -> str:
@@ -522,17 +548,5 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             except PSEOF:
                 # empty page
                 return ops
-            while True:
-                try:
-                    (_, obj) = parser.nextobject()
-                except PSEOF:
-                    break
-                if isinstance(obj, PSKeyword):
-                    name = keyword_name(obj)
-                    should_continue, ops_fragment = self._dispatch_keyword(name)
-                    if should_continue:
-                        continue
-                    ops += ops_fragment
-                else:
-                    self.push(obj)
+            ops += self._execute_stream(parser)
         return ops

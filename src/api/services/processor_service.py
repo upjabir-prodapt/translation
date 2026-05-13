@@ -24,6 +24,7 @@ from src.config.logging_config import logger
 from src.doctranslator import async_translate
 from src.doctranslator.docvision.doclayout import OnnxModel
 from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
+from src.doctranslator.format.pdf.translation_config import DlpConfig
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.format.pdf.translation_config import TranslationCoverPageMetadata
 from src.doctranslator.format.pdf.translation_config import WatermarkOutputMode
@@ -617,10 +618,12 @@ class JobProcessor:
             no_mono=base_config.no_mono,
             add_cover_page=base_config.add_cover_page,
             watermark_output_mode=watermark_mode,
-            enable_dlp=bool(config.get("enable_dlp", False)),
-            dlp_job_id=str(config.get("job_id", "")).strip() or None,
-            dlp_source_language=str(config.get("lang_in", "")).strip() or None,
-            dlp_post_translation=bool(config.get("dlp_post_translation", False)),
+            dlp_config=DlpConfig(
+                enable_dlp=bool(config.get("enable_dlp", False)),
+                dlp_job_id=str(config.get("job_id", "")).strip() or None,
+                dlp_source_language=str(config.get("lang_in", "")).strip() or None,
+                dlp_post_translation=bool(config.get("dlp_post_translation", False)),
+            ),
         )
 
     async def _handle_translation_event(

@@ -6,32 +6,41 @@ from src.doctranslator.format.pdf.document_il import il_version_1
 logger = logging.getLogger(__name__)
 
 
+def _collect_chars_from_composition(
+    composition: il_version_1.PdfParagraphComposition,
+    paragraph: il_version_1.PdfParagraph,
+) -> list:
+    """Return the character list contributed by *composition*."""
+    if composition.pdf_line:
+        return list(composition.pdf_line.pdf_character)
+    if composition.pdf_same_style_characters:
+        return list(composition.pdf_same_style_characters.pdf_character)
+    if composition.pdf_same_style_unicode_characters:
+        return []
+    if composition.pdf_formula:
+        return list(composition.pdf_formula.pdf_character)
+    if composition.pdf_character:
+        return [composition.pdf_character]
+    logger.error(
+        f"Unknown composition type. "
+        f"Composition: {composition}. "
+        f"Paragraph: {paragraph}. ",
+    )
+    return []
+
+
+def _count_cid_chars(chars: list) -> int:
+    """Return the number of characters whose unicode value matches the CID pattern."""
+    cid_pattern = re.compile(r"^\(cid:\d+\)$")
+    return sum(1 for char in chars if cid_pattern.match(char.char_unicode))
+
+
 def is_cid_paragraph(paragraph: il_version_1.PdfParagraph):
     chars: list[il_version_1.PdfCharacter] = []
     for composition in paragraph.pdf_paragraph_composition:
-        if composition.pdf_line:
-            chars.extend(composition.pdf_line.pdf_character)
-        elif composition.pdf_same_style_characters:
-            chars.extend(composition.pdf_same_style_characters.pdf_character)
-        elif composition.pdf_same_style_unicode_characters:
-            pass
-        elif composition.pdf_formula:
-            chars.extend(composition.pdf_formula.pdf_character)
-        elif composition.pdf_character:
-            chars.append(composition.pdf_character)
-        else:
-            logger.error(
-                f"Unknown composition type. "
-                f"Composition: {composition}. "
-                f"Paragraph: {paragraph}. ",
-            )
-            continue
+        chars.extend(_collect_chars_from_composition(composition, paragraph))
 
-    cid_count = 0
-    for char in chars:
-        if re.match(r"^\(cid:\d+\)$", char.char_unicode):
-            cid_count += 1
-
+    cid_count = _count_cid_chars(chars)
     return cid_count > len(chars) * 0.8
 
 

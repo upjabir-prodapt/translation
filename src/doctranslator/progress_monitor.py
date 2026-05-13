@@ -328,9 +328,14 @@ class TranslationStage:
             )
         elif short_completion:
             logger.warning(
-                f"Pipeline stage finished: stage={self.display_name} part={part_i}/{part_n} "
-                f"outcome=short_advance duration_s={elapsed_s:.3f} units={self.total} "
-                "(progress backfilled to 100% for monitor)",
+                "Pipeline stage finished: stage=%s part=%s/%s "
+                "outcome=short_advance duration_s=%.3f units=%s "
+                "(progress backfilled to 100%% for monitor)",
+                self.display_name,
+                part_i,
+                part_n,
+                elapsed_s,
+                self.total,
             )
         else:
             logger.info(

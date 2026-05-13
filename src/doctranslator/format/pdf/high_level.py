@@ -107,6 +107,8 @@ resfont_map = {
     "ko": "korea-s",
 }
 
+AUTO_FIX_FAILED_MSG = "auto fix failed, please check the pdf file"
+
 
 def safe_save(doc, *args, **kwargs):
     try:
@@ -484,6 +486,17 @@ def _apply_dlp_if_enabled(
     )
 
 
+def _handle_async_translate_interrupt(
+    exc: BaseException, cancel_event: threading.Event
+) -> None:
+    """Set the cancellation event and log if the exception is a KeyboardInterrupt."""
+    if isinstance(exc, KeyboardInterrupt):
+        logger.info(
+            "Translation cancelled by user through keyboard interrupt",
+        )
+    cancel_event.set()
+
+
 def _unmask_before_pdf_if_enabled(
     docs: il_version_1.Document, translation_config: TranslationConfig
 ) -> None:
@@ -570,13 +583,8 @@ async def async_translate(translation_config: TranslationConfig):
                 yield event
                 if event["type"] == "error":
                     break
-        except CancelledError:
-            cancel_event.set()
-        except KeyboardInterrupt:
-            logger.info(
-                "Translation cancelled by user through keyboard interrupt",
-            )
-            cancel_event.set()
+        except (CancelledError, KeyboardInterrupt) as exc:
+            _handle_async_translate_interrupt(exc, cancel_event)
     if cancel_event.is_set():
         future.cancel()
     logger.info("Waiting for translation to finish...")
@@ -657,6 +665,18 @@ def fix_null_page_content(doc: Document) -> list[int]:
     return invalid_page
 
 
+def _fix_single_xref_entry(doc: Document, i: int) -> None:
+    """Apply null-xref fixes for a single xref index."""
+    obj = doc.xref_object(i)
+    if obj == "null":
+        doc.update_object(i, "[]")
+    elif obj and ("/ASCII85Decode" in obj or "/LZWDecode" in obj):  # make pdfminer happy
+        data = doc.xref_stream(i)
+        doc.update_stream(i, data)
+    elif obj and "/Annots" in obj:
+        doc.xref_set_key(i, "Annots", "null")
+
+
 def fix_null_xref(doc: Document) -> None:
     """Fix null xref in PDF file by replacing them with empty arrays.
 
@@ -665,16 +685,7 @@ def fix_null_xref(doc: Document) -> None:
     """
     for i in range(1, doc.xref_length()):
         try:
-            obj = doc.xref_object(i)
-            if obj == "null":
-                doc.update_object(i, "[]")
-            elif obj and (
-                "/ASCII85Decode" in obj or "/LZWDecode" in obj
-            ):  # make pdfminer happy
-                data = doc.xref_stream(i)
-                doc.update_stream(i, data)
-            elif obj and "/Annots" in obj:
-                doc.xref_set_key(i, "Annots", "null")
+            _fix_single_xref_entry(doc, i)
         except Exception:
             doc.update_object(i, "[]")
 
@@ -739,10 +750,6 @@ def _build_part_config(
 
     part_config.working_dir = translation_config.get_part_working_dir(i)
     part_config.output_dir = translation_config.get_part_output_dir(i)
-
-    assert id(part_config.shared_context_cross_split_part) == id(
-        translation_config.shared_context_cross_split_part
-    ), "shared_context_cross_split_part must be the same"
 
     part_temp_input_path = part_config.get_working_file_path(f"input.part{i}.pdf")
     part_config.input_file = part_temp_input_path
@@ -908,6 +915,67 @@ def _populate_result_statistics(
             pass
 
 
+def _check_input_metadata(original_pdf_path) -> None:
+    """Validate that the input PDF was not already translated by DocTranslator."""
+    try:
+        check_metadata(Document(original_pdf_path))
+    except InputFileGeneratedByDocTranslatorError as e:
+        logger.error(
+            f"input file {original_pdf_path} was already translated "
+            "(DocTranslator or legacy BabelDOC); cannot translate again."
+        )
+        raise e
+    except Exception as e:
+        logger.warning(f"Error in check metadata, continue: {e}")
+
+
+def _try_migrate_toc(translation_config: TranslationConfig, result: TranslateResult) -> None:
+    """Attempt TOC migration; log errors without raising."""
+    try:
+        migrate_toc(translation_config, result)
+    except Exception as e:
+        logger.error(
+            f"Failed to migrate TOC from {translation_config.input_file}: {e}"
+        )
+
+
+def _finalize_translate_result(
+    pm: ProgressMonitor,
+    translation_config: TranslationConfig,
+    original_pdf_path,
+) -> TranslateResult:
+    """Run the full translation pipeline and populate result metadata."""
+    start_time = time.time()
+    peak_memory_usage = 0
+    with MemoryMonitor() as memory_monitor:
+        result = _dispatch_translation(pm, translation_config, original_pdf_path)
+        peak_memory_usage = memory_monitor.peak_memory_usage
+
+    finish_time = time.time()
+    result.total_seconds = finish_time - start_time
+    logger.info(
+        f"finish translate: {original_pdf_path}, cost: {finish_time - start_time} s"
+    )
+
+    _populate_result_statistics(result, translation_config)
+    result.original_pdf_path = translation_config.input_file
+    result.peak_memory_usage = peak_memory_usage
+
+    fix_cmap(result, translation_config)
+    add_metadata(result, translation_config)
+    _try_migrate_toc(translation_config, result)
+    pm.translate_done(result)
+    return result
+
+
+def _log_translate_error(e: Exception, translation_config: TranslationConfig) -> None:
+    """Log a translation error at the appropriate level."""
+    if translation_config.debug:
+        logger.exception("translate error:")
+    else:
+        logger.error(f"translate error: {e}")
+
+
 def do_translate(
     pm: ProgressMonitor, translation_config: TranslationConfig
 ) -> TranslateResult:
@@ -915,49 +983,11 @@ def do_translate(
         translation_config.progress_monitor = pm
         original_pdf_path = translation_config.input_file
         logger.info(f"start to translate: {original_pdf_path}")
-        try:
-            check_metadata(Document(original_pdf_path))
-        except InputFileGeneratedByDocTranslatorError as e:
-            logger.error(
-                f"input file {original_pdf_path} was already translated "
-                "(DocTranslator or legacy BabelDOC); cannot translate again."
-            )
-            raise e
-        except Exception as e:
-            logger.warning(f"Error in check metadata, continue: {e}")
-
-        start_time = time.time()
-        peak_memory_usage = 0
-        with MemoryMonitor() as memory_monitor:
-            result = _dispatch_translation(pm, translation_config, original_pdf_path)
-            peak_memory_usage = memory_monitor.peak_memory_usage
-
-        finish_time = time.time()
-        result.total_seconds = finish_time - start_time
-        logger.info(
-            f"finish translate: {original_pdf_path}, cost: {finish_time - start_time} s"
-        )
-
-        _populate_result_statistics(result, translation_config)
-        result.original_pdf_path = translation_config.input_file
-        result.peak_memory_usage = peak_memory_usage
-
-        fix_cmap(result, translation_config)
-        add_metadata(result, translation_config)
-        try:
-            migrate_toc(translation_config, result)
-        except Exception as e:
-            logger.error(
-                f"Failed to migrate TOC from {translation_config.input_file}: {e}"
-            )
-        pm.translate_done(result)
-        return result
+        _check_input_metadata(original_pdf_path)
+        return _finalize_translate_result(pm, translation_config, original_pdf_path)
 
     except Exception as e:
-        if translation_config.debug:
-            logger.exception("translate error:")
-        else:
-            logger.error(f"translate error: {e}")
+        _log_translate_error(e, translation_config)
         pm.disable = False
         pm.translate_error(e)
         raise
@@ -982,7 +1012,7 @@ def migrate_toc(
         fix_filter(old_doc)
         fix_null_xref(old_doc)
     except Exception:
-        logger.exception("auto fix failed, please check the pdf file")
+        logger.exception(AUTO_FIX_FAILED_MSG)
 
     toc_data = old_doc.get_toc()
 
@@ -1159,7 +1189,7 @@ def _save_debug_decompressed_pdf(
         fix_filter(doc_input)
         fix_null_xref(doc_input)
     except Exception:
-        logger.exception("auto fix failed, please check the pdf file")
+        logger.exception(AUTO_FIX_FAILED_MSG)
     safe_save(doc_input, output_path, expand=True, pretty=True)
 
 
@@ -1178,7 +1208,7 @@ def _prepare_working_pdf(
         fix_filter(doc_pdf2zh)
         fix_null_xref(doc_pdf2zh)
     except Exception:
-        logger.exception("auto fix failed, please check the pdf file")
+        logger.exception(AUTO_FIX_FAILED_MSG)
     mediabox_data = fix_media_box(doc_pdf2zh)
     safe_save(doc_pdf2zh, temp_pdf_path)
     return doc_pdf2zh, temp_pdf_path, mediabox_data
@@ -1440,7 +1470,7 @@ def generate_first_page_with_watermark(
     translation_config: TranslationConfig,
     doc_il: il_version_1.Document,
     mediabox_data: dict[int, Any] | None = None,
-) -> (io.BytesIO, io.BytesIO):
+) -> tuple[io.BytesIO, io.BytesIO]:
     first_page_doc = Document()
     first_page_doc.insert_pdf(mupdf, from_page=0, to_page=0)
 

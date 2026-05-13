@@ -702,6 +702,15 @@ class CFFFont:
         self.code2gid = {}
         self.gid2code = {}
         self.fp.seek(cast(int, encoding_pos))
+        self._parse_encodings()
+        # Charsets
+        self.name2gid = {}
+        self.gid2name = {}
+        self.fp.seek(cast(int, charset_pos))
+        self._parse_charsets()
+
+    def _parse_encodings(self) -> None:
+        """Parse CFF encoding table and populate code2gid/gid2code maps."""
         encoding_format = self.fp.read(1)
         if encoding_format == b"\x00":
             # Format 0
@@ -721,10 +730,9 @@ class CFFFont:
                     code += 1
         else:
             raise PDFValueError("unsupported encoding format: %r" % encoding_format)
-        # Charsets
-        self.name2gid = {}
-        self.gid2name = {}
-        self.fp.seek(cast(int, charset_pos))
+
+    def _parse_charsets(self) -> None:
+        """Parse CFF charset table and populate name2gid/gid2name maps."""
         charset_format = self.fp.read(1)
         if charset_format == b"\x00":
             # Format 0

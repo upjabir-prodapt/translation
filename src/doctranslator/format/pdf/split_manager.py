@@ -168,6 +168,23 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
     # SplitPoint construction
     # ------------------------------------------------------------------
 
+    def _section_end_page(
+        self, i: int, section_starts: list[int], total_pages: int
+    ) -> int:
+        """Return the last page (inclusive) of section i."""
+        if i + 1 < len(section_starts):
+            return section_starts[i + 1] - 1
+        return total_pages - 1
+
+    def _section_actual_start_and_overlap(
+        self, i: int, section_start: int
+    ) -> tuple[int, int]:
+        """Return (actual_start, overlap) for a section, applying overlap only after the first."""
+        if i == 0:
+            return section_start, 0
+        actual_start = max(0, section_start - self.overlap_pages)
+        return actual_start, section_start - actual_start
+
     def _build_split_points(
         self,
         section_starts: list[int],
@@ -177,22 +194,10 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
         split_points: list[SplitPoint] = []
 
         for i, section_start in enumerate(section_starts):
-            # Section ends one page before the next section starts (or at doc end)
-            section_end = (
-                section_starts[i + 1] - 1
-                if i + 1 < len(section_starts)
-                else total_pages - 1
+            section_end = self._section_end_page(i, section_starts, total_pages)
+            actual_start, overlap = self._section_actual_start_and_overlap(
+                i, section_start
             )
-
-            if i == 0:
-                # First chunk: no overlap — the document beginning is its own context
-                actual_start = section_start
-                overlap = 0
-            else:
-                # Subsequent chunks: extend backwards for context
-                actual_start = max(0, section_start - self.overlap_pages)
-                overlap = section_start - actual_start
-
             split_points.append(
                 SplitPoint(
                     start_page=actual_start,
