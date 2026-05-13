@@ -380,8 +380,40 @@ class CMapParser(PSStackParser[PSKeyword]):
                     x = prefix + struct.pack(">L", base + i)[-vlen:]
                     self.cmap.add_cid2unichr(start + i, x)
 
+    def _handle_def(self) -> None:
+        """Process def keyword: set a CMap attribute from the top two stack items."""
+        try:
+            ((_, k), (_, v)) = self.pop(2)
+            self.cmap.set_attr(literal_name(k), v)
+        except PSSyntaxError:
+            pass
+
+    def _handle_usecmap(self) -> None:
+        """Process usecmap keyword: inherit a named CMap into the current one."""
+        try:
+            ((_, cmapname),) = self.pop(1)
+            self.cmap.use_cmap(CMapDB.get_cmap(literal_name(cmapname)))
+        except PSSyntaxError:
+            pass
+        except CMapDB.CMapNotFound:
+            pass
+
+    def _handle_endcidchar(self) -> None:
+        """Process endcidchar keyword: map individual CIDs to unicode values."""
+        objs = [obj for (__, obj) in self.popall()]
+        for cid, code in choplist(2, objs):
+            if isinstance(code, bytes) and isinstance(cid, int):
+                self.cmap.add_cid2unichr(cid, code)
+
+    def _handle_endbfchar(self) -> None:
+        """Process endbfchar keyword: map individual byte sequences to unicode values."""
+        objs = [obj for (__, obj) in self.popall()]
+        for cid, code in choplist(2, objs):
+            if isinstance(cid, bytes) and isinstance(code, bytes):
+                self.cmap.add_cid2unichr(nunpack(cid), code)
+
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
-        """ToUnicode CMaps
+        """Process one ToUnicode CMap keyword.
 
         See Section 5.9.2 - ToUnicode CMaps of the PDF Reference.
         """
@@ -390,7 +422,7 @@ class CMapParser(PSStackParser[PSKeyword]):
             self.popall()
             return
 
-        elif token is self.KEYWORD_ENDCMAP:
+        if token is self.KEYWORD_ENDCMAP:
             self._in_cmap = False
             return
 
@@ -398,24 +430,10 @@ class CMapParser(PSStackParser[PSKeyword]):
             return
 
         if token is self.KEYWORD_DEF:
-            try:
-                ((_, k), (_, v)) = self.pop(2)
-                self.cmap.set_attr(literal_name(k), v)
-            except PSSyntaxError:
-                pass
-            return
-
-        if token is self.KEYWORD_USECMAP:
-            try:
-                ((_, cmapname),) = self.pop(1)
-                self.cmap.use_cmap(CMapDB.get_cmap(literal_name(cmapname)))
-            except PSSyntaxError:
-                pass
-            except CMapDB.CMapNotFound:
-                pass
-            return
-
-        if token in (
+            self._handle_def()
+        elif token is self.KEYWORD_USECMAP:
+            self._handle_usecmap()
+        elif token in (
             self.KEYWORD_BEGINCODESPACERANGE,
             self.KEYWORD_ENDCODESPACERANGE,
             self.KEYWORD_BEGINCIDRANGE,
@@ -426,31 +444,17 @@ class CMapParser(PSStackParser[PSKeyword]):
             self.KEYWORD_ENDNOTDEFRANGE,
         ):
             self.popall()
-            return
-
-        if token is self.KEYWORD_ENDCIDRANGE:
+        elif token is self.KEYWORD_ENDCIDRANGE:
             self._handle_endcidrange()
-            return
-
-        if token is self.KEYWORD_ENDCIDCHAR:
-            objs = [obj for (__, obj) in self.popall()]
-            for cid, code in choplist(2, objs):
-                if isinstance(code, bytes) and isinstance(cid, int):
-                    self.cmap.add_cid2unichr(cid, code)
-            return
-
-        if token is self.KEYWORD_ENDBFRANGE:
+        elif token is self.KEYWORD_ENDCIDCHAR:
+            self._handle_endcidchar()
+        elif token is self.KEYWORD_ENDBFRANGE:
             self._handle_endbfrange()
-            return
+        elif token is self.KEYWORD_ENDBFCHAR:
+            self._handle_endbfchar()
+        else:
+            self.push((pos, token))
 
-        if token is self.KEYWORD_ENDBFCHAR:
-            objs = [obj for (__, obj) in self.popall()]
-            for cid, code in choplist(2, objs):
-                if isinstance(cid, bytes) and isinstance(code, bytes):
-                    self.cmap.add_cid2unichr(nunpack(cid), code)
-            return
-
-        self.push((pos, token))
 
     def _warn_once(self, msg: str) -> None:
         """Warn once for each unique message"""

@@ -832,6 +832,69 @@ class ILTranslatorLLMOnly:
                 self.ok_count += 1
         return should_fallback
 
+    def _parse_translation_results(self, llm_output: str, n_inputs: int) -> dict:
+        """Parse and validate LLM JSON output into a {id: output} dict."""
+        cleaned = self._clean_json_output(llm_output.strip())
+        parsed = json.loads(cleaned)
+        parsed = self._unwrap_llm_output(parsed, n_inputs)
+        results = {}
+        for item in parsed:
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid translation item type: {type(item).__name__}")
+            if "id" not in item:
+                raise ValueError("Translation item missing id field")
+            results[item["id"]] = item.get("output", item.get("input"))
+        if len(results) != n_inputs:
+            raise ValueError(
+                f"Translation results length mismatch. Expected: {n_inputs}, Got: {len(results)}"
+            )
+        return results
+
+    def _handle_translate_paragraph_error(
+        self,
+        e: Exception,
+        llm_translate_trackers: list,
+        inputs: list,
+        should_translate_paragraph: list,
+        batch_paragraph: "BatchParagraph",
+        executor,
+        page_font_map: dict,
+        xobj_font_map: dict,
+        title_paragraph,
+        local_title_paragraph,
+    ) -> None:
+        """Handle a translation-level error by logging and submitting fallback tasks."""
+        error_message = f"Error {e} during translation. try fallback"
+        logger.warning(error_message)
+        for tracker in llm_translate_trackers:
+            tracker.set_error_message(error_message)
+            tracker.set_fallback_to_translate()
+        self.total_count += len(llm_translate_trackers)
+        self.fallback_count += len(llm_translate_trackers)
+        for i, input_ in enumerate(inputs):
+            input_[2].unicode = input_[5][i]
+        if not should_translate_paragraph:
+            should_translate_paragraph = list(range(len(batch_paragraph.paragraphs)))
+        for i in should_translate_paragraph:
+            paragraph = batch_paragraph.paragraphs[i]
+            tracker = batch_paragraph.trackers[i]
+            if paragraph.debug_id is None:
+                continue
+            paragraph_token_count = self.calc_token_count(paragraph.unicode)
+            executor.submit(
+                self.il_translator.translate_paragraph,
+                paragraph,
+                batch_paragraph.pages[i],
+                None,
+                tracker,
+                page_font_map,
+                xobj_font_map,
+                priority=1048576 - paragraph_token_count,
+                paragraph_token_count=paragraph_token_count,
+                title_paragraph=title_paragraph,
+                local_title_paragraph=local_title_paragraph,
+            )
+
     def translate_paragraph(
         self,
         batch_paragraph: "BatchParagraph",
@@ -898,23 +961,7 @@ class ILTranslatorLLMOnly:
             )
             for llm_translate_tracker in llm_translate_trackers:
                 llm_translate_tracker.set_output(llm_output)
-            llm_output = self._clean_json_output(llm_output.strip())
-            parsed_output = json.loads(llm_output)
-            parsed_output = self._unwrap_llm_output(parsed_output, len(inputs))
-
-            translation_results = {}
-            for item in parsed_output:
-                if not isinstance(item, dict):
-                    raise ValueError(
-                        f"Invalid translation item type: {type(item).__name__}"
-                    )
-                if "id" not in item:
-                    raise ValueError("Translation item missing id field")
-                translation_results[item["id"]] = item.get("output", item.get("input"))
-            if len(translation_results) != len(inputs):
-                raise ValueError(
-                    f"Translation results length mismatch. Expected: {len(inputs)}, Got: {len(translation_results)}"
-                )
+            translation_results = self._parse_translation_results(llm_output, len(inputs))
             for id_, output in translation_results.items():
                 self._apply_single_translation(
                     id_,
@@ -937,38 +984,18 @@ class ILTranslatorLLMOnly:
             KeyError,
             RuntimeError,
         ) as e:
-            error_message = f"Error {e} during translation. try fallback"
-            logger.warning(error_message)
-            for llm_translate_tracker in llm_translate_trackers:
-                llm_translate_tracker.set_error_message(error_message)
-                llm_translate_tracker.set_fallback_to_translate()
-            self.total_count += len(llm_translate_trackers)
-            self.fallback_count += len(llm_translate_trackers)
-            for i, input_ in enumerate(inputs):
-                input_[2].unicode = input_[5][i]
-            if not should_translate_paragraph:
-                should_translate_paragraph = list(
-                    range(len(batch_paragraph.paragraphs))
-                )
-            for i in should_translate_paragraph:
-                paragraph = batch_paragraph.paragraphs[i]
-                tracker = batch_paragraph.trackers[i]
-                if paragraph.debug_id is None:
-                    continue
-                paragraph_token_count = self.calc_token_count(paragraph.unicode)
-                executor.submit(
-                    self.il_translator.translate_paragraph,
-                    paragraph,
-                    batch_paragraph.pages[i],
-                    pbar,
-                    tracker,
-                    page_font_map,
-                    xobj_font_map,
-                    priority=1048576 - paragraph_token_count,
-                    paragraph_token_count=paragraph_token_count,
-                    title_paragraph=title_paragraph,
-                    local_title_paragraph=local_title_paragraph,
-                )
+            self._handle_translate_paragraph_error(
+                e,
+                llm_translate_trackers,
+                inputs,
+                should_translate_paragraph,
+                batch_paragraph,
+                executor,
+                page_font_map,
+                xobj_font_map,
+                title_paragraph,
+                local_title_paragraph,
+            )
 
     def _build_llm_prompt(
         self,

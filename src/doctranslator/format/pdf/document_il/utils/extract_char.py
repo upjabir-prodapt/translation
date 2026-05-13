@@ -163,186 +163,145 @@ def convert_page_to_char_boxes(
     ]
 
 
+def _make_axis_accessors(orientation: str):
+    """Return (get_secondary_start, get_secondary_end, get_main_start, get_main_end, get_main_size)
+    accessor callables for the given *orientation* ('horizontal' or 'vertical').
+    """
+    if orientation == "horizontal":
+        return (
+            lambda c: c[0].y,
+            lambda c: c[0].y2,
+            lambda c: c[0].x,
+            lambda c: c[0].x2,
+            lambda c: c[0].x2 - c[0].x,
+        )
+    # vertical
+    return (
+        lambda c: c[0].x,
+        lambda c: c[0].x2,
+        lambda c: c[0].y,
+        lambda c: c[0].y2,
+        lambda c: c[0].y2 - c[0].y,
+    )
+
+
+def _assign_char_to_band(
+    char,
+    bands_data: list,
+    get_secondary_start,
+    get_secondary_end,
+) -> None:
+    """Insert *char* into the best-matching band in *bands_data*, or create a new band."""
+    char_ss = get_secondary_start(char)
+    char_se = get_secondary_end(char)
+    char_size = char_se - char_ss
+
+    best_idx = -1
+    max_ratio = BAND_CREATION_OVERLAP_THRESHOLD
+
+    for i in range(len(bands_data) - 1, -1, -1):
+        _, band_ss, band_se = bands_data[i]
+        if band_se < char_ss:
+            break
+        overlap = max(0, min(char_se, band_se) - max(char_ss, band_ss))
+        if char_size > 0:
+            ratio = overlap / char_size
+            if ratio > max_ratio:
+                max_ratio = ratio
+                best_idx = i
+
+    if best_idx != -1:
+        band_chars, band_ss, band_se = bands_data[best_idx]
+        band_chars.append(char)
+        bands_data[best_idx] = (band_chars, min(band_ss, char_ss), max(band_se, char_se))
+        bands_data.append(bands_data.pop(best_idx))
+    else:
+        bands_data.append(([char], char_ss, char_se))
+
+
+def _cluster_band_into_lines(band: list, get_main_start, get_main_size) -> list:
+    """Cluster *band* characters along the main axis using DBSCAN and return Line objects."""
+    main_axis_sizes = [get_main_size(c) for c in band if get_main_size(c) > 0]
+    avg_main_size = np.mean(main_axis_sizes) if main_axis_sizes else 10
+    eps = avg_main_size * LINE_CLUSTERING_EPS_MULTIPLIER
+
+    centroids = np.array(
+        [((c[0].x + c[0].x2) / 2, (c[0].y + c[0].y2) / 2) for c in band]
+    )
+    lines = []
+    if centroids.size > 0:
+        db = DBSCAN(eps=eps, min_samples=1, metric="manhattan").fit(centroids)
+        groups: dict = defaultdict(list)
+        for i, label in enumerate(db.labels_):
+            if label != -1:
+                groups[label].append(band[i])
+        for chars in groups.values():
+            chars.sort(key=get_main_start)
+            lines.append(Line(chars))
+    return lines
+
+
+def _split_tall_line(
+    line: "Line", get_secondary_start, get_secondary_end, get_main_start
+) -> list:
+    """Split *line* into sub-lines along the secondary axis when it spans multiple rows/columns."""
+    char_secondary_sizes = [
+        get_secondary_end(c) - get_secondary_start(c)
+        for c in line.chars
+        if get_secondary_end(c) - get_secondary_start(c) > 0
+    ]
+    if not char_secondary_sizes:
+        return [line]
+
+    max_char_size = np.max(char_secondary_sizes)
+    line_ss = min(get_secondary_start(c) for c in line.chars)
+    line_se = max(get_secondary_end(c) for c in line.chars)
+
+    if line_se - line_ss > max_char_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD and len(line.chars) > 1:
+        centers = np.array(
+            [[(get_secondary_start(c) + get_secondary_end(c)) / 2] for c in line.chars]
+        )
+        db = DBSCAN(
+            eps=max_char_size * LINE_SPLIT_DBSCAN_EPS_MULTIPLIER, min_samples=1
+        ).fit(centers)
+        sub_groups: dict = defaultdict(list)
+        for i, label in enumerate(db.labels_):
+            sub_groups[label].append(line.chars[i])
+        result = []
+        for chars in sub_groups.values():
+            chars.sort(key=get_main_start)
+            result.append(Line(chars))
+        return result
+    return [line]
+
+
 def _cluster_by_axis(chars: list[tuple[il_version_1.Box, str, bool]], orientation: str):
     """
-    A generalized function to cluster characters into lines based on main and secondary axes.
+    Cluster characters into lines based on main and secondary axes.
     """
     if not chars:
         return []
 
-    # Define main and secondary axes based on orientation
-    if orientation == "horizontal":
+    get_ss, get_se, get_ms, get_me, get_msz = _make_axis_accessors(orientation)
 
-        def get_secondary_start(c):
-            return c[0].y
-
-        def get_secondary_end(c):
-            return c[0].y2
-
-        def get_main_start(c):
-            return c[0].x
-
-        def get_main_end(c):
-            return c[0].x2
-
-        def get_main_size(c):
-            return c[0].x2 - c[0].x
-
-    else:  # vertical
-
-        def get_secondary_start(c):
-            return c[0].x
-
-        def get_secondary_end(c):
-            return c[0].x2
-
-        def get_main_start(c):
-            return c[0].y
-
-        def get_main_end(c):
-            return c[0].y2
-
-        def get_main_size(c):
-            return c[0].y2 - c[0].y
-
-    # Step 1: Group chars into bands along the secondary axis based on overlap.
-    # This is an optimized version of the band clustering algorithm.
-    # It avoids the O(N^2) complexity of the naive approach by making
-    # assumptions based on the sorted order of characters.
-    chars.sort(key=get_secondary_start)
-
-    # Each band is a tuple: (list_of_chars, min_secondary_coord, max_secondary_coord)
+    # Step 1: Group chars into bands along the secondary axis.
+    chars.sort(key=get_ss)
     bands_data: list[tuple[list, float, float]] = []
-
     for char in chars:
-        char_secondary_start = get_secondary_start(char)
-        char_secondary_end = get_secondary_end(char)
-        char_secondary_size = char_secondary_end - char_secondary_start
-
-        best_band_index = -1
-        max_overlap_ratio = (
-            BAND_CREATION_OVERLAP_THRESHOLD  # Minimum overlap ratio to be considered
-        )
-
-        # Iterate backwards over bands, as recent bands are more likely to overlap.
-        for i in range(len(bands_data) - 1, -1, -1):
-            band_chars, band_secondary_start, band_secondary_end = bands_data[i]
-
-            # Optimization: If the band is already far above the current char,
-            # and since chars are sorted by start, no further bands will match.
-            if band_secondary_end < char_secondary_start:
-                break
-
-            overlap = max(
-                0,
-                min(char_secondary_end, band_secondary_end)
-                - max(char_secondary_start, band_secondary_start),
-            )
-
-            if char_secondary_size > 0:
-                overlap_ratio = overlap / char_secondary_size
-                if overlap_ratio > max_overlap_ratio:
-                    max_overlap_ratio = overlap_ratio
-                    best_band_index = i
-
-        if best_band_index != -1:
-            # Add char to the best matching band and update its boundaries
-            band_chars, band_start, band_end = bands_data[best_band_index]
-            band_chars.append(char)
-            updated_band = (
-                band_chars,
-                min(band_start, char_secondary_start),
-                max(band_end, char_secondary_end),
-            )
-            bands_data[best_band_index] = updated_band
-            # Move the updated band to the end to maintain rough locality
-            bands_data.append(bands_data.pop(best_band_index))
-        else:
-            # No suitable band found, create a new one
-            bands_data.append(([char], char_secondary_start, char_secondary_end))
-
-    # Extract final bands from the data structure
+        _assign_char_to_band(char, bands_data, get_ss, get_se)
     bands = [b[0] for b in bands_data]
 
-    # Step 2: For each band, cluster along the main axis using DBSCAN
-    final_lines = []
+    # Step 2: Cluster each band along the main axis using DBSCAN.
+    final_lines: list[Line] = []
     for band in bands:
-        if len(band) < 1:
-            continue
+        if band:
+            final_lines.extend(_cluster_band_into_lines(band, get_ms, get_msz))
 
-        main_axis_sizes = [get_main_size(c) for c in band if get_main_size(c) > 0]
-        avg_main_size = np.mean(main_axis_sizes) if main_axis_sizes else 10
-
-        # Epsilon for main-axis clustering is twice the average character size in that dimension
-        eps = avg_main_size * LINE_CLUSTERING_EPS_MULTIPLIER
-
-        centroids = np.array(
-            [((c[0].x + c[0].x2) / 2, (c[0].y + c[0].y2) / 2) for c in band]
-        )
-
-        if centroids.size > 0:
-            db = DBSCAN(eps=eps, min_samples=1, metric="manhattan").fit(centroids)
-
-            line_groups = defaultdict(list)
-            for i, label in enumerate(db.labels_):
-                if label != -1:
-                    line_groups[label].append(band[i])
-
-            for _, line in line_groups.items():
-                line.sort(key=get_main_start)
-                final_lines.append(Line(line))
-
-    # Step 3: Split lines that are too tall/wide, which likely contain multiple distinct lines from different columns
-    processed_lines = []
+    # Step 3: Split lines that are too tall/wide (spanning multiple rows/columns).
+    processed_lines: list[Line] = []
     for line in final_lines:
-        if not line.chars:
-            continue
-
-        line_secondary_start = min(get_secondary_start(c) for c in line.chars)
-        line_secondary_end = max(get_secondary_end(c) for c in line.chars)
-        line_secondary_size = line_secondary_end - line_secondary_start
-
-        char_secondary_sizes = [
-            get_secondary_end(c) - get_secondary_start(c)
-            for c in line.chars
-            if get_secondary_end(c) - get_secondary_start(c) > 0
-        ]
-        if not char_secondary_sizes:
-            processed_lines.append(line)
-            continue
-
-        max_char_secondary_size = np.max(char_secondary_sizes)
-
-        if (
-            line_secondary_size
-            > max_char_secondary_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD
-            and len(line.chars) > 1
-        ):
-            # logger.debug(
-            #     f"Splitting line '{line.text}' which seems to contain multiple lines."
-            # )
-
-            # Use DBSCAN on the secondary axis centers to split the line
-            centers = np.array(
-                [
-                    [(get_secondary_start(c) + get_secondary_end(c)) / 2]
-                    for c in line.chars
-                ]
-            )
-            db = DBSCAN(
-                eps=max_char_secondary_size * LINE_SPLIT_DBSCAN_EPS_MULTIPLIER,
-                min_samples=1,
-            ).fit(centers)
-
-            sub_lines = defaultdict(list)
-            for i, label in enumerate(db.labels_):
-                sub_lines[label].append(line.chars[i])
-
-            for _, sub_line_chars in sub_lines.items():
-                sub_line_chars.sort(key=get_main_start)
-                processed_lines.append(Line(sub_line_chars))
-        else:
-            processed_lines.append(line)
+        if line.chars:
+            processed_lines.extend(_split_tall_line(line, get_ss, get_se, get_ms))
     final_lines = processed_lines
 
     for line in final_lines:
@@ -413,81 +372,75 @@ def _check_containment_merge(
     return False, line1, bbox1
 
 
+def _merge_bbox(bbox1: Bbox, bbox2: Bbox) -> Bbox:
+    """Return the union bounding box of *bbox1* and *bbox2*."""
+    return (
+        min(bbox1[0], bbox2[0]),
+        min(bbox1[1], bbox2[1]),
+        max(bbox1[2], bbox2[2]),
+        max(bbox1[3], bbox2[3]),
+    )
+
+
+def _check_horizontal_adjacency_merge(
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
+) -> tuple[bool, Bbox]:
+    """Attempt a horizontal adjacency merge; return (merged, updated_bbox1)."""
+    height1 = bbox1[3] - bbox1[1]
+    height2 = bbox2[3] - bbox2[1]
+    if height1 <= 0 or height2 <= 0:
+        return False, bbox1
+    v_overlap = max(0, min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]))
+    if (
+        v_overlap / height1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+        and v_overlap / height2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+    ):
+        h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
+        if h_gap >= 0:
+            avg_char_width = np.mean(
+                [c[0].x2 - c[0].x for c in (line1.chars + line2.chars) if c[0].x2 > c[0].x]
+                or [0]
+            )
+            if avg_char_width > 0 and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                line1.chars.extend(line2.chars)
+                lines_to_skip.add(j)
+                return True, _merge_bbox(bbox1, bbox2)
+    return False, bbox1
+
+
+def _check_vertical_adjacency_merge(
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
+) -> tuple[bool, Bbox]:
+    """Attempt a vertical adjacency merge; return (merged, updated_bbox1)."""
+    width1 = bbox1[2] - bbox1[0]
+    width2 = bbox2[2] - bbox2[0]
+    if width1 <= 0 or width2 <= 0:
+        return False, bbox1
+    h_overlap = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]))
+    if (
+        h_overlap / width1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+        and h_overlap / width2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+    ):
+        v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
+        if v_gap >= 0:
+            avg_char_height = np.mean(
+                [c[0].y2 - c[0].y for c in (line1.chars + line2.chars) if c[0].y2 > c[0].y]
+                or [0]
+            )
+            if avg_char_height > 0 and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER:
+                line1.chars.extend(line2.chars)
+                lines_to_skip.add(j)
+                return True, _merge_bbox(bbox1, bbox2)
+    return False, bbox1
+
+
 def _check_adjacency_merge(
-    line1: Line,
-    line2: Line,
-    bbox1: Bbox,
-    bbox2: Bbox,
-    lines_to_skip: set,
-    j: int,
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
 ) -> tuple[bool, Bbox]:
     """Try to merge line1 and line2 by adjacency. Returns (merged, new_bbox1)."""
-    orientation = "horizontal" if not line1.chars[0][2] else "vertical"
-    if orientation == "horizontal":
-        height1 = bbox1[3] - bbox1[1]
-        height2 = bbox2[3] - bbox2[1]
-        if height1 > 0 and height2 > 0:
-            v_overlap = max(0, min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]))
-            if (
-                v_overlap / height1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
-                and v_overlap / height2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
-            ):
-                h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
-                if h_gap >= 0:
-                    avg_char_width = np.mean(
-                        [
-                            c[0].x2 - c[0].x
-                            for c in (line1.chars + line2.chars)
-                            if c[0].x2 > c[0].x
-                        ]
-                        or [0]
-                    )
-                    if (
-                        avg_char_width > 0
-                        and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
-                    ):
-                        line1.chars.extend(line2.chars)
-                        lines_to_skip.add(j)
-                        new_bbox = (
-                            min(bbox1[0], bbox2[0]),
-                            min(bbox1[1], bbox2[1]),
-                            max(bbox1[2], bbox2[2]),
-                            max(bbox1[3], bbox2[3]),
-                        )
-                        return True, new_bbox
-    else:  # vertical
-        width1 = bbox1[2] - bbox1[0]
-        width2 = bbox2[2] - bbox2[0]
-        if width1 > 0 and width2 > 0:
-            h_overlap = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]))
-            if (
-                h_overlap / width1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
-                and h_overlap / width2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
-            ):
-                v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
-                if v_gap >= 0:
-                    avg_char_height = np.mean(
-                        [
-                            c[0].y2 - c[0].y
-                            for c in (line1.chars + line2.chars)
-                            if c[0].y2 > c[0].y
-                        ]
-                        or [0]
-                    )
-                    if (
-                        avg_char_height > 0
-                        and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
-                    ):
-                        line1.chars.extend(line2.chars)
-                        lines_to_skip.add(j)
-                        new_bbox = (
-                            min(bbox1[0], bbox2[0]),
-                            min(bbox1[1], bbox2[1]),
-                            max(bbox1[2], bbox2[2]),
-                            max(bbox1[3], bbox2[3]),
-                        )
-                        return True, new_bbox
-    return False, bbox1
+    if not line1.chars[0][2]:  # horizontal
+        return _check_horizontal_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+    return _check_vertical_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
 
 
 def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:

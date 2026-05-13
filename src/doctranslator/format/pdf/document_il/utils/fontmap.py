@@ -261,6 +261,51 @@ class FontMapper:
                             result.add(char.pdf_style.font_id)
         return result
 
+    def _register_font_in_xref(
+        self,
+        doc_zh: pymupdf.Document,
+        xref: int,
+        font_list: list,
+        font_id: dict,
+    ) -> None:
+        """Try to add all fonts in *font_list* to the font resources of *xref*."""
+        for label in ["Resources/", ""]:  # may be based on xobj resources
+            try:
+                font_res = doc_zh.xref_get_key(xref, f"{label}Font")
+                if font_res is None:
+                    continue
+                target_key_prefix = f"{label}Font/"
+                if font_res[0] == "xref":
+                    resource_xref_id = re.search("(\\d+) 0 R", font_res[1]).group(1)
+                    xref = int(resource_xref_id)
+                    font_res = ("dict", doc_zh.xref_object(xref))
+                    target_key_prefix = ""
+                if font_res[0] == "dict":
+                    for font in font_list:
+                        target_key = f"{target_key_prefix}{font[0]}"
+                        font_exist = doc_zh.xref_get_key(xref, target_key)
+                        if font_exist[0] == "null":
+                            doc_zh.xref_set_key(xref, target_key, f"{font_id[font[0]]} 0 R")
+            except Exception:
+                pass
+
+    def _build_pdf_font(self, font_name: str, font_id: dict) -> "il_version_1.PdfFont":
+        """Build a PdfFont IL object for *font_name* using cached mupdf metadata."""
+        assert font_name in self.fontid2font, f"Font {font_name} not found"
+        mupdf_font = self.fontid2font[font_name]
+        return il_version_1.PdfFont(
+            name=font_name,
+            xref_id=font_id[font_name],
+            font_id=font_name,
+            encoding_length=mupdf_font.encoding_length,
+            bold=mupdf_font.is_bold,
+            italic=mupdf_font.is_italic,
+            monospace=mupdf_font.is_monospaced,
+            serif=mupdf_font.is_serif,
+            descent=mupdf_font.descent_fontmap,
+            ascent=mupdf_font.ascent_fontmap,
+        )
+
     def add_font(self, doc_zh: pymupdf.Document, il: il_version_1.Document):
         used_font_ids = self.get_used_font_ids(il)
         font_list = [
@@ -284,66 +329,15 @@ class FontMapper:
                 pbar.advance(1)
             for xref in range(1, xreflen):
                 pbar.advance(1)
-                # xref_type = doc_zh.xref_get_key(xref, "Type")
-                # if xref_type[1] == "/Page":
-                #     resources_xref = doc_zh.xref_get_key(xref, "Resources")
-                #     if resources_xref[0] == 'null':
-                #         doc_zh.xref_set_key(xref, "Resources", f"<</Font<<>>>>")
-                for label in ["Resources/", ""]:  # 可能是基于 xobj 的 res
-                    try:  # xref 读写可能出错
-                        font_res = doc_zh.xref_get_key(xref, f"{label}Font")
-                        if font_res is None:
-                            continue
-                        target_key_prefix = f"{label}Font/"
-                        if font_res[0] == "xref":
-                            resource_xref_id = re.search(
-                                "(\\d+) 0 R",
-                                font_res[1],
-                            ).group(1)
-                            xref = int(resource_xref_id)
-                            font_res = ("dict", doc_zh.xref_object(xref))
-                            target_key_prefix = ""
-                        if font_res[0] == "dict":
-                            for font in font_list:
-                                target_key = f"{target_key_prefix}{font[0]}"
-                                font_exist = doc_zh.xref_get_key(xref, target_key)
-                                if font_exist[0] == "null":
-                                    doc_zh.xref_set_key(
-                                        xref,
-                                        target_key,
-                                        f"{font_id[font[0]]} 0 R",
-                                    )
-                    except Exception:
-                        pass
+                self._register_font_in_xref(doc_zh, xref, font_list, font_id)
 
-            # Create PdfFont for each font
-            # 预先创建所有字体对象
-            pdf_fonts = []
-            for font_name, _ in font_list:
-                # Get descent_fontmap from fontid2font
-                assert font_name in self.fontid2font, f"Font {font_name} not found"
-                mupdf_font = self.fontid2font[font_name]
-                descent_fontmap = mupdf_font.descent_fontmap
-                ascent_fontmap = mupdf_font.ascent_fontmap
-                encoding_length = mupdf_font.encoding_length
+            # Build and attach PdfFont objects for all used fonts
+            pdf_fonts = [
+                self._build_pdf_font(font_name, font_id)
+                for font_name, _ in font_list
+                if pbar.advance(1) is None  # side-effect: advance progress
+            ]
 
-                pdf_fonts.append(
-                    il_version_1.PdfFont(
-                        name=font_name,
-                        xref_id=font_id[font_name],
-                        font_id=font_name,
-                        encoding_length=encoding_length,
-                        bold=mupdf_font.is_bold,
-                        italic=mupdf_font.is_italic,
-                        monospace=mupdf_font.is_monospaced,
-                        serif=mupdf_font.is_serif,
-                        descent=descent_fontmap,
-                        ascent=ascent_fontmap,
-                    ),
-                )
-                pbar.advance(1)
-
-            # 批量添加字体到页面和 XObject
             for page in il.page:
                 page.pdf_font.extend(pdf_fonts)
                 for xobj in page.pdf_xobject:

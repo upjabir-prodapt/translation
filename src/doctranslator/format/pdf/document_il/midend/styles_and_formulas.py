@@ -166,6 +166,33 @@ class StylesAndFormulas:
         # Return Euclidean distance
         return (dx * dx + dy * dy) ** 0.5
 
+    def _score_element_against_formulas(
+        self,
+        element_box,
+        element_xobj_id,
+        all_formulas: list,
+        max_tolerant_distance: float = 100.0,
+    ) -> list:
+        """Score *element* against each formula and return a candidates list.
+
+        Each entry is a (formula_idx, score, match_type) tuple.
+        """
+        candidates = []
+        for formula_idx, (formula, paragraph_xobj_id) in enumerate(all_formulas):
+            if not formula.box:
+                continue
+            if paragraph_xobj_id is not None and element_xobj_id != paragraph_xobj_id:
+                continue
+            if self._is_element_contained_exact(element_box, formula.box):
+                iou = calculate_iou_for_boxes(element_box, formula.box)
+                candidates.append((formula_idx, iou, "iou_exact"))
+            elif is_element_contained_in_formula(element_box, formula.box):
+                distance = self._calculate_element_formula_distance(element_box, formula.box)
+                distance_factor = max(0.0, 1.0 - distance / max_tolerant_distance)
+                score = 0.5 + 0.4 * distance_factor
+                candidates.append((formula_idx, score, "iou_tolerant"))
+        return candidates
+
     def _collect_element_formula_candidates(
         self, page: Page
     ) -> tuple[list, dict, dict]:
@@ -185,48 +212,24 @@ class StylesAndFormulas:
         curve_candidates = {}
         form_candidates = {}
 
-        # Configuration parameters
-        max_tolerant_distance = 100.0  # Maximum distance for tolerant matching scoring
-
         if not page.pdf_paragraph:
             return [], curve_candidates, form_candidates
 
         # Collect all formulas from all paragraphs with their index
-        all_formulas = []
-        for paragraph in page.pdf_paragraph:
-            for composition in paragraph.pdf_paragraph_composition:
-                if composition.pdf_formula:
-                    all_formulas.append((composition.pdf_formula, paragraph.xobj_id))
+        all_formulas = [
+            (composition.pdf_formula, paragraph.xobj_id)
+            for paragraph in page.pdf_paragraph
+            for composition in paragraph.pdf_paragraph_composition
+            if composition.pdf_formula
+        ]
 
         # Check each curve against all formulas
         for curve_idx, curve in enumerate(page.pdf_curve):
             if not curve.box:
                 continue
-
-            candidates = []
-            for formula_idx, (formula, paragraph_xobj_id) in enumerate(all_formulas):
-                if not formula.box:
-                    continue
-
-                # Check xobj_id compatibility
-                if paragraph_xobj_id is not None and curve.xobj_id != paragraph_xobj_id:
-                    continue
-
-                # Level 1: Exact IoU matching (zero tolerance) - highest priority
-                if self._is_element_contained_exact(curve.box, formula.box):
-                    iou = calculate_iou_for_boxes(curve.box, formula.box)
-                    candidates.append((formula_idx, iou, "iou_exact"))
-                # Level 2: Tolerant IoU matching (with tolerance) - distance sorted
-                elif is_element_contained_in_formula(curve.box, formula.box):
-                    distance = self._calculate_element_formula_distance(
-                        curve.box, formula.box
-                    )
-                    # Convert distance to score (closer = higher score)
-                    # Score range: 0.5-0.9 to ensure lower than exact IoU
-                    distance_factor = max(0.0, 1.0 - distance / max_tolerant_distance)
-                    score = 0.5 + 0.4 * distance_factor
-                    candidates.append((formula_idx, score, "iou_tolerant"))
-
+            candidates = self._score_element_against_formulas(
+                curve.box, curve.xobj_id, all_formulas
+            )
             if candidates:
                 curve_candidates[curve_idx] = (curve, candidates)
 
@@ -234,31 +237,9 @@ class StylesAndFormulas:
         for form_idx, form in enumerate(page.pdf_form):
             if not form.box:
                 continue
-
-            candidates = []
-            for formula_idx, (formula, paragraph_xobj_id) in enumerate(all_formulas):
-                if not formula.box:
-                    continue
-
-                # Check xobj_id compatibility
-                if paragraph_xobj_id is not None and form.xobj_id != paragraph_xobj_id:
-                    continue
-
-                # Level 1: Exact IoU matching (zero tolerance) - highest priority
-                if self._is_element_contained_exact(form.box, formula.box):
-                    iou = calculate_iou_for_boxes(form.box, formula.box)
-                    candidates.append((formula_idx, iou, "iou_exact"))
-                # Level 2: Tolerant IoU matching (with tolerance) - distance sorted
-                elif is_element_contained_in_formula(form.box, formula.box):
-                    distance = self._calculate_element_formula_distance(
-                        form.box, formula.box
-                    )
-                    # Convert distance to score (closer = higher score)
-                    # Score range: 0.5-0.9 to ensure lower than exact IoU
-                    distance_factor = max(0.0, 1.0 - distance / max_tolerant_distance)
-                    score = 0.5 + 0.4 * distance_factor
-                    candidates.append((formula_idx, score, "iou_tolerant"))
-
+            candidates = self._score_element_against_formulas(
+                form.box, form.xobj_id, all_formulas
+            )
             if candidates:
                 form_candidates[form_idx] = (form, candidates)
 
@@ -441,28 +422,16 @@ class StylesAndFormulas:
         in_corner_mark_state: bool,
     ) -> bool:
         """Return True if `char` is a superscript/subscript corner mark."""
-        if (
-            previous_char is not None
-            and not isspace
-            and not prev_is_space
-            and not first_is_bullet
-        ):
-            if (
-                char.pdf_style.font_size < previous_char.pdf_style.font_size * 0.79
-                and not in_corner_mark_state
-            ):
+        # Guard: bullet points, spaces, and first chars are never corner marks
+        if isspace or prev_is_space or first_is_bullet:
+            return False
+        if previous_char is not None:
+            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 0.79 and not in_corner_mark_state:
                 return True
-            if (
-                char.pdf_style.font_size < previous_char.pdf_style.font_size * 1.1
-                and in_corner_mark_state
-            ):
+            if char.pdf_style.font_size < previous_char.pdf_style.font_size * 1.1 and in_corner_mark_state:
                 return True
-        if (
-            previous_char is None
-            and next_char is not None
-            and not isspace
-            and not prev_is_space
-            and not first_is_bullet
+        elif (
+            next_char is not None
             and char.pdf_style.font_size < next_char.pdf_style.font_size * 0.79
             and not in_corner_mark_state
         ):
@@ -814,6 +783,66 @@ class StylesAndFormulas:
             ),
         )
 
+    def _find_left_char_for_formula(
+        self, formula, compositions: list, formula_idx: int
+    ):
+        """Return the nearest text character to the left of *formula* on the same line."""
+        for j in range(formula_idx - 1, -1, -1):
+            comp = compositions[j]
+            if comp.pdf_line:
+                for char in reversed(comp.pdf_line.pdf_character):
+                    if not char.pdf_character_id:
+                        continue
+                    iou = calculate_y_true_iou_for_boxes(formula.box, char.box)
+                    if iou > 0.6:
+                        return char, iou
+            break
+        return None, 0
+
+    def _find_right_char_for_formula(
+        self, formula, compositions: list, formula_idx: int
+    ):
+        """Return the nearest text character to the right of *formula* on the same line."""
+        for j in range(formula_idx + 1, len(compositions)):
+            comp = compositions[j]
+            if comp.pdf_line:
+                for char in comp.pdf_line.pdf_character:
+                    if not char.pdf_character_id:
+                        continue
+                    iou = calculate_y_true_iou_for_boxes(formula.box, char.box)
+                    if iou > 0.6:
+                        return char, iou
+            break
+        return None, 0
+
+    def _apply_formula_offsets(self, formula, left_char, right_char, left_iou, right_iou) -> None:
+        """Calculate and assign x_offset and y_offset on *formula* from its neighbours."""
+        # If both text segments exist, keep the one with higher IOU
+        if left_char and right_char:
+            if left_iou < right_iou:
+                left_char = None
+            elif right_iou < left_iou:
+                right_char = None
+            # If IOUs are equal, keep both
+
+        # Compute x_offset relative to the left text anchor
+        if left_char:
+            formula.x_offset = formula.box.x - left_char.box.x2
+        else:
+            formula.x_offset = 0  # No text to the left — default to 0
+        if abs(formula.x_offset) < 0.1 or formula.x_offset > 10 or formula.x_offset < -5:
+            formula.x_offset = 0
+
+        # Compute y_offset relative to the nearest anchor
+        if left_char:
+            formula.y_offset = formula.box.y - left_char.box.y
+        elif right_char:
+            formula.y_offset = formula.box.y - right_char.box.y
+        else:
+            formula.y_offset = 0
+        if abs(formula.y_offset) < 0.1:
+            formula.y_offset = 0
+
     def process_page_offsets(self, page: Page):
         """计算公式的 x 和 y 偏移量"""
         if not page.pdf_paragraph:
@@ -825,86 +854,16 @@ class StylesAndFormulas:
             if not paragraph.pdf_paragraph_composition:
                 continue
 
-            # 计算该段落的行间距，用其 80% 作为容差
-            # line_spacing = self.calculate_line_spacing(paragraph)
-            # y_tolerance = line_spacing * 0.8
-
             for i, composition in enumerate(paragraph.pdf_paragraph_composition):
                 if not composition.pdf_formula:
                     continue
 
                 formula = composition.pdf_formula
-                left_char = None
-                right_char = None
+                comps = paragraph.pdf_paragraph_composition
 
-                left_iou = 0
-                right_iou = 0
-
-                # 查找左边最近的同一行的文本
-                for j in range(i - 1, -1, -1):
-                    comp = paragraph.pdf_paragraph_composition[j]
-                    if comp.pdf_line:
-                        for char in reversed(comp.pdf_line.pdf_character):
-                            if not char.pdf_character_id:
-                                continue
-                            # 检查 y 坐标是否接近，判断是否在同一行
-                            left_iou = calculate_y_true_iou_for_boxes(
-                                formula.box, char.box
-                            )
-                            if left_iou > 0.6:
-                                left_char = char
-                                break
-                    break
-
-                # 查找右边最近的同一行的文本
-                for j in range(i + 1, len(paragraph.pdf_paragraph_composition)):
-                    comp = paragraph.pdf_paragraph_composition[j]
-                    if comp.pdf_line:
-                        for char in comp.pdf_line.pdf_character:
-                            if not char.pdf_character_id:
-                                continue
-                            # 检查 y 坐标是否接近，判断是否在同一行
-                            right_iou = calculate_y_true_iou_for_boxes(
-                                formula.box, char.box
-                            )
-                            if right_iou > 0.6:
-                                right_char = char
-                                break
-                    break
-
-                # If both text segments exist, keep the one with higher IOU
-                if left_char and right_char:
-                    if left_iou < right_iou:
-                        left_char = None
-                    elif right_iou < left_iou:
-                        right_char = None
-                    # If IOUs are equal, keep both
-
-                # 计算 x 偏移量（相对于左边文本）
-                if left_char:
-                    formula.x_offset = formula.box.x - left_char.box.x2
-                else:
-                    formula.x_offset = 0  # 如果左边没有文字，x_offset 应该为 0
-                if abs(formula.x_offset) < 0.1:
-                    formula.x_offset = 0
-                if formula.x_offset > 10:
-                    formula.x_offset = 0
-                # if formula.x_offset > 0:
-                #     formula.x_offset = 0
-                if formula.x_offset < -5:
-                    formula.x_offset = 0
-
-                # 计算 y 偏移量
-                if left_char:
-                    # 使用底部坐标计算偏移量
-                    formula.y_offset = formula.box.y - left_char.box.y
-                elif right_char:
-                    formula.y_offset = formula.box.y - right_char.box.y
-                else:
-                    formula.y_offset = 0
-
-                if abs(formula.y_offset) < 0.1:
-                    formula.y_offset = 0
+                left_char, left_iou = self._find_left_char_for_formula(formula, comps, i)
+                right_char, right_iou = self._find_right_char_for_formula(formula, comps, i)
+                self._apply_formula_offsets(formula, left_char, right_char, left_iou, right_iou)
 
                 if max(abs(formula.y_offset), abs(formula.x_offset)) > 10:
                     # Offset is unusually large; intentionally left as-is (debug logging suppressed).
@@ -1068,6 +1027,35 @@ class StylesAndFormulas:
 
         return intersection_length / union_length
 
+    def _should_merge_formula_pair(
+        self,
+        formula1,
+        formula2,
+        comp_idx_delta: int,
+        page: Page,
+    ) -> bool:
+        """Return True if *formula1* and *formula2* satisfy the merge criteria."""
+        if formula1.line_id != formula2.line_id:
+            return False
+        if comp_idx_delta == 1 and (
+            (
+                self.is_x_axis_contained(formula1.box, formula2.box)
+                and self.has_y_intersection(formula1.box, formula2.box)
+            )
+            or (
+                self.is_x_axis_adjacent(formula1.box, formula2.box)
+                and self.calculate_y_iou(formula1.box, formula2.box) > 0.5
+            )
+        ):
+            return True
+        if self._have_same_layout_ids(formula1, formula2, page):
+            return True
+        if calculate_iou_for_boxes(formula1.box, formula2.box) > 0.8:
+            return True
+        if calculate_iou_for_boxes(formula2.box, formula1.box) > 0.8:
+            return True
+        return False
+
     def merge_overlapping_formulas(self, page: Page):
         """
         合并符合以下条件的公式：
@@ -1084,7 +1072,6 @@ class StylesAndFormulas:
             if not paragraph.pdf_paragraph_composition:
                 continue
 
-            # 重复执行合并过程，直到没有更多可以合并的公式
             merged = True
             while merged:
                 merged = False
@@ -1103,59 +1090,11 @@ class StylesAndFormulas:
                         formula1 = comp1.pdf_formula
                         formula2 = comp2.pdf_formula
 
-                        # 检查合并条件：
-                        # 0. 必须在同一行（line_id 相同），以及
-                        # 1. x 轴重叠且 y 轴有交集，或者
-                        # 2. x 轴相邻且 y 轴 IOU > 0.5，或者
-                        # 3. 所有字符的 layout id 都相同，或者
-                        # 4. 任意两个公式的 IOU > 0.8
-
-                        # 检查是否在同一行
-                        same_line = formula1.line_id == formula2.line_id
-
-                        should_merge = same_line and (
-                            (
-                                j == i + 1
-                                and (
-                                    (
-                                        self.is_x_axis_contained(
-                                            formula1.box, formula2.box
-                                        )
-                                        and self.has_y_intersection(
-                                            formula1.box, formula2.box
-                                        )
-                                    )
-                                    or (
-                                        self.is_x_axis_adjacent(
-                                            formula1.box, formula2.box
-                                        )
-                                        and self.calculate_y_iou(
-                                            formula1.box, formula2.box
-                                        )
-                                        > 0.5
-                                    )
-                                )
-                            )
-                            or (self._have_same_layout_ids(formula1, formula2, page))
-                            or (
-                                calculate_iou_for_boxes(formula1.box, formula2.box)
-                                > 0.8
-                            )
-                            or (
-                                calculate_iou_for_boxes(formula2.box, formula1.box)
-                                > 0.8
-                            )
-                        )
-
-                        if should_merge:
-                            # 合并公式
+                        if self._should_merge_formula_pair(formula1, formula2, j - i, page):
                             merged_formula = self.merge_formulas(formula1, formula2)
                             paragraph.pdf_paragraph_composition[i] = (
-                                PdfParagraphComposition(
-                                    pdf_formula=merged_formula,
-                                )
+                                PdfParagraphComposition(pdf_formula=merged_formula)
                             )
-                            # 删除第二个公式
                             del paragraph.pdf_paragraph_composition[j]
                             merged = True
                             break

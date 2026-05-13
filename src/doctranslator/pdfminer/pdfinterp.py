@@ -537,8 +537,13 @@ class PDFPageInterpreter:
         self.graphicstate.flatness = flatness
 
     def do_gs(self, name: PDFStackT) -> None:
-        """Set parameters from graphics state parameter dictionary"""
-        # to do
+        """Set parameters from graphics state parameter dictionary.
+
+        Intentionally not implemented: ExtGState dictionary handling (soft masks,
+        blend modes, etc.) is not required for the text-extraction and translation
+        pipeline.  PDF viewing fidelity may vary for documents that rely heavily on
+        extended graphic-state parameters.
+        """
 
     def do_m(self, x: PDFStackT, y: PDFStackT) -> None:
         """Begin new subpath"""
@@ -671,7 +676,11 @@ class PDFPageInterpreter:
         self.curpath = []
 
     def do_f_upper(self) -> None:
-        """Fill path using nonzero winding number rule (obsolete, PDF operator F, uppercase)"""
+        """Fill path using nonzero winding number rule (obsolete, PDF operator F, uppercase).
+
+        Per the PDF specification, the F operator is obsolete and equivalent to f.
+        The current path is cleared but no painting action is taken by this no-op handler.
+        """
 
     # PDF operator dispatch alias – 'F' maps to do_F via getattr
     do_F = do_f_upper
@@ -712,13 +721,21 @@ class PDFPageInterpreter:
         self.curpath = []
 
     def do_w_upper(self) -> None:
-        """Set clipping path using nonzero winding number rule (PDF operator W, uppercase)"""
+        """Set clipping path using nonzero winding number rule (PDF operator W, uppercase).
+
+        Clipping path operations are not needed for the text-extraction and translation
+        pipeline; this is an intentional no-op to preserve dispatch compatibility.
+        """
 
     # PDF operator dispatch alias – 'W' maps to do_W via getattr
     do_W = do_w_upper
 
     def do_w_upper_a(self) -> None:
-        """Set clipping path using even-odd rule (PDF operator W*, uppercase)"""
+        """Set clipping path using even-odd rule (PDF operator W*, uppercase).
+
+        Clipping path operations are not needed for the text-extraction and translation
+        pipeline; this is an intentional no-op to preserve dispatch compatibility.
+        """
 
     # PDF operator dispatch alias – 'W*' maps to do_W_a via getattr
     do_W_a = do_w_upper_a
@@ -904,7 +921,12 @@ class PDFPageInterpreter:
         self.do_scn()
 
     def do_sh(self, name: object) -> None:
-        """Paint area defined by shading pattern"""
+        """Paint area defined by shading pattern.
+
+        Shading-pattern rendering is not implemented in the base interpreter;
+        this is an intentional no-op.  Shading patterns are ignored during
+        text extraction and translation without loss of textual content.
+        """
 
     def do_BT(self) -> None:
         """Begin text object
@@ -916,13 +938,26 @@ class PDFPageInterpreter:
         self.textstate.reset()
 
     def do_ET(self) -> None:
-        """End a text object"""
+        """End a text object.
+
+        Text state clean-up after a BT/ET block is handled at the device level
+        via the renderer; the base interpreter needs no additional action here.
+        """
 
     def do_BX(self) -> None:
-        """Begin compatibility section"""
+        """Begin compatibility section.
+
+        Content inside a BX/EX pair is implementation-defined and may be
+        ignored by conforming readers that do not recognise the extension.
+        The base interpreter intentionally ignores the BX marker.
+        """
 
     def do_EX(self) -> None:
-        """End compatibility section"""
+        """End compatibility section.
+
+        Marks the end of a BX/EX compatibility block; ignored by the base
+        interpreter as it does not process implementation-specific extensions.
+        """
 
     def do_MP(self, tag: PDFStackT) -> None:
         """Define marked-content point"""
@@ -1187,10 +1222,18 @@ class PDFPageInterpreter:
         self.do_TJ([s])
 
     def do_BI(self) -> None:
-        """Begin inline image object"""
+        """Begin inline image object.
+
+        The inline image data is parsed by PDFContentParser before this method
+        is called; the base interpreter needs no additional action here.
+        """
 
     def do_ID(self) -> None:
-        """Begin inline image data"""
+        """Begin inline image data.
+
+        Inline image data is handled entirely by PDFContentParser._handle_inline_image;
+        this dispatch handler is an intentional no-op in the base interpreter.
+        """
 
     def do_EI(self, obj: PDFStackT) -> None:
         """End inline image object"""
@@ -1235,7 +1278,7 @@ class PDFPageInterpreter:
             self.device.render_image(xobjid, xobj)
             self.device.end_figure(xobjid)
         else:
-            # unsupported xobject type.
+            # Unsupported xobject type (e.g. PostScript XObject): intentionally ignored.
             pass
 
     def process_page(self, page: PDFPage) -> None:

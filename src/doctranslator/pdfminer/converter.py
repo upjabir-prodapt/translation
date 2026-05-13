@@ -700,90 +700,92 @@ class HTMLConverter(PDFConverter[AnyIO]):
     def put_newline(self) -> None:
         self.write("<br>")
 
+    def _show_html_group(self, item: "LTTextGroup | TextGroupElement") -> None:
+        """Recursively render a text group hierarchy as HTML borders."""
+        if isinstance(item, LTTextGroup):
+            self.place_border("textgroup", 1, item)
+            for child in item:
+                self._show_html_group(child)
+
+    def _render_html_item_exact(self, item: "LTItem") -> None:
+        """Render one layout item in exact-mode positioning."""
+        if isinstance(item, LTTextLine):
+            self.place_border("textline", 1, item)
+            for child in item:
+                self._render_html_item(child)
+        elif isinstance(item, LTTextBox):
+            self.place_border("textbox", 1, item)
+            self.place_text(
+                "textbox",
+                str(item.index + 1),
+                item.x0,
+                item.y1,
+                20,
+            )
+            for child in item:
+                self._render_html_item(child)
+        elif isinstance(item, LTChar):
+            self.place_border("char", 1, item)
+            self.place_text(
+                "char",
+                item.get_text(),
+                item.x0,
+                item.y1,
+                item.size,
+            )
+
+    def _render_html_page(self, item: "LTPage") -> None:
+        """Render an LTPage node to HTML."""
+        self._yoffset += item.y1
+        self.place_border("page", 1, item)
+        if self.showpageno:
+            self.write(
+                '<div style="position:absolute; top:%dpx;">'
+                % ((self._yoffset - item.y1) * self.scale),
+            )
+            self.write(f'<a name="{item.pageid}">Page {item.pageid}</a></div>\n')
+        for child in item:
+            self._render_html_item(child)
+        if item.groups is not None:
+            for group in item.groups:
+                self._show_html_group(group)
+
+    def _render_html_item(self, item: "LTItem") -> None:
+        """Recursively render a layout item and its children as HTML."""
+        if isinstance(item, LTPage):
+            self._render_html_page(item)
+        elif isinstance(item, LTCurve):
+            self.place_border("curve", 1, item)
+        elif isinstance(item, LTFigure):
+            self.begin_div("figure", 1, item.x0, item.y1, item.width, item.height)
+            for child in item:
+                self._render_html_item(child)
+            self.end_div("figure")
+        elif isinstance(item, LTImage):
+            self.place_image(item, 1, item.x0, item.y1, item.width, item.height)
+        elif self.layoutmode == "exact":
+            self._render_html_item_exact(item)
+        elif isinstance(item, LTTextLine):
+            for child in item:
+                self._render_html_item(child)
+            if self.layoutmode != "loose":
+                self.put_newline()
+        elif isinstance(item, LTTextBox):
+            self.begin_div(
+                "textbox", 1, item.x0, item.y1, item.width, item.height,
+                item.get_writing_mode(),
+            )
+            for child in item:
+                self._render_html_item(child)
+            self.end_div("textbox")
+        elif isinstance(item, LTChar):
+            fontname = make_compat_str(item.fontname)
+            self.put_text(item.get_text(), fontname, item.size)
+        elif isinstance(item, LTText):
+            self.write_text(item.get_text())
+
     def receive_layout(self, ltpage: LTPage) -> None:
-        def show_group(item: LTTextGroup | TextGroupElement) -> None:
-            if isinstance(item, LTTextGroup):
-                self.place_border("textgroup", 1, item)
-                for child in item:
-                    show_group(child)
-
-        def render(item: LTItem) -> None:
-            child: LTItem
-            if isinstance(item, LTPage):
-                self._yoffset += item.y1
-                self.place_border("page", 1, item)
-                if self.showpageno:
-                    self.write(
-                        '<div style="position:absolute; top:%dpx;">'
-                        % ((self._yoffset - item.y1) * self.scale),
-                    )
-                    self.write(
-                        f'<a name="{item.pageid}">Page {item.pageid}</a></div>\n',
-                    )
-                for child in item:
-                    render(child)
-                if item.groups is not None:
-                    for group in item.groups:
-                        show_group(group)
-            elif isinstance(item, LTCurve):
-                self.place_border("curve", 1, item)
-            elif isinstance(item, LTFigure):
-                self.begin_div("figure", 1, item.x0, item.y1, item.width, item.height)
-                for child in item:
-                    render(child)
-                self.end_div("figure")
-            elif isinstance(item, LTImage):
-                self.place_image(item, 1, item.x0, item.y1, item.width, item.height)
-            elif self.layoutmode == "exact":
-                if isinstance(item, LTTextLine):
-                    self.place_border("textline", 1, item)
-                    for child in item:
-                        render(child)
-                elif isinstance(item, LTTextBox):
-                    self.place_border("textbox", 1, item)
-                    self.place_text(
-                        "textbox",
-                        str(item.index + 1),
-                        item.x0,
-                        item.y1,
-                        20,
-                    )
-                    for child in item:
-                        render(child)
-                elif isinstance(item, LTChar):
-                    self.place_border("char", 1, item)
-                    self.place_text(
-                        "char",
-                        item.get_text(),
-                        item.x0,
-                        item.y1,
-                        item.size,
-                    )
-            elif isinstance(item, LTTextLine):
-                for child in item:
-                    render(child)
-                if self.layoutmode != "loose":
-                    self.put_newline()
-            elif isinstance(item, LTTextBox):
-                self.begin_div(
-                    "textbox",
-                    1,
-                    item.x0,
-                    item.y1,
-                    item.width,
-                    item.height,
-                    item.get_writing_mode(),
-                )
-                for child in item:
-                    render(child)
-                self.end_div("textbox")
-            elif isinstance(item, LTChar):
-                fontname = make_compat_str(item.fontname)
-                self.put_text(item.get_text(), fontname, item.size)
-            elif isinstance(item, LTText):
-                self.write_text(item.get_text())
-
-        render(ltpage)
+        self._render_html_item(ltpage)
         self._yoffset += self.pagemargin
 
     def close(self) -> None:
@@ -854,23 +856,41 @@ class XMLConverter(PDFConverter[AnyIO]):
                 '<image width="%d" height="%d" />\n' % (item.width, item.height),
             )
 
+    def _render_xml_page(self, item: "LTPage", render) -> None:
+        """Write XML for an LTPage node."""
+        self.write(
+            '<page id="%s" bbox="%s" rotate="%d">\n'
+            % (item.pageid, bbox2str(item.bbox), item.rotate)
+        )
+        for child in item:
+            render(child)
+        if item.groups is not None:
+            self.write("<layout>\n")
+            for group in item.groups:
+                self._show_group_xml(group)
+            self.write("</layout>\n")
+        self.write("</page>\n")
+
+    def _render_xml_char(self, item: "LTChar") -> None:
+        """Write XML for a single LTChar."""
+        s = (
+            '<text font="%s" bbox="%s" colourspace="%s" ncolour="%s" size="%.3f">'
+            % (
+                enc(item.fontname),
+                bbox2str(item.bbox),
+                item.ncs.name,
+                item.graphicstate.ncolor,
+                item.size,
+            )
+        )
+        self.write(s)
+        self.write_text(item.get_text())
+        self.write("</text>\n")
+
     def _render_xml_item(self, item: "LTItem", render: "Any") -> None:
         """Write one XML element for `item`, recursing into containers via `render`."""
         if isinstance(item, LTPage):
-            s = '<page id="%s" bbox="%s" rotate="%d">\n' % (
-                item.pageid,
-                bbox2str(item.bbox),
-                item.rotate,
-            )
-            self.write(s)
-            for child in item:
-                render(child)
-            if item.groups is not None:
-                self.write("<layout>\n")
-                for group in item.groups:
-                    self._show_group_xml(group)
-                self.write("</layout>\n")
-            self.write("</page>\n")
+            self._render_xml_page(item, render)
         elif isinstance(item, LTLine):
             self.write(
                 '<line linewidth="%d" bbox="%s" />\n'
@@ -906,20 +926,7 @@ class XMLConverter(PDFConverter[AnyIO]):
                 render(child)
             self.write("</textbox>\n")
         elif isinstance(item, LTChar):
-            s = (
-                '<text font="%s" bbox="%s" colourspace="%s" '
-                'ncolour="%s" size="%.3f">'
-                % (
-                    enc(item.fontname),
-                    bbox2str(item.bbox),
-                    item.ncs.name,
-                    item.graphicstate.ncolor,
-                    item.size,
-                )
-            )
-            self.write(s)
-            self.write_text(item.get_text())
-            self.write("</text>\n")
+            self._render_xml_char(item)
         elif isinstance(item, LTText):
             self.write("<text>%s</text>\n" % item.get_text())
         elif isinstance(item, LTImage):

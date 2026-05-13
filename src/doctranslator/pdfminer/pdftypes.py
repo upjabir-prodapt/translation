@@ -322,22 +322,24 @@ class PDFStream(PDFObject):
             error_msg = "Unsupported predictor: %r" % pred
             raise PDFNotImplementedError(error_msg)
 
+    def _apply_flate_decode(self, data: bytes) -> bytes:
+        """Decompress zlib/deflate data, falling back to corruption recovery on error."""
+        try:
+            return zlib.decompress(data)
+        except zlib.error as e:
+            if settings.STRICT:
+                raise PDFException(f"Invalid zlib bytes: {e!r}, {data!r}")
+            try:
+                return decompress_corrupted(data)
+            except zlib.error:
+                return b""
+
     def _apply_single_stream_filter(
         self, data: bytes, f: object, params: object
     ) -> bytes:
         """Apply one filter to stream data and return the decoded bytes."""
         if f in LITERALS_FLATE_DECODE:
-            # will get errors if the document is encrypted.
-            try:
-                data = zlib.decompress(data)
-            except zlib.error as e:
-                if settings.STRICT:
-                    error_msg = f"Invalid zlib bytes: {e!r}, {data!r}"
-                    raise PDFException(error_msg)
-                try:
-                    data = decompress_corrupted(data)
-                except zlib.error:
-                    data = b""
+            data = self._apply_flate_decode(data)
         elif f in LITERALS_LZW_DECODE:
             data = lzwdecode(data)
         elif f in LITERALS_ASCII85_DECODE:
@@ -349,13 +351,10 @@ class PDFStream(PDFObject):
         elif f in LITERALS_CCITTFAX_DECODE:
             data = ccittfaxdecode(data, params)
         elif f in LITERALS_DCT_DECODE:
-            # This is probably a JPG stream — it does not need to be decoded
-            # twice; just return the stream to the user.
-            pass
+            pass  # JPG stream — return as-is without double-decoding
         elif f in LITERALS_JBIG2_DECODE or f in LITERALS_JPX_DECODE:
             pass  # JBIG2/JPX streams are passed through as-is
         elif f == LITERAL_CRYPT:
-            # not yet..
             raise PDFNotImplementedError("/Crypt filter is unsupported")
         else:
             raise PDFNotImplementedError("Unsupported filter: %r" % f)

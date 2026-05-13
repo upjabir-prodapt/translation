@@ -97,45 +97,75 @@ class PDFPage:
     INHERITABLE_ATTRS = {"Resources", "MediaBox", "CropBox", "Rotate"}
 
     @classmethod
+    def _resolve_page_obj(
+        cls,
+        obj: Any,
+        document: PDFDocument,
+    ) -> tuple[int, dict]:
+        """Resolve *obj* to its object ID and properties dict."""
+        if isinstance(obj, int):
+            object_id: int = obj
+            object_properties: dict = dict_value(document.getobj(object_id)).copy()
+        else:
+            # obj is PDFObjRef or PDFStream
+            object_id = obj.objid  # type: ignore[attr-defined]
+            object_properties = dict_value(obj).copy()
+        return object_id, object_properties
+
+    @classmethod
+    def _depth_first_search_pages(
+        cls,
+        obj: Any,
+        parent: dict[str, Any],
+        document: PDFDocument,
+        visited: set[Any] | None = None,
+    ) -> Iterator[tuple[int, dict]]:
+        """Recursively walk the page-tree rooted at *obj*, yielding (id, props) pairs."""
+        object_id, object_properties = cls._resolve_page_obj(obj, document)
+
+        # Avoid recursion errors by keeping track of visited nodes
+        if visited is None:
+            visited = set()
+        if object_id in visited:
+            return
+        visited.add(object_id)
+
+        for k, v in parent.items():
+            if k in cls.INHERITABLE_ATTRS and k not in object_properties:
+                object_properties[k] = v
+
+        object_type = object_properties.get("Type")
+        if object_type is None and not settings.STRICT:  # See #64
+            object_type = object_properties.get("type")
+
+        if object_type is LITERAL_PAGES and "Kids" in object_properties:
+            log.debug("Pages: Kids=%r", object_properties["Kids"])
+            for child in list_value(object_properties["Kids"]):
+                yield from cls._depth_first_search_pages(
+                    child, object_properties, document, visited
+                )
+        elif object_type is LITERAL_PAGE:
+            log.debug("Page: %r", object_properties)
+            yield (object_id, object_properties)
+
+    @classmethod
+    def _fallback_page_scan(
+        cls,
+        document: PDFDocument,
+        page_labels: Iterator[str | None],
+    ) -> Iterator["PDFPage"]:
+        """Yield pages by scanning all xrefs when the /Pages tree is missing."""
+        for xref in document.xrefs:
+            for objid in xref.get_objids():
+                try:
+                    obj = document.getobj(objid)
+                    if isinstance(obj, dict) and obj.get("Type") is LITERAL_PAGE:
+                        yield cls(document, objid, obj, next(page_labels))
+                except PDFObjectNotFound:
+                    pass
+
+    @classmethod
     def create_pages(cls, document: PDFDocument) -> Iterator["PDFPage"]:
-        def depth_first_search(
-            obj: Any,
-            parent: dict[str, Any],
-            visited: set[Any] | None = None,
-        ) -> Iterator[tuple[int, dict[Any, dict[Any, Any]]]]:
-            if isinstance(obj, int):
-                object_id = obj
-                object_properties = dict_value(document.getobj(object_id)).copy()
-            else:
-                # This looks broken. obj.objid means obj could be either
-                # PDFObjRef or PDFStream, but neither is valid for dict_value.
-                object_id = obj.objid  # type: ignore[attr-defined]
-                object_properties = dict_value(obj).copy()
-
-            # Avoid recursion errors by keeping track of visited nodes
-            if visited is None:
-                visited = set()
-            if object_id in visited:
-                return
-            visited.add(object_id)
-
-            for k, v in parent.items():
-                if k in cls.INHERITABLE_ATTRS and k not in object_properties:
-                    object_properties[k] = v
-
-            object_type = object_properties.get("Type")
-            if object_type is None and not settings.STRICT:  # See #64
-                object_type = object_properties.get("type")
-
-            if object_type is LITERAL_PAGES and "Kids" in object_properties:
-                log.debug("Pages: Kids=%r", object_properties["Kids"])
-                for child in list_value(object_properties["Kids"]):
-                    yield from depth_first_search(child, object_properties, visited)
-
-            elif object_type is LITERAL_PAGE:
-                log.debug("Page: %r", object_properties)
-                yield (object_id, object_properties)
-
         try:
             page_labels: Iterator[str | None] = document.get_page_labels()
         except PDFNoPageLabels:
@@ -143,20 +173,15 @@ class PDFPage:
 
         pages = False
         if "Pages" in document.catalog:
-            objects = depth_first_search(document.catalog["Pages"], document.catalog)
+            objects = cls._depth_first_search_pages(
+                document.catalog["Pages"], document.catalog, document
+            )
             for objid, tree in objects:
                 yield cls(document, objid, tree, next(page_labels))
                 pages = True
         if not pages:
-            # fallback when /Pages is missing.
-            for xref in document.xrefs:
-                for objid in xref.get_objids():
-                    try:
-                        obj = document.getobj(objid)
-                        if isinstance(obj, dict) and obj.get("Type") is LITERAL_PAGE:
-                            yield cls(document, objid, obj, next(page_labels))
-                    except PDFObjectNotFound:
-                        pass
+            # Fallback when /Pages is missing.
+            yield from cls._fallback_page_scan(document, page_labels)
 
     @classmethod
     def get_pages(

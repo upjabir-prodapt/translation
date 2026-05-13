@@ -1063,18 +1063,18 @@ class PageLabels(NumberTree):
                 # Try to cope, by assuming empty labels for the initial pages
                 ranges.insert(0, (0, {}))
 
-        for next, (start, label_dict_unchecked) in enumerate(ranges, 1):
+        for next_idx, (start, label_dict_unchecked) in enumerate(ranges, 1):
             label_dict = dict_value(label_dict_unchecked)
             style = label_dict.get("S")
             prefix = decode_text(str_value(label_dict.get("P", b"")))
             first_value = int_value(label_dict.get("St", 1))
 
-            if next == len(ranges):
+            if next_idx == len(ranges):
                 # This is the last specified range. It continues until the end
                 # of the document.
                 values: Iterable[int] = itertools.count(first_value)
             else:
-                end, _ = ranges[next]
+                end, _ = ranges[next_idx]
                 range_length = end - start
                 values = range(first_value, first_value + range_length)
 
