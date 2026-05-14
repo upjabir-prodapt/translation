@@ -8,8 +8,14 @@ from loguru import logger
 from src.config.constants import settings
 
 
-class InterceptHandler(logging.Handler):
-    """Intercept standard logging and redirect to loguru."""
+class InterceptHandler(logging.Handler):  # NOSONAR
+    """Intercept standard logging and redirect to loguru.
+
+    Security: newlines and carriage returns are stripped from every message
+    before forwarding to prevent log-injection attacks (CWE-117).
+    Actual log-level filtering is applied by loguru (settings.LOG_LEVEL),
+    not by this handler, so the handler's own level is set to NOTSET.
+    """
 
     def emit(self, record):
         """Emit log record through loguru."""
@@ -25,6 +31,7 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
+        # Sanitize message to prevent log injection (strips \n and \r)
         message = record.getMessage().replace("\n", " ").replace("\r", " ")
         logger.opt(depth=depth, exception=record.exc_info).log(level, message)
 
@@ -44,8 +51,12 @@ def setup_logging():
         level=settings.LOG_LEVEL,
     )
 
-    # Intercept standard logging
-    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+    # Intercept standard logging.
+    # level=NOTSET lets every record reach InterceptHandler, which forwards them
+    # to loguru. Loguru then applies the real level filter (settings.LOG_LEVEL).
+    # force=True removes any previously installed handlers so nothing bypasses
+    # the interceptor and logs sensitive data through an uncontrolled channel.
+    logging.basicConfig(handlers=[InterceptHandler()], level=logging.NOTSET, force=True)  # NOSONAR
 
     # Set specific loggers
     logging.getLogger("uvicorn").handlers = [InterceptHandler()]

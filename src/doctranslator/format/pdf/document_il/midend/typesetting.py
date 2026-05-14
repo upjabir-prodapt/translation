@@ -343,47 +343,47 @@ class TypesettingUnit:
 
         if unicode:
             return unicode in [
-                “,”,
-                “.”,
-                “:”,
-                “;”,
-                “?”,
-                “!”,
-                “，”,
-                “。”,
-                “．”,
-                “、”,
-                “：”,
-                “；”,
-                “！”,
-                “‼”,
-                “？”,
-                “⁇”,
-                “””,  # right double quotation mark
-                “’”,  # right single quotation mark
-                “」”,
-                “』”,
-                “)”,
-                “]”,
-                “}”,
-                “）”,
-                “〕”,
-                “〉”,
-                “】”,
-                “〗”,
-                “］”,
-                “｝”,
-                “》”,
-                “～”,
-                “-”,
-                “–“,
-                “—“,
-                “·”,
-                “・”,
-                “‧”,
-                “/”,
-                “／”,
-                “⁄”,
+                ",",
+                ".",
+                ":",
+                ";",
+                "?",
+                "!",
+                "，",
+                "。",
+                "．",
+                "、",
+                "：",
+                "；",
+                "！",
+                "‼",
+                "？",
+                "⁇",
+                """,  # right double quotation mark
+                "'",  # right single quotation mark
+                "」",
+                "』",
+                ")",
+                "]",
+                "}",
+                "）",
+                "〕",
+                "〉",
+                "】",
+                "〗",
+                "］",
+                "｝",
+                "》",
+                "～",
+                "-",
+                "–",
+                "—",
+                "·",
+                "・",
+                "‧",
+                "/",
+                "／",
+                "⁄",
             ]
         return False
 
@@ -403,20 +403,20 @@ class TypesettingUnit:
         if not unicode:
             return False
         return unicode in [
-            “””,  # left double quotation mark
-            “’”,  # left single quotation mark
-            “「”,
-            “『”,
-            “(“,
-            “[“,
-            “{“,
-            “（”,
-            “〔”,
-            “〈”,
-            “《”,
-            “〖”,
-            “〘”,
-            “〚”,
+            """,  # left double quotation mark
+            "'",  # left single quotation mark
+            "「",
+            "『",
+            "(",
+            "[",
+            "{",
+            "（",
+            "〔",
+            "〈",
+            "《",
+            "〖",
+            "〘",
+            "〚",
         ]
 
     def passthrough(
@@ -447,6 +447,8 @@ class TypesettingUnit:
 
     def calculate_box(self):
         if self.char:
+            if self.char.box is None:
+                return Box(0, 0, 0, 0)
             box = copy.deepcopy(self.char.box)
             if self.char.visual_bbox and self.char.visual_bbox.box:
                 box.y = self.char.visual_bbox.box.y
@@ -1023,7 +1025,11 @@ class Typesetting:
                 paragraph,
                 use_english_line_break,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Layout failed at scale {scale} for paragraph {getattr(paragraph, 'debug_id', '?')}: "
+                f"{type(e).__name__}: {e}"
+            )
             return None, False
 
     def _attempt_expand_space(
@@ -1090,6 +1096,7 @@ class Typesetting:
         min_scale = 0.1
         expand_space_flag = 0
         final_typeset_units = None
+        last_attempted_units: list[TypesettingUnit] | None = None
 
         while scale >= min_scale:
             typeset_units, all_units_fit = self._try_layout_at_scale(
@@ -1100,6 +1107,9 @@ class Typesetting:
                 paragraph,
                 use_english_line_break,
             )
+
+            if typeset_units is not None:
+                last_attempted_units = typeset_units
 
             if all_units_fit and typeset_units is not None:
                 if apply_layout:
@@ -1129,7 +1139,18 @@ class Typesetting:
                 apply_layout=apply_layout,
             )
 
-        # 最后返回最小缩放因子
+        # Force-apply the last attempted layout at minimum scale so the paragraph
+        # is never left with empty composition (which causes silent text loss).
+        if apply_layout:
+            if last_attempted_units is not None:
+                final_typeset_units = self._apply_typeset_units_to_paragraph(
+                    last_attempted_units, paragraph, page, min_scale
+                )
+            else:
+                # Every layout attempt threw an exception. At minimum mark the paragraph
+                # as processed so pdf_creater does not log a spurious error.
+                paragraph.scale = min_scale
+
         return min_scale, final_typeset_units
 
     def _get_optimal_scale(
@@ -1275,7 +1296,13 @@ class Typesetting:
                 f"Failed to adjust paragraph positions on page {page.page_number}: {e}"
             )
         for paragraph in page.pdf_paragraph:
-            self.render_paragraph(paragraph, page, fonts)
+            try:
+                self.render_paragraph(paragraph, page, fonts)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to render paragraph {getattr(paragraph, 'debug_id', '?')} "
+                    f"on page {page.page_number}: {type(e).__name__}: {e}"
+                )
 
     def add_watermark(self, page: il_version_1.Page):
         page_width = page.cropbox.box.x2 - page.cropbox.box.x
@@ -1447,7 +1474,10 @@ class Typesetting:
     ) -> tuple[float, bool, list[float]]:
         """Compute the y-coordinate for the next line. Returns (new_y, all_fit, cleared_heights)."""
         max_height = max(current_line_heights)
-        mode_height = statistics.mode(current_line_heights)
+        try:
+            mode_height = statistics.mode(current_line_heights)
+        except statistics.StatisticsError:
+            mode_height = max_height
         new_y = current_y - max(mode_height * line_skip, max_height * 1.05)
         line_ys.append(new_y)
         all_fit = new_y >= box.y
@@ -1473,7 +1503,10 @@ class Typesetting:
             tuple[list[TypesettingUnit], bool]: (已布局的排版单元列表，是否所有单元都放得下)
         """
         font_sizes = self._collect_font_sizes(typesetting_units)
-        font_size = statistics.mode(font_sizes)
+        try:
+            font_size = statistics.mode(font_sizes)
+        except statistics.StatisticsError:
+            font_size = statistics.median(font_sizes) if font_sizes else 12.0
         space_width = (
             self.font_mapper.base_font.char_lengths("你", font_size * scale)[0] * 0.5
         )
@@ -1517,20 +1550,23 @@ class Typesetting:
                 use_english_line_break,
                 width_before_next_break_point,
             ):
-                if not current_line_heights:
-                    return [], False
-                current_x = box.x
-                current_y, line_all_fit, current_line_heights = (
-                    self._advance_to_next_line(
-                        current_line_heights, line_skip, current_y, line_ys, box
+                if current_line_heights:
+                    current_x = box.x
+                    current_y, line_all_fit, current_line_heights = (
+                        self._advance_to_next_line(
+                            current_line_heights, line_skip, current_y, line_ys, box
+                        )
                     )
-                )
-                line_height = 0.0
-                if not line_all_fit:
+                    line_height = 0.0
+                    if not line_all_fit:
+                        all_units_fit = False
+                    if unit.is_space:
+                        line_height = max(line_height, unit_height)
+                        continue
+                else:
+                    # Unit wider than box at current scale — place it anyway to
+                    # prevent empty composition (which silently drops all text).
                     all_units_fit = False
-                if unit.is_space:
-                    line_height = max(line_height, unit_height)
-                    continue
 
             relocated_unit = unit.relocate(current_x, current_y, scale)
             typeset_units.append(relocated_unit)

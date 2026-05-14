@@ -750,7 +750,7 @@ def draw_clustered_lines_to_image(pdf_path, clustered_lines: dict[int, list[Line
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])
+    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])  # NOSONAR
     for pdf_path in (
         "2404.16109v1.pdf",
         "2022 - Bortoli_Valentin De, Mathieu_Emile - Riemannian Score-Based Generative Modelling.pdf",

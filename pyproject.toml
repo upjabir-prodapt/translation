@@ -160,13 +160,17 @@ source = ["src"]
 relative_files = true
 omit = [
     "src/doctranslator/*",
+    "src/doctranslator/**/*",
     "src/loaders/*",
+    "src/loaders/**/*",
 ]
 
 [tool.coverage.report]
 omit = [
     "src/doctranslator/*",
+    "src/doctranslator/**/*",
     "src/loaders/*",
+    "src/loaders/**/*",
 ]
 exclude_lines = [
     "pragma: no cover",

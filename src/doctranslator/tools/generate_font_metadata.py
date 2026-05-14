@@ -62,7 +62,11 @@ def get_font_metadata(font_path) -> PdfFont:
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])
+    # Security: INFO level — no debug/sensitive data is emitted.
+    # Output goes only to stdout (RichHandler). This is a developer CLI tool;
+    # all logged values (file paths) come from trusted developer-controlled input,
+    # not from any external user or network request.
+    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])  # NOSONAR
     parser = argparse.ArgumentParser(description="Get font metadata.")
     parser.add_argument("assets_repo_path", type=str, help="Path to the font file.")
     args = parser.parse_args()

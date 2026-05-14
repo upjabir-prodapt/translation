@@ -135,3 +135,64 @@ class TestPDFValidator:
         ):
             with pytest.raises(ValidationError, match="Failed to validate PDF"):
                 await PDFValidator.validate_pdf_file(file)
+
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_no_filename_fallback(self):
+        """When UploadFile has no filename, metadata should default to 'unknown.pdf'."""
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename=None, file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            return_value={"page_count": 1, "encrypted": False},
+        ):
+            content, metadata = await PDFValidator.validate_pdf_file(file)
+            assert metadata["filename"] == "unknown.pdf"
+            assert content == file_content
+
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_none_metadata(self, mock_open):
+        """When doc.metadata is None, the `or {}` fallback is used (no KeyError)."""
+        mock_doc = MagicMock()
+        mock_doc.metadata = None
+        mock_doc.__len__.return_value = 2
+        mock_doc.is_encrypted = False
+        mock_doc.needs_pass = False
+        mock_open.return_value = mock_doc
+
+        metadata = PDFValidator.extract_pdf_metadata(b"fake-content")
+        assert metadata["page_count"] == 2
+        assert metadata["pdf_version"] == "Unknown"
+        assert metadata["title"] == ""
+
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_full_fields(self, mock_open):
+        """All metadata fields are populated from doc.metadata."""
+        mock_doc = MagicMock()
+        mock_doc.metadata = {
+            "format": "PDF 1.7",
+            "title": "Report",
+            "author": "Alice",
+            "subject": "Finance",
+            "creator": "LibreOffice",
+            "producer": "PDFium",
+        }
+        mock_doc.__len__.return_value = 10
+        mock_doc.is_encrypted = False
+        mock_doc.needs_pass = False
+        mock_open.return_value = mock_doc
+
+        metadata = PDFValidator.extract_pdf_metadata(b"fake")
+        assert metadata["pdf_version"] == "PDF 1.7"
+        assert metadata["author"] == "Alice"
+        assert metadata["subject"] == "Finance"
+        assert metadata["creator"] == "LibreOffice"
+        assert metadata["producer"] == "PDFium"
+        assert metadata["page_count"] == 10
+
+    def test_validate_pdf_bytes_at_exact_size_limit(self):
+        """Content exactly at MAX_FILE_SIZE should raise (>= check)."""
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            mock_settings.MAX_FILE_SIZE = 5
+            with pytest.raises(ValidationError, match="File size exceeds"):
+                PDFValidator.validate_pdf_bytes(b"12345", "test.pdf")

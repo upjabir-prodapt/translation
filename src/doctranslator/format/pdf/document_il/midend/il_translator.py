@@ -146,7 +146,8 @@ class PbarContext:
         return self.pbar
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.pbar.advance()
+        if self.pbar is not None:
+            self.pbar.advance()
 
 
 class DocumentTranslateTracker:

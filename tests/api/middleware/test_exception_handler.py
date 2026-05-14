@@ -1,3 +1,7 @@
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from src.api.exceptions import BabelDocError
@@ -8,6 +12,7 @@ from src.api.exceptions import JobNotFoundError
 from src.api.exceptions import StorageError
 from src.api.exceptions import TranslationError
 from src.api.exceptions import ValidationError
+from src.api.middleware.exception_handler import exception_handler_middleware
 from src.api.middleware.exception_handler import handle_exception
 
 
@@ -101,3 +106,59 @@ class TestExceptionHandler:
         exc = BadStr()
         resp = handle_exception(exc)
         assert resp.status_code == 500
+
+
+class TestExceptionHandlerMiddleware:
+    async def test_middleware_success(self):
+        request = MagicMock()
+        expected_response = MagicMock()
+
+        async def call_next(req):
+            return expected_response
+
+        result = await exception_handler_middleware(request, call_next)
+        assert result is expected_response
+
+    async def test_middleware_catches_validation_error(self):
+        request = MagicMock()
+
+        async def call_next(req):
+            raise ValidationError("bad input")
+
+        result = await exception_handler_middleware(request, call_next)
+        assert result.status_code == 422
+        assert b"VALIDATION_ERROR" in result.body
+
+    async def test_middleware_catches_generic_exception(self):
+        request = MagicMock()
+
+        async def call_next(req):
+            raise RuntimeError("unexpected failure")
+
+        result = await exception_handler_middleware(request, call_next)
+        assert result.status_code == 500
+
+    async def test_middleware_catches_http_exception(self):
+        request = MagicMock()
+
+        async def call_next(req):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        result = await exception_handler_middleware(request, call_next)
+        assert result.status_code == 403
+
+    async def test_middleware_coroutine_raised_as_exception(self):
+        """Covers the asyncio.iscoroutine(exc) branch via patching."""
+        request = MagicMock()
+
+        async def call_next(req):
+            raise Exception("placeholder")
+
+        with patch(
+            "src.api.middleware.exception_handler.asyncio.iscoroutine",
+            return_value=True,
+        ):
+            # exc is not a real coroutine so `await exc` raises TypeError,
+            # caught by the nested except block → handle_exception(TypeError)
+            result = await exception_handler_middleware(request, call_next)
+            assert result.status_code == 500

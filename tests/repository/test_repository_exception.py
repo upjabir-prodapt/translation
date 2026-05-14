@@ -24,9 +24,21 @@ class TestStorageError:
         assert exc.details == {"operation": "download"}
         assert "path" not in exc.details
 
+    def test_with_path_only(self):
+        exc = StorageError("failed", path="gs://bucket/file.pdf")
+        assert exc.path == "gs://bucket/file.pdf"
+        assert exc.operation is None
+        assert exc.details == {"path": "gs://bucket/file.pdf"}
+        assert "operation" not in exc.details
+
     def test_str(self):
         exc = StorageError("oops")
         assert str(exc) == "oops"
+
+    def test_is_exception(self):
+        exc = StorageError("err")
+        assert isinstance(exc, Exception)
+        assert exc.args == ("err",)
 
 
 class TestRepositoryError:
@@ -64,6 +76,23 @@ class TestBigQueryError:
         assert "table" not in exc.details
         assert "query" not in exc.details
 
+    def test_with_table_only(self):
+        exc = BigQueryError("error", table="my_table")
+        assert exc.details == {"table": "my_table"}
+        assert "dataset" not in exc.details
+        assert "query" not in exc.details
+
+    def test_with_query_only(self):
+        exc = BigQueryError("error", query="SELECT * FROM jobs")
+        assert exc.details == {"query": "SELECT * FROM jobs"}
+        assert "dataset" not in exc.details
+        assert "table" not in exc.details
+
     def test_is_repository_error(self):
         exc = BigQueryError("error")
         assert isinstance(exc, RepositoryError)
+
+    def test_message_and_str(self):
+        exc = BigQueryError("bq failure msg")
+        assert exc.message == "bq failure msg"
+        assert str(exc) == "bq failure msg"

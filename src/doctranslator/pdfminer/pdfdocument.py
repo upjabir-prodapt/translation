@@ -7,10 +7,15 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import KeysView
 from collections.abc import Sequence
-from hashlib import md5
+from hashlib import md5  # usedforsecurity=False applied at every call site — see note below
 from hashlib import sha256
 from hashlib import sha384
 from hashlib import sha512
+# Note on MD5 usage: all md5() calls in this module implement Algorithms 3.2–3.7
+# from the PDF Reference (ISO 32000-1 §7.6.3). MD5 is mandated by the PDF
+# specification for revision 2–4 security handlers and cannot be substituted.
+# Each call passes usedforsecurity=False to document this and to maintain
+# compatibility with FIPS-mode deployments.
 from typing import Any
 from typing import cast
 
@@ -404,7 +409,7 @@ class PDFStandardSecurityHandler:
             return Arcfour(key).encrypt(self.PASSWORD_PADDING)  # 2
         else:
             # Algorithm 3.5
-            hash_obj = md5(self.PASSWORD_PADDING)  # 2
+            hash_obj = md5(self.PASSWORD_PADDING, usedforsecurity=False)  # 2  # NOSONAR
             hash_obj.update(self.docid[0])  # 3
             result = Arcfour(key).encrypt(hash_obj.digest())  # 4
             for i in range(1, 20):  # 5
@@ -416,7 +421,7 @@ class PDFStandardSecurityHandler:
     def compute_encryption_key(self, password: bytes) -> bytes:
         # Algorithm 3.2
         password = (password + self.PASSWORD_PADDING)[:32]  # 1
-        hash_obj = md5(password)  # 2
+        hash_obj = md5(password, usedforsecurity=False)  # 2  # NOSONAR
         hash_obj.update(self.o)  # 3
         # See https://github.com/pdfminer/pdfminer.six/issues/186
         hash_obj.update(struct.pack("<L", self.p))  # 4
@@ -429,7 +434,7 @@ class PDFStandardSecurityHandler:
         if self.r >= 3:
             n = self.length // 8
             for _ in range(50):
-                result = md5(result[:n]).digest()
+                result = md5(result[:n], usedforsecurity=False).digest()  # NOSONAR
         return result[:n]
 
     def authenticate(self, password: str) -> bytes | None:
@@ -456,10 +461,10 @@ class PDFStandardSecurityHandler:
     def authenticate_owner_password(self, password: bytes) -> bytes | None:
         # Algorithm 3.7
         password = (password + self.PASSWORD_PADDING)[:32]
-        hash_obj = md5(password)
+        hash_obj = md5(password, usedforsecurity=False)  # NOSONAR
         if self.r >= 3:
             for _ in range(50):
-                hash_obj = md5(hash_obj.digest())
+                hash_obj = md5(hash_obj.digest(), usedforsecurity=False)  # NOSONAR
         n = 5
         if self.r >= 3:
             n = self.length // 8
@@ -485,7 +490,7 @@ class PDFStandardSecurityHandler:
     def decrypt_rc4(self, objid: int, genno: int, data: bytes) -> bytes:
         assert self.key is not None
         key = self.key + struct.pack("<L", objid)[:3] + struct.pack("<L", genno)[:2]
-        hash_obj = md5(key)
+        hash_obj = md5(key, usedforsecurity=False)  # NOSONAR
         key = hash_obj.digest()[: min(len(key), 16)]
         return Arcfour(key).decrypt(data)
 
@@ -550,7 +555,7 @@ class PDFStandardSecurityHandlerV4(PDFStandardSecurityHandler):
             + struct.pack("<L", genno)[:2]
             + b"sAlT"
         )
-        hash_obj = md5(key)
+        hash_obj = md5(key, usedforsecurity=False)  # NOSONAR
         key = hash_obj.digest()[: min(len(key), 16)]
         initialization_vector = data[:16]
         ciphertext = data[16:]

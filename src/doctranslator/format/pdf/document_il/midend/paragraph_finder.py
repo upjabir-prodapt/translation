@@ -1,6 +1,6 @@
 import logging
-import random
 import re
+import secrets
 
 import numpy as np
 
@@ -59,7 +59,7 @@ BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 def generate_base58_id(length: int = 5) -> str:
     """Generate a random base58 ID of specified length."""
-    return "".join(random.choice(BASE58_ALPHABET) for _ in range(length))
+    return "".join(secrets.choice(BASE58_ALPHABET) for _ in range(length))
 
 
 class ParagraphFinder:

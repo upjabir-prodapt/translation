@@ -6,7 +6,7 @@ import atexit
 import itertools
 import logging
 import queue
-import random
+import secrets
 import sys
 import threading
 import weakref
@@ -214,7 +214,7 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
                     "cannot schedule new futures after interpreter shutdown"
                 )
 
-            priority = kwargs.get("priority", random.randint(0, sys.maxsize - 1))  # noqa: S311
+            priority = kwargs.get("priority", secrets.randbelow(sys.maxsize))
             if "priority" in kwargs:
                 del kwargs["priority"]
 
