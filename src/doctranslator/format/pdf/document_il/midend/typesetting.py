@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import concurrent.futures
 import copy
+import concurrent.futures
 import logging
 import re
 import statistics
@@ -13,7 +13,6 @@ import pymupdf
 import regex
 from rtree import index
 
-from src.config.constants import settings
 from src.doctranslator.format.pdf.document_il import Box
 from src.doctranslator.format.pdf.document_il import PdfCharacter
 from src.doctranslator.format.pdf.document_il import PdfCurve
@@ -23,12 +22,11 @@ from src.doctranslator.format.pdf.document_il import PdfParagraphComposition
 from src.doctranslator.format.pdf.document_il import PdfStyle
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
-    update_formula_data,
-)
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import update_formula_data
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import box_to_tuple
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.format.pdf.translation_config import WatermarkOutputMode
+from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +227,18 @@ class TypesettingUnit:
 
         return self.is_cjk_char_cache
 
-    _CJK_PUNCTUATION_SET = frozenset(
-        [
+    def calc_is_cjk_char(self):
+        if self.formular:
+            return False
+        unicode = self.try_get_unicode()
+        if not unicode:
+            return False
+        if "(cid" in unicode:
+            return False
+        if len(unicode) > 1:
+            return False
+        assert len(unicode) == 1, "Unicode must be a single character"
+        if unicode in [
             "（",
             "）",
             "【",
@@ -253,68 +261,42 @@ class TypesettingUnit:
             "？",
             "！",
             "，",
-        ]
-    )
-
-    def _is_cjk_by_punctuation_list(self, unicode: str) -> bool:
-        """Return True if the character is in the CJK punctuation list."""
-        return unicode in self._CJK_PUNCTUATION_SET
-
-    def _is_cjk_by_regex(self, unicode: str) -> bool:
-        """Return True if the character matches CJK Unicode ranges via regex."""
-        return bool(
-            re.match(
+        ]:
+            return True
+        if unicode:
+            if re.match(
                 r"^["
-                r"　-〿"  # CJK Symbols and Punctuation
-                r"぀-ゟ"  # Hiragana
-                r"゠-ヿ"  # Katakana
-                r"㄀-ㄯ"  # Bopomofo
-                r"가-힯"  # Hangul Syllables
-                r"ᄀ-ᇿ"  # Hangul Jamo
-                r"㄰-㆏"  # Hangul Compatibility Jamo
-                r"ꥠ-꥿"  # Hangul Jamo Extended-A
-                r"ힰ-퟿"  # Hangul Jamo Extended-B
-                r"㆐-㆟"  # Kanbun
-                r"㈀-㋿"  # Enclosed CJK Letters and Months
-                r"㌀-㏿"  # CJK Compatibility
-                r"︰-﹏"  # CJK Compatibility Forms
-                r"一-鿿"  # CJK Unified Ideographs
-                r"⺀-⻿"  # CJK Radicals Supplement
-                r"㇀-㇯"  # CJK Strokes
-                r"⼀-⿟"  # Kangxi Radicals
-                r"︐-︟"  # Vertical Forms
+                r"\u3000-\u303f"  # CJK Symbols and Punctuation
+                r"\u3040-\u309f"  # Hiragana
+                r"\u30a0-\u30ff"  # Katakana
+                r"\u3100-\u312f"  # Bopomofo
+                r"\uac00-\ud7af"  # Hangul Syllables
+                r"\u1100-\u11ff"  # Hangul Jamo
+                r"\u3130-\u318f"  # Hangul Compatibility Jamo
+                r"\ua960-\ua97f"  # Hangul Jamo Extended-A
+                r"\ud7b0-\ud7ff"  # Hangul Jamo Extended-B
+                r"\u3190-\u319f"  # Kanbun
+                r"\u3200-\u32ff"  # Enclosed CJK Letters and Months
+                r"\u3300-\u33ff"  # CJK Compatibility
+                r"\ufe30-\ufe4f"  # CJK Compatibility Forms
+                r"\u4e00-\u9fff"  # CJK Unified Ideographs
+                r"\u2e80-\u2eff"  # CJK Radicals Supplement
+                r"\u31c0-\u31ef"  # CJK Strokes
+                r"\u2f00-\u2fdf"  # Kangxi Radicals
+                r"\ufe10-\ufe1f"  # Vertical Forms
                 r"]+$",
                 unicode,
-            )
-        )
-
-    def _is_cjk_by_unicode_name(self, unicode: str) -> bool:
-        """Return True if the character's Unicode name indicates CJK or FULLWIDTH."""
-        try:
-            unicodedata_name = unicodedata.name(unicode)
-            return (
-                "CJK UNIFIED IDEOGRAPH" in unicodedata_name
-                or "FULLWIDTH" in unicodedata_name
-            )
-        except ValueError:
-            return False
-
-    def calc_is_cjk_char(self):
-        if self.formular:
-            return False
-        unicode = self.try_get_unicode()
-        if not unicode:
-            return False
-        if "(cid" in unicode:
-            return False
-        if len(unicode) > 1:
-            return False
-        assert len(unicode) == 1, "Unicode must be a single character"
-        if self._is_cjk_by_punctuation_list(unicode):
-            return True
-        if self._is_cjk_by_regex(unicode):
-            return True
-        return self._is_cjk_by_unicode_name(unicode)
+            ):
+                return True
+            try:
+                unicodedata_name = unicodedata.name(unicode)
+                return (
+                    "CJK UNIFIED IDEOGRAPH" in unicodedata_name
+                    or "FULLWIDTH" in unicodedata_name
+                )
+            except ValueError:
+                return False
+        return False
 
     @property
     def is_space(self):
@@ -343,47 +325,55 @@ class TypesettingUnit:
 
         if unicode:
             return unicode in [
+                # 英文标点
                 ",",
                 ".",
                 ":",
                 ";",
                 "?",
                 "!",
-                "，",
-                "。",
-                "．",
-                "、",
-                "：",
-                "；",
-                "！",
-                "‼",
-                "？",
-                "⁇",
-                """,  # right double quotation mark
-                "'",  # right single quotation mark
-                "」",
-                "』",
-                ")",
-                "]",
-                "}",
-                "）",
-                "〕",
-                "〉",
-                "】",
-                "〗",
-                "］",
-                "｝",
-                "》",
-                "～",
-                "-",
-                "–",
-                "—",
-                "·",
-                "・",
-                "‧",
-                "/",
-                "／",
-                "⁄",
+                # 中文点号
+                "，",  # 逗号
+                "。",  # 句号
+                "．",  # 全角句号
+                "、",  # 顿号
+                "：",  # 冒号
+                "；",  # 分号
+                "！",  # 叹号
+                "‼",  # 双叹号
+                "？",  # 问号
+                "⁇",  # 双问号
+                # 结束引号
+                "”",  # 右双引号
+                "’",  # 右单引号
+                "」",  # 右直角单引号
+                "』",  # 右直角双引号
+                # 结束括号
+                ")",  # 右圆括号
+                "]",  # 右方括号
+                "}",  # 右花括号
+                "）",  # 右圆括号
+                "〕",  # 右龟甲括号
+                "〉",  # 右单书名号
+                "】",  # 右黑色方头括号
+                "〗",  # 右空白方头括号
+                "］",  # 全角右方括号
+                "｝",  # 全角右花括号
+                # 结束双书名号
+                "》",  # 右双书名号
+                # 连接号
+                "～",  # 全角波浪号
+                "-",  # 连字符减号
+                "–",  # 短破折号 (EN DASH)
+                "—",  # 长破折号 (EM DASH)
+                # 间隔号
+                "·",  # 中间点
+                "・",  # 片假名中间点
+                "‧",  # 连字点
+                # 分隔号
+                "/",  # 斜杠
+                "／",  # 全角斜杠
+                "⁄",  # 分数斜杠
             ]
         return False
 
@@ -403,20 +393,23 @@ class TypesettingUnit:
         if not unicode:
             return False
         return unicode in [
-            """,  # left double quotation mark
-            "'",  # left single quotation mark
-            "「",
-            "『",
-            "(",
-            "[",
-            "{",
-            "（",
-            "〔",
-            "〈",
-            "《",
-            "〖",
-            "〘",
-            "〚",
+            # 开始引号
+            "“",  # 左双引号
+            "‘",  # 左单引号
+            "「",  # 左直角单引号
+            "『",  # 左直角双引号
+            # 开始括号
+            "(",  # 左圆括号
+            "[",  # 左方括号
+            "{",  # 左花括号
+            "（",  # 左圆括号
+            "〔",  # 左龟甲括号
+            "〈",  # 左单书名号
+            "《",  # 左双书名号
+            # 开始单双书名号
+            "〖",  # 左空白方头括号
+            "〘",  # 左黑色方头括号
+            "〚",  # 左单书名号
         ]
 
     def passthrough(
@@ -447,16 +440,20 @@ class TypesettingUnit:
 
     def calculate_box(self):
         if self.char:
-            if self.char.box is None:
-                return Box(0, 0, 0, 0)
             box = copy.deepcopy(self.char.box)
             if self.char.visual_bbox and self.char.visual_bbox.box:
                 box.y = self.char.visual_bbox.box.y
                 box.y2 = self.char.visual_bbox.box.y2
+                # return self.char.visual_bbox.box
 
             return box
         elif self.formular:
             return self.formular.box
+            # if self.formular.x_offset <= 0.5:
+            #     return self.formular.box
+            # formular_box = copy.copy(self.formular.box)
+            # formular_box.x2 += self.formular.x_advance
+            # return formular_box
         elif self.unicode:
             char_width = self.font.char_lengths(self.unicode, self.font_size)[0]
             if self.x is None or self.y is None or self.scale is None:
@@ -492,139 +489,6 @@ class TypesettingUnit:
         box = self.box
         return box.y2 - box.y
 
-    def _relocate_char(self, x: float, y: float, scale: float) -> TypesettingUnit:
-        """Helper: relocate a char-based TypesettingUnit."""
-        new_char = PdfCharacter(
-            pdf_character_id=self.char.pdf_character_id,
-            char_unicode=self.char.char_unicode,
-            box=Box(
-                x=x,
-                y=y,
-                x2=x + self.width * scale,
-                y2=y + self.height * scale,
-            ),
-            pdf_style=PdfStyle(
-                font_id=self.char.pdf_style.font_id,
-                font_size=self.char.pdf_style.font_size * scale,
-                graphic_state=self.char.pdf_style.graphic_state,
-            ),
-            scale=scale,
-            vertical=self.char.vertical,
-            advance=self.char.advance * scale if self.char.advance else None,
-            debug_info=self.debug_info,
-            xobj_id=self.char.xobj_id,
-        )
-        new_tu = TypesettingUnit(char=new_char)
-        new_tu.try_resue_cache(self)
-        return new_tu
-
-    def _relocate_formula_char(
-        self, char, x: float, y: float, scale: float, min_x: float, min_y: float
-    ) -> PdfCharacter:
-        """Helper: build a relocated PdfCharacter for a formula character."""
-        rel_x = char.box.x - min_x
-        rel_y = char.box.y - min_y
-        visual_rel_x = char.visual_bbox.box.x - min_x
-        visual_rel_y = char.visual_bbox.box.y - min_y
-        return PdfCharacter(
-            pdf_character_id=char.pdf_character_id,
-            char_unicode=char.char_unicode,
-            box=Box(
-                x=x + (rel_x + self.formular.x_offset) * scale,
-                y=y + (rel_y + self.formular.y_offset) * scale,
-                x2=x
-                + (rel_x + (char.box.x2 - char.box.x) + self.formular.x_offset) * scale,
-                y2=y
-                + (rel_y + (char.box.y2 - char.box.y) + self.formular.y_offset) * scale,
-            ),
-            visual_bbox=il_version_1.VisualBbox(
-                box=Box(
-                    x=x + (visual_rel_x + self.formular.x_offset) * scale,
-                    y=y + (visual_rel_y + self.formular.y_offset) * scale,
-                    x2=x
-                    + (
-                        visual_rel_x
-                        + (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
-                        + self.formular.x_offset
-                    )
-                    * scale,
-                    y2=y
-                    + (
-                        visual_rel_y
-                        + (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
-                        + self.formular.y_offset
-                    )
-                    * scale,
-                ),
-            ),
-            pdf_style=PdfStyle(
-                font_id=char.pdf_style.font_id,
-                font_size=char.pdf_style.font_size * scale,
-                graphic_state=char.pdf_style.graphic_state,
-            ),
-            scale=scale,
-            vertical=char.vertical,
-            advance=char.advance * scale if char.advance else None,
-            xobj_id=char.xobj_id,
-        )
-
-    def _relocate_formula(self, x: float, y: float, scale: float) -> TypesettingUnit:
-        """Helper: relocate a formula-based TypesettingUnit."""
-        min_x = self.formular.box.x
-        min_y = self.formular.box.y
-        new_chars = [
-            self._relocate_formula_char(char, x, y, scale, min_x, min_y)
-            for char in self.formular.pdf_character
-        ]
-
-        bbox_min_x = min(char.visual_bbox.box.x for char in new_chars)
-        bbox_min_y = min(char.visual_bbox.box.y for char in new_chars)
-        bbox_max_x = max(char.visual_bbox.box.x2 for char in new_chars)
-        bbox_max_y = max(char.visual_bbox.box.y2 for char in new_chars)
-
-        new_formula = PdfFormula(
-            box=Box(x=bbox_min_x, y=bbox_min_y, x2=bbox_max_x, y2=bbox_max_y),
-            pdf_character=new_chars,
-            x_offset=self.formular.x_offset * scale,
-            y_offset=self.formular.y_offset * scale,
-            x_advance=self.formular.x_advance * scale,
-        )
-
-        new_formula.pdf_curve = [
-            self._transform_curve_for_relocation(
-                curve, self.formular.box.x, self.formular.box.y, x, y, scale
-            )
-            for curve in self.formular.pdf_curve
-        ]
-        new_formula.pdf_form = [
-            self._transform_form_for_relocation(
-                form, self.formular.box.x, self.formular.box.y, x, y, scale
-            )
-            for form in self.formular.pdf_form
-        ]
-
-        update_formula_data(new_formula)
-        new_tu = TypesettingUnit(formular=new_formula)
-        new_tu.try_resue_cache(self)
-        return new_tu
-
-    def _relocate_unicode(self, x: float, y: float, scale: float) -> TypesettingUnit:
-        """Helper: relocate a unicode-based TypesettingUnit."""
-        new_unit = TypesettingUnit(
-            unicode=self.unicode,
-            font=self.font,
-            original_font=self.original_font,
-            font_size=self.font_size * scale,
-            style=self.style,
-            xobj_id=self.xobj_id,
-            debug_info=self.debug_info,
-        )
-        new_unit.x = x
-        new_unit.y = y
-        new_unit.scale = scale
-        new_unit.try_resue_cache(self)
-        return new_unit
-
     def relocate(
         self,
         x: float,
@@ -642,11 +506,155 @@ class TypesettingUnit:
             新的排版单元
         """
         if self.char:
-            return self._relocate_char(x, y, scale)
+            # 创建新的字符对象
+            new_char = PdfCharacter(
+                pdf_character_id=self.char.pdf_character_id,
+                char_unicode=self.char.char_unicode,
+                box=Box(
+                    x=x,
+                    y=y,
+                    x2=x + self.width * scale,
+                    y2=y + self.height * scale,
+                ),
+                pdf_style=PdfStyle(
+                    font_id=self.char.pdf_style.font_id,
+                    font_size=self.char.pdf_style.font_size * scale,
+                    graphic_state=self.char.pdf_style.graphic_state,
+                ),
+                scale=scale,
+                vertical=self.char.vertical,
+                advance=self.char.advance * scale if self.char.advance else None,
+                debug_info=self.debug_info,
+                xobj_id=self.char.xobj_id,
+            )
+            new_tu = TypesettingUnit(char=new_char)
+            new_tu.try_resue_cache(self)
+            return new_tu
+
         elif self.formular:
-            return self._relocate_formula(x, y, scale)
+            # 创建新的公式对象，保持内部字符的相对位置
+            new_chars = []
+            min_x = self.formular.box.x
+            min_y = self.formular.box.y
+
+            for char in self.formular.pdf_character:
+                # 计算相对位置
+                rel_x = char.box.x - min_x
+                rel_y = char.box.y - min_y
+
+                visual_rel_x = char.visual_bbox.box.x - min_x
+                visual_rel_y = char.visual_bbox.box.y - min_y
+
+                # 创建新的字符对象
+                new_char = PdfCharacter(
+                    pdf_character_id=char.pdf_character_id,
+                    char_unicode=char.char_unicode,
+                    box=Box(
+                        x=x + (rel_x + self.formular.x_offset) * scale,
+                        y=y + (rel_y + self.formular.y_offset) * scale,
+                        x2=x
+                        + (rel_x + (char.box.x2 - char.box.x) + self.formular.x_offset)
+                        * scale,
+                        y2=y
+                        + (rel_y + (char.box.y2 - char.box.y) + self.formular.y_offset)
+                        * scale,
+                    ),
+                    visual_bbox=il_version_1.VisualBbox(
+                        box=Box(
+                            x=x + (visual_rel_x + self.formular.x_offset) * scale,
+                            y=y + (visual_rel_y + self.formular.y_offset) * scale,
+                            x2=x
+                            + (
+                                visual_rel_x
+                                + (char.visual_bbox.box.x2 - char.visual_bbox.box.x)
+                                + self.formular.x_offset
+                            )
+                            * scale,
+                            y2=y
+                            + (
+                                visual_rel_y
+                                + (char.visual_bbox.box.y2 - char.visual_bbox.box.y)
+                                + self.formular.y_offset
+                            )
+                            * scale,
+                        ),
+                    ),
+                    pdf_style=PdfStyle(
+                        font_id=char.pdf_style.font_id,
+                        font_size=char.pdf_style.font_size * scale,
+                        graphic_state=char.pdf_style.graphic_state,
+                    ),
+                    scale=scale,
+                    vertical=char.vertical,
+                    advance=char.advance * scale if char.advance else None,
+                    xobj_id=char.xobj_id,
+                )
+                new_chars.append(new_char)
+
+            # Calculate bounding box from new_chars
+            min_x = min(char.visual_bbox.box.x for char in new_chars)
+            min_y = min(char.visual_bbox.box.y for char in new_chars)
+            max_x = max(char.visual_bbox.box.x2 for char in new_chars)
+            max_y = max(char.visual_bbox.box.y2 for char in new_chars)
+
+            new_formula = PdfFormula(
+                box=Box(
+                    x=min_x,
+                    y=min_y,
+                    x2=max_x,
+                    y2=max_y,
+                ),
+                pdf_character=new_chars,
+                x_offset=self.formular.x_offset * scale,
+                y_offset=self.formular.y_offset * scale,
+                x_advance=self.formular.x_advance * scale,
+            )
+
+            # Handle contained curves
+            new_curves = []
+            for curve in self.formular.pdf_curve:
+                new_curve = self._transform_curve_for_relocation(
+                    curve,
+                    self.formular.box.x,
+                    self.formular.box.y,
+                    x,
+                    y,
+                    scale,
+                )
+                new_curves.append(new_curve)
+            new_formula.pdf_curve = new_curves
+
+            # Handle contained forms
+            new_forms = []
+            for form in self.formular.pdf_form:
+                new_form = self._transform_form_for_relocation(
+                    form, self.formular.box.x, self.formular.box.y, x, y, scale
+                )
+                new_forms.append(new_form)
+            new_formula.pdf_form = new_forms
+
+            update_formula_data(new_formula)
+
+            new_tu = TypesettingUnit(formular=new_formula)
+            new_tu.try_resue_cache(self)
+            return new_tu
+
         elif self.unicode:
-            return self._relocate_unicode(x, y, scale)
+            # 对于 Unicode 字符，我们存储新的位置信息
+            new_unit = TypesettingUnit(
+                unicode=self.unicode,
+                font=self.font,
+                original_font=self.original_font,
+                font_size=self.font_size * scale,
+                style=self.style,
+                xobj_id=self.xobj_id,
+                debug_info=self.debug_info,
+            )
+            new_unit.x = x
+            new_unit.y = y
+            new_unit.scale = scale
+            new_unit.try_resue_cache(self)
+            return new_unit
 
     def _transform_curve_for_relocation(
         self,
@@ -780,6 +788,10 @@ class TypesettingUnit:
             )
             x = self.x
             y = self.y
+            # if self.original_font and self.font and hasattr(self.original_font, "descent") and hasattr(self.font, "descent_fontmap"):
+            #     original_descent = self.original_font.descent
+            #     new_descent = self.font.descent_fontmap
+            #     y -= (original_descent - new_descent) * self.font_size / 1000
 
             # 计算字符宽度
             char_width = self.width
@@ -830,101 +842,6 @@ class Typesetting:
             or ("TW" in self.lang_code)
         )
 
-    def _build_page_fonts(
-        self, page: il_version_1.Page
-    ) -> dict[str | int, il_version_1.PdfFont | dict[str, il_version_1.PdfFont]]:
-        """Build the combined font lookup map for a page (including xobject fonts)."""
-        fonts: dict[
-            str | int,
-            il_version_1.PdfFont | dict[str, il_version_1.PdfFont],
-        ] = {f.font_id: f for f in page.pdf_font if f.font_id}
-        page_fonts = {f.font_id: f for f in page.pdf_font if f.font_id}
-        for k, v in self.font_mapper.fontid2font.items():
-            fonts[k] = v
-        for xobj in page.pdf_xobject:
-            if xobj.xobj_id is not None:
-                fonts[xobj.xobj_id] = page_fonts.copy()
-                for font in xobj.pdf_font:
-                    if (
-                        xobj.xobj_id in fonts
-                        and isinstance(fonts[xobj.xobj_id], dict)
-                        and font.font_id
-                    ):
-                        fonts[xobj.xobj_id][font.font_id] = font
-        return fonts
-
-    def _compute_paragraph_optimal_scale(
-        self,
-        paragraph: il_version_1.PdfParagraph,
-        page: il_version_1.Page,
-        fonts,
-    ) -> tuple[float, int]:
-        """Compute the optimal scale for a paragraph and return (scale, unit_count)."""
-        typesetting_units = self.create_typesetting_units(paragraph, fonts)
-        unit_count = len(typesetting_units)
-        for unit in typesetting_units:
-            if unit.formular:
-                unit_count += len(unit.formular.pdf_character) - 1
-        if all(unit.can_passthrough for unit in typesetting_units):
-            return 1.0, unit_count
-        return self._get_optimal_scale(paragraph, page, typesetting_units), unit_count
-
-    def _preprocess_page(
-        self,
-        page: il_version_1.Page,
-        pbar_lock: threading.Lock,
-        pbar,
-    ) -> tuple[list[float], list[il_version_1.PdfParagraph]]:
-        """Compute optimal scales for all paragraphs on a single page."""
-        page_scales: list[float] = []
-        page_paragraphs: list[il_version_1.PdfParagraph] = []
-        fonts = self._build_page_fonts(page)
-
-        for paragraph in page.pdf_paragraph:
-            page_paragraphs.append(paragraph)
-            unit_count = 0
-            try:
-                optimal_scale, unit_count = self._compute_paragraph_optimal_scale(
-                    paragraph, page, fonts
-                )
-                paragraph.optimal_scale = optimal_scale
-            except Exception as e:
-                logger.warning(f"预处理段落时出错：{e}")
-                paragraph.optimal_scale = 1.0
-
-            if paragraph.optimal_scale is not None:
-                page_scales.extend([paragraph.optimal_scale] * unit_count)
-
-        with pbar_lock:
-            pbar.advance()
-        return page_scales, page_paragraphs
-
-    def _cap_scales_at_mode(
-        self,
-        all_scales: list[float],
-        all_paragraphs: list[il_version_1.PdfParagraph],
-    ):
-        """Clamp every paragraph's optimal_scale down to the modal scale value."""
-        if not all_scales:
-            logger.error(
-                "document_scales is empty, there seems no paragraph in this PDF"
-            )
-            return
-        try:
-            modes = statistics.multimode(all_scales)
-            mode_scale = min(modes)
-        except statistics.StatisticsError:
-            logger.warning(
-                "Could not find a mode for paragraph scales. Falling back to median."
-            )
-            mode_scale = statistics.median(all_scales)
-        for paragraph in all_paragraphs:
-            if (
-                paragraph.optimal_scale is not None
-                and paragraph.optimal_scale > mode_scale
-            ):
-                paragraph.optimal_scale = mode_scale
-
     def preprocess_document(self, document: il_version_1.Document, pbar):
         """预处理文档，获取每个段落的最优缩放因子，不执行实际排版"""
         all_scales: list[float] = []
@@ -932,140 +849,84 @@ class Typesetting:
         scale_lock = threading.Lock()
         pbar_lock = threading.Lock()
 
+        def process_page(page: il_version_1.Page) -> tuple[list[float], list[il_version_1.PdfParagraph]]:
+            page_scales: list[float] = []
+            page_paragraphs: list[il_version_1.PdfParagraph] = []
+            fonts: dict[
+                str | int,
+                il_version_1.PdfFont | dict[str, il_version_1.PdfFont],
+            ] = {f.font_id: f for f in page.pdf_font if f.font_id}
+            page_fonts = {f.font_id: f for f in page.pdf_font if f.font_id}
+            for k, v in self.font_mapper.fontid2font.items():
+                fonts[k] = v
+            for xobj in page.pdf_xobject:
+                if xobj.xobj_id is not None:
+                    fonts[xobj.xobj_id] = page_fonts.copy()
+                    for font in xobj.pdf_font:
+                        if (
+                            xobj.xobj_id in fonts
+                            and isinstance(fonts[xobj.xobj_id], dict)
+                            and font.font_id
+                        ):
+                            fonts[xobj.xobj_id][font.font_id] = font
+
+            for paragraph in page.pdf_paragraph:
+                page_paragraphs.append(paragraph)
+                unit_count = 0
+                try:
+                    typesetting_units = self.create_typesetting_units(paragraph, fonts)
+                    unit_count = len(typesetting_units)
+                    for unit in typesetting_units:
+                        if unit.formular:
+                            unit_count += len(unit.formular.pdf_character) - 1
+                    if all(unit.can_passthrough for unit in typesetting_units):
+                        paragraph.optimal_scale = 1.0
+                    else:
+                        paragraph.optimal_scale = self._get_optimal_scale(
+                            paragraph, page, typesetting_units
+                        )
+                except Exception as e:
+                    logger.warning(f"预处理段落时出错：{e}")
+                    paragraph.optimal_scale = 1.0
+
+                if paragraph.optimal_scale is not None:
+                    page_scales.extend([paragraph.optimal_scale] * unit_count)
+            with pbar_lock:
+                pbar.advance()
+            return page_scales, page_paragraphs
+
         max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(self._preprocess_page, page, pbar_lock, pbar)
-                for page in document.page
-            ]
+            futures = [executor.submit(process_page, page) for page in document.page]
             for future in concurrent.futures.as_completed(futures):
                 page_scales, page_paragraphs = future.result()
                 with scale_lock:
                     all_scales.extend(page_scales)
                     all_paragraphs.extend(page_paragraphs)
 
-        self._cap_scales_at_mode(all_scales, all_paragraphs)
-
-    def _apply_typeset_units_to_paragraph(
-        self,
-        typeset_units: list[TypesettingUnit],
-        paragraph: il_version_1.PdfParagraph,
-        page: il_version_1.Page,
-        scale: float,
-    ) -> list[TypesettingUnit]:
-        """Write the rendered typeset units back into the paragraph and page."""
-        paragraph.scale = scale
-        paragraph.pdf_paragraph_composition = []
-        for unit in typeset_units:
-            chars, curves, forms = unit.render()
-            for char in chars:
-                paragraph.pdf_paragraph_composition.append(
-                    PdfParagraphComposition(pdf_character=char),
+        # 获取缩放因子的众数
+        if all_scales:
+            try:
+                modes = statistics.multimode(all_scales)
+                mode_scale = min(modes)
+            except statistics.StatisticsError:
+                logger.warning(
+                    "Could not find a mode for paragraph scales. Falling back to median."
                 )
-            for curve in curves:
-                page.pdf_curve.append(curve)
-            for form in forms:
-                page.pdf_form.append(form)
-        return typeset_units
-
-    def _try_expand_box_downward(
-        self,
-        box: Box,
-        page: il_version_1.Page,
-        paragraph: il_version_1.PdfParagraph,
-        apply_layout: bool,
-    ) -> tuple[Box, bool]:
-        """Attempt to expand the layout box downward. Returns (new_box, expanded)."""
-        try:
-            min_y = self.get_max_bottom_space(box, page) + 2
-            if min_y < box.y:
-                expanded_box = Box(x=box.x, y=min_y, x2=box.x2, y2=box.y2)
-                if apply_layout:
-                    paragraph.box = expanded_box
-                return expanded_box, True
-        except Exception:
-            return box, False
-        return box, False
-
-    def _try_expand_box_rightward(
-        self,
-        box: Box,
-        page: il_version_1.Page,
-        paragraph: il_version_1.PdfParagraph,
-        apply_layout: bool,
-    ) -> tuple[Box, bool]:
-        """Attempt to expand the layout box rightward. Returns (new_box, expanded)."""
-        try:
-            max_x = self.get_max_right_space(box, page) - 5
-            if max_x > box.x2:
-                expanded_box = Box(x=box.x, y=box.y, x2=max_x, y2=box.y2)
-                if apply_layout:
-                    paragraph.box = expanded_box
-                return expanded_box, True
-        except Exception:
-            return box, False
-        return box, False
-
-    def _try_layout_at_scale(
-        self,
-        typesetting_units: list[TypesettingUnit],
-        box: Box,
-        scale: float,
-        line_skip: float,
-        paragraph: il_version_1.PdfParagraph,
-        use_english_line_break: bool,
-    ) -> tuple[list[TypesettingUnit] | None, bool]:
-        """Attempt a single layout pass. Returns (typeset_units, all_fit) or (None, False)."""
-        try:
-            return self._layout_typesetting_units(
-                typesetting_units,
-                box,
-                scale,
-                line_skip,
-                paragraph,
-                use_english_line_break,
+                mode_scale = statistics.median(all_scales)
+            # 将所有大于众数的值修改为众数
+            for paragraph in all_paragraphs:
+                if (
+                    paragraph.optimal_scale is not None
+                    and paragraph.optimal_scale > mode_scale
+                ):
+                    paragraph.optimal_scale = mode_scale
+        else:
+            logger.error(
+                "document_scales is empty, there seems no paragraph in this PDF"
             )
-        except Exception as e:
-            logger.warning(
-                f"Layout failed at scale {scale} for paragraph {getattr(paragraph, 'debug_id', '?')}: "
-                f"{type(e).__name__}: {e}"
-            )
-            return None, False
 
-    def _attempt_expand_space(
-        self,
-        scale: float,
-        expand_space_flag: int,
-        box: Box,
-        page: il_version_1.Page,
-        paragraph: il_version_1.PdfParagraph,
-        apply_layout: bool,
-    ) -> tuple[Box, int, float]:
-        """Try to expand the layout box when scale drops below 0.7.
-
-        Returns (new_box, new_expand_flag, new_scale).  new_scale may be reset
-        to 1.0 when an expansion succeeds but the flag resets the loop.
-        """
-        if expand_space_flag == 0:
-            box, expanded = self._try_expand_box_downward(
-                box, page, paragraph, apply_layout
-            )
-            expand_space_flag = 1
-            if expanded:
-                return box, expand_space_flag, scale
-        elif expand_space_flag == 1:
-            box, expanded = self._try_expand_box_rightward(
-                box, page, paragraph, apply_layout
-            )
-            expand_space_flag = 2
-            if expanded:
-                return box, expand_space_flag, scale
-
-        if expand_space_flag < 2:
-            scale = 1.0
-        return box, expand_space_flag, scale
-
-    def _find_optimal_scale_and_layout(  # NOSONAR - layout search has several PDF-specific fit branches
+    def _find_optimal_scale_and_layout(
         self,
         paragraph: il_version_1.PdfParagraph,
         page: il_version_1.Page,
@@ -1096,37 +957,97 @@ class Typesetting:
         min_scale = 0.1
         expand_space_flag = 0
         final_typeset_units = None
-        last_attempted_units: list[TypesettingUnit] | None = None
 
         while scale >= min_scale:
-            typeset_units, all_units_fit = self._try_layout_at_scale(
-                typesetting_units,
-                box,
-                scale,
-                line_skip,
-                paragraph,
-                use_english_line_break,
-            )
+            try:
+                # 尝试布局排版单元
+                typeset_units, all_units_fit = self._layout_typesetting_units(
+                    typesetting_units,
+                    box,
+                    scale,
+                    line_skip,
+                    paragraph,
+                    use_english_line_break,
+                )
 
-            if typeset_units is not None:
-                last_attempted_units = typeset_units
+                # 如果所有单元都放得下
+                if all_units_fit:
+                    if apply_layout:
+                        # 实际应用排版结果
+                        paragraph.scale = scale
+                        paragraph.pdf_paragraph_composition = []
+                        for unit in typeset_units:
+                            chars, curves, forms = unit.render()
+                            for char in chars:
+                                paragraph.pdf_paragraph_composition.append(
+                                    PdfParagraphComposition(pdf_character=char),
+                                )
+                            for curve in curves:
+                                page.pdf_curve.append(curve)
+                            for form in forms:
+                                page.pdf_form.append(form)
+                        final_typeset_units = typeset_units
+                    return scale, final_typeset_units
+            except Exception:
+                # 如果布局检查出错，继续尝试下一个缩放因子
+                pass
 
-            if all_units_fit and typeset_units is not None:
-                if apply_layout:
-                    final_typeset_units = self._apply_typeset_units_to_paragraph(
-                        typeset_units, paragraph, page, scale
-                    )
-                return scale, final_typeset_units
-
+            # 添加与原 retypeset 一致的逻辑检查
             if not hasattr(paragraph, "debug_id") or not paragraph.debug_id:
                 return scale, final_typeset_units
 
-            scale = scale - 0.05 if scale > 0.6 else scale - 0.1
+            # 减小缩放因子
+            if scale > 0.6:
+                scale -= 0.05
+            else:
+                scale -= 0.1
 
             if scale < 0.7:
-                box, expand_space_flag, scale = self._attempt_expand_space(
-                    scale, expand_space_flag, box, page, paragraph, apply_layout
-                )
+                space_expanded = False  # 标记是否成功扩展了空间
+
+                if expand_space_flag == 0:
+                    # 尝试向下扩展
+                    try:
+                        min_y = self.get_max_bottom_space(box, page) + 2
+                        if min_y < box.y:
+                            expanded_box = Box(x=box.x, y=min_y, x2=box.x2, y2=box.y2)
+                            box = expanded_box
+                            if apply_layout:
+                                # 更新段落的边界框
+                                paragraph.box = expanded_box
+                            space_expanded = True
+                    except Exception:
+                        pass
+                    expand_space_flag = 1
+
+                    # 只有成功扩展空间时才 continue，否则继续减小 scale
+                    if space_expanded:
+                        continue
+
+                elif expand_space_flag == 1:
+                    # 尝试向右扩展
+                    try:
+                        max_x = self.get_max_right_space(box, page) - 5
+                        if max_x > box.x2:
+                            expanded_box = Box(x=box.x, y=box.y, x2=max_x, y2=box.y2)
+                            box = expanded_box
+                            if apply_layout:
+                                # 更新段落的边界框
+                                paragraph.box = expanded_box
+                            space_expanded = True
+                    except Exception:
+                        pass
+                    expand_space_flag = 2
+
+                    # 只有成功扩展空间时才 continue，否则继续减小 scale
+                    if space_expanded:
+                        continue
+
+                # 只有在扩展尝试阶段 (expand_space_flag < 2) 且扩展失败时才重置 scale
+                # 当 expand_space_flag >= 2 时，说明已经尝试过所有扩展，应该继续正常的 scale 减小
+                if expand_space_flag < 2:
+                    # 如果无法扩展空间，重置 scale 并继续循环
+                    scale = 1.0
 
         # 如果仍然放不下，尝试去除英文换行限制
         if use_english_line_break:
@@ -1139,18 +1060,7 @@ class Typesetting:
                 apply_layout=apply_layout,
             )
 
-        # Force-apply the last attempted layout at minimum scale so the paragraph
-        # is never left with empty composition (which causes silent text loss).
-        if apply_layout:
-            if last_attempted_units is not None:
-                final_typeset_units = self._apply_typeset_units_to_paragraph(
-                    last_attempted_units, paragraph, page, min_scale
-                )
-            else:
-                # Every layout attempt threw an exception. At minimum mark the paragraph
-                # as processed so pdf_creater does not log a spurious error.
-                paragraph.scale = min_scale
-
+        # 最后返回最小缩放因子
         return min_scale, final_typeset_units
 
     def _get_optimal_scale(
@@ -1207,10 +1117,7 @@ class Typesetting:
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
-                    futures = [
-                        executor.submit(self.render_page, page)
-                        for page in document.page
-                    ]
+                    futures = [executor.submit(self.render_page, page) for page in document.page]
                     for future in concurrent.futures.as_completed(futures):
                         self.translation_config.raise_if_cancelled()
                         future.result()
@@ -1218,71 +1125,26 @@ class Typesetting:
                             pbar.advance()
         else:
             max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=max_workers
-            ) as executor:
-                futures = [
-                    executor.submit(self.render_page, page) for page in document.page
-                ]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(self.render_page, page) for page in document.page]
                 for future in concurrent.futures.as_completed(futures):
                     self.translation_config.raise_if_cancelled()
                     future.result()
 
-    def _adjust_paragraph_positions(self, page: il_version_1.Page):
-        """Push overlapping paragraphs apart so they don't collide vertically."""
-        para_index = index.Index()
-        para_map = {}
-        valid_paras = [
-            p
-            for p in page.pdf_paragraph
-            if p.box
-            and all(c is not None for c in [p.box.x, p.box.y, p.box.x2, p.box.y2])
-        ]
-        for i, para in enumerate(valid_paras):
-            para_map[i] = para
-            para_index.insert(i, box_to_tuple(para.box))
-
-        for i, p_upper in para_map.items():
-            if not (p_upper.box and p_upper.box.y is not None):
-                continue
-            para_height = p_upper.box.y2 - p_upper.box.y
-            required_gap = 0.5 if para_height < 36 else 3
-            self._resolve_paragraph_overlap(
-                i, p_upper, required_gap, para_index, para_map
-            )
-
-    def _resolve_paragraph_overlap(
-        self, idx, p_upper, required_gap, para_index, para_map
-    ):
-        """Shift p_upper down if any lower paragraph overlaps within required_gap."""
-        check_area = il_version_1.Box(
-            x=p_upper.box.x,
-            y=p_upper.box.y - required_gap,
-            x2=p_upper.box.x2,
-            y2=p_upper.box.y,
-        )
-        candidate_ids = list(para_index.intersection(box_to_tuple(check_area)))
-        conflicting_paras = [
-            para_map[pid]
-            for pid in candidate_ids
-            if pid != idx
-            and not (
-                para_map[pid].box
-                and p_upper.box
-                and para_map[pid].box.x2 < p_upper.box.x
-                or para_map[pid].box.x > p_upper.box.x2
-            )
-        ]
-        if conflicting_paras:
-            max_y2 = max(
-                p.box.y2 for p in conflicting_paras if p.box and p.box.y2 is not None
-            )
-            new_y = max_y2 + required_gap
-            if p_upper.box and new_y < p_upper.box.y2:
-                p_upper.box.y = new_y
-
     def render_page(self, page: il_version_1.Page):
-        fonts = self._build_page_fonts(page)
+        fonts: dict[
+            str | int,
+            il_version_1.PdfFont | dict[str, il_version_1.PdfFont],
+        ] = {f.font_id: f for f in page.pdf_font if f.font_id}
+        page_fonts = {f.font_id: f for f in page.pdf_font if f.font_id}
+        for k, v in self.font_mapper.fontid2font.items():
+            fonts[k] = v
+        for xobj in page.pdf_xobject:
+            if xobj.xobj_id is not None:
+                fonts[xobj.xobj_id] = page_fonts.copy()
+                for font in xobj.pdf_font:
+                    if font.font_id:
+                        fonts[xobj.xobj_id][font.font_id] = font
         if (
             page.page_number == 0
             and self.translation_config.watermark_output_mode
@@ -1290,19 +1152,67 @@ class Typesetting:
         ):
             self.add_watermark(page)
         try:
-            self._adjust_paragraph_positions(page)
+            para_index = index.Index()
+            para_map = {}
+            #
+            valid_paras = [
+                p
+                for p in page.pdf_paragraph
+                if p.box
+                and all(c is not None for c in [p.box.x, p.box.y, p.box.x2, p.box.y2])
+            ]
+
+            for i, para in enumerate(valid_paras):
+                para_map[i] = para
+                para_index.insert(i, box_to_tuple(para.box))
+
+            for i, p_upper in para_map.items():
+                if not (p_upper.box and p_upper.box.y is not None):
+                    continue
+
+                # Calculate paragraph height and set required gap accordingly
+                para_height = p_upper.box.y2 - p_upper.box.y
+                required_gap = 0.5 if para_height < 36 else 3
+
+                check_area = il_version_1.Box(
+                    x=p_upper.box.x,
+                    y=p_upper.box.y - required_gap,
+                    x2=p_upper.box.x2,
+                    y2=p_upper.box.y,
+                )
+
+                candidate_ids = list(para_index.intersection(box_to_tuple(check_area)))
+
+                conflicting_paras = []
+                for para_id in candidate_ids:
+                    if para_id == i:
+                        continue
+                    p_lower = para_map[para_id]
+                    if not (
+                        p_lower.box
+                        and p_upper.box
+                        and p_lower.box.x2 < p_upper.box.x
+                        or p_lower.box.x > p_upper.box.x2
+                    ):
+                        conflicting_paras.append(p_lower)
+
+                if conflicting_paras:
+                    max_y2 = max(
+                        p.box.y2
+                        for p in conflicting_paras
+                        if p.box and p.box.y2 is not None
+                    )
+
+                    new_y = max_y2 + required_gap
+                    if p_upper.box and new_y < p_upper.box.y2:
+                        p_upper.box.y = new_y
         except Exception as e:
             logger.warning(
                 f"Failed to adjust paragraph positions on page {page.page_number}: {e}"
             )
+        # 开始实际的渲染过程
         for paragraph in page.pdf_paragraph:
-            try:
-                self.render_paragraph(paragraph, page, fonts)
-            except Exception as e:
-                logger.warning(
-                    f"Failed to render paragraph {getattr(paragraph, 'debug_id', '?')} "
-                    f"on page {page.page_number}: {type(e).__name__}: {e}"
-                )
+            self.render_paragraph(paragraph, page, fonts)
 
     def add_watermark(self, page: il_version_1.Page):
         page_width = page.cropbox.box.x2 - page.cropbox.box.x
@@ -1384,106 +1294,7 @@ class Typesetting:
             total_width += unit.width
         return total_width * scale
 
-    def _collect_font_sizes(
-        self, typesetting_units: list[TypesettingUnit]
-    ) -> list[float]:
-        """Gather all font sizes referenced by the given typesetting units."""
-        font_sizes = []
-        for unit in typesetting_units:
-            if unit.font_size:
-                font_sizes.append(unit.font_size)
-            if unit.char and unit.char.pdf_style and unit.char.pdf_style.font_size:
-                font_sizes.append(unit.char.pdf_style.font_size)
-        font_sizes.sort()
-        return font_sizes
-
-    def _calc_avg_height(
-        self, typesetting_units: list[TypesettingUnit], scale: float
-    ) -> float:
-        """Return the modal (or average) unit height scaled by *scale*."""
-        unit_heights = (
-            [unit.height for unit in typesetting_units] if typesetting_units else []
-        )
-        if not unit_heights:
-            return 0.0
-        if len(unit_heights) == 1:
-            return unit_heights[0] * scale
-        try:
-            return statistics.mode(unit_heights) * scale
-        except statistics.StatisticsError:
-            return sum(unit_heights) / len(unit_heights) * scale
-
-    def _needs_cjk_mixed_space(
-        self,
-        last_unit: TypesettingUnit,
-        unit: TypesettingUnit,
-        current_x: float,
-        current_y: float,
-        line_height: float,
-        box: Box,
-    ) -> bool:
-        """Return True when a half-width space should be injected at a CJK/Latin boundary."""
-        cjk_end_puncts = {"。", "！", "？", "；", "：", "，"}
-        return (
-            last_unit is not None
-            and last_unit.is_cjk_char ^ unit.is_cjk_char
-            and last_unit.box
-            and last_unit.box.y
-            and current_y - 0.1 <= last_unit.box.y2 <= current_y + line_height + 0.1
-            and not last_unit.mixed_character_blacklist
-            and not unit.mixed_character_blacklist
-            and current_x > box.x
-            and unit.try_get_unicode() != " "
-            and last_unit.try_get_unicode() != " "
-            and last_unit.try_get_unicode() not in cjk_end_puncts
-        )
-
-    def _unit_overflows_line(
-        self,
-        unit: TypesettingUnit,
-        unit_width: float,
-        current_x: float,
-        box: Box,
-        use_english_line_break: bool,
-        width_before_next_break_point: float,
-    ) -> bool:
-        """Return True when the unit cannot fit on the current line."""
-        if unit.is_hung_punctuation:
-            return False
-        if current_x + unit_width > box.x2:
-            return True
-        if (
-            use_english_line_break
-            and current_x + unit_width + width_before_next_break_point > box.x2
-        ):
-            return True
-        if (
-            unit.is_cannot_appear_in_line_end_punctuation
-            and current_x + unit_width * 2 > box.x2
-        ):
-            return True
-        return False
-
-    def _advance_to_next_line(
-        self,
-        current_line_heights: list[float],
-        line_skip: float,
-        current_y: float,
-        line_ys: list[float],
-        box: Box,
-    ) -> tuple[float, bool, list[float]]:
-        """Compute the y-coordinate for the next line. Returns (new_y, all_fit, cleared_heights)."""
-        max_height = max(current_line_heights)
-        try:
-            mode_height = statistics.mode(current_line_heights)
-        except statistics.StatisticsError:
-            mode_height = max_height
-        new_y = current_y - max(mode_height * line_skip, max_height * 1.05)
-        line_ys.append(new_y)
-        all_fit = new_y >= box.y
-        return new_y, all_fit, []
-
-    def _layout_typesetting_units(  # NOSONAR - text layout flow keeps PDF line-breaking decisions together
+    def _layout_typesetting_units(
         self,
         typesetting_units: list[TypesettingUnit],
         box: Box,
@@ -1502,78 +1313,137 @@ class Typesetting:
         Returns:
             tuple[list[TypesettingUnit], bool]: (已布局的排版单元列表，是否所有单元都放得下)
         """
-        font_sizes = self._collect_font_sizes(typesetting_units)
-        try:
-            font_size = statistics.mode(font_sizes)
-        except statistics.StatisticsError:
-            font_size = statistics.median(font_sizes) if font_sizes else 12.0
+        # 计算字号众数
+        font_sizes = []
+        for unit in typesetting_units:
+            if unit.font_size:
+                font_sizes.append(unit.font_size)
+            if unit.char and unit.char.pdf_style and unit.char.pdf_style.font_size:
+                font_sizes.append(unit.char.pdf_style.font_size)
+        font_sizes.sort()
+        font_size = statistics.mode(font_sizes)
+
         space_width = (
             self.font_mapper.base_font.char_lengths("你", font_size * scale)[0] * 0.5
         )
-        avg_height = self._calc_avg_height(typesetting_units, scale)
 
+        # 计算行高（使用众数）
+        unit_heights = (
+            [unit.height for unit in typesetting_units] if typesetting_units else []
+        )
+        if not unit_heights:
+            avg_height = 0
+        elif len(unit_heights) == 1:
+            avg_height = unit_heights[0] * scale
+        else:
+            try:
+                avg_height = statistics.mode(unit_heights) * scale
+            except statistics.StatisticsError:
+                # 如果没有众数（所有值都出现相同次数），则使用平均值
+                avg_height = sum(unit_heights) / len(unit_heights) * scale
+
+        # 初始化位置为右上角，并减去一个平均行高
         current_x = box.x
         current_y = box.y2 - avg_height
         box = copy.deepcopy(box)
+        # box.y -= avg_height * (line_spacing - 1.01) # line_spacing 已被替换为 line_skip
         line_height = 0
-        current_line_heights: list[float] = []
-        typeset_units: list[TypesettingUnit] = []
+        current_line_heights = []  # 存储当前行所有元素的高度
+
+        # 存储已排版的单元
+        typeset_units = []
         all_units_fit = True
         last_unit: TypesettingUnit | None = None
         line_ys = [current_y]
         if paragraph.first_line_indent:
             current_x += space_width * 4
-
+        # 遍历所有排版单元
         for i, unit in enumerate(typesetting_units):
+            # 计算当前单元在当前缩放下的尺寸
             unit_width = unit.width * scale
             unit_height = unit.height * scale
 
+            # 跳过行首的空格
             if current_x == box.x and unit.is_space:
                 continue
 
-            if self._needs_cjk_mixed_space(
-                last_unit, unit, current_x, current_y, line_height, box
+            if (
+                last_unit  # 有上一个单元
+                and last_unit.is_cjk_char ^ unit.is_cjk_char  # 中英文交界处
+                and (
+                    last_unit.box
+                    and last_unit.box.y
+                    and current_y - 0.1
+                    <= last_unit.box.y2
+                    <= current_y + line_height + 0.1
+                )  # 在同一行，且有垂直重叠
+                and not last_unit.mixed_character_blacklist  # 不是混排空格黑名单字符
+                and not unit.mixed_character_blacklist  # 同上
+                and current_x > box.x  # 不是行首
+                and unit.try_get_unicode() != " "  # 不是空格
+                and last_unit.try_get_unicode() != " "  # 不是空格
+                and last_unit.try_get_unicode()
+                not in [
+                    "。",
+                    "！",
+                    "？",
+                    "；",
+                    "：",
+                    "，",
+                ]
             ):
                 current_x += space_width * 0.5
+            if use_english_line_break:
+                width_before_next_break_point = self._get_width_before_next_break_point(
+                    typesetting_units[i:], scale
+                )
+            else:
+                width_before_next_break_point = 0
 
-            width_before_next_break_point = (
-                self._get_width_before_next_break_point(typesetting_units[i:], scale)
-                if use_english_line_break
-                else 0
-            )
-
-            if self._unit_overflows_line(
-                unit,
-                unit_width,
-                current_x,
-                box,
-                use_english_line_break,
-                width_before_next_break_point,
+            # 如果当前行放不下这个元素，换行
+            if not unit.is_hung_punctuation and (
+                (current_x + unit_width > box.x2)
+                or (
+                    use_english_line_break
+                    and current_x + unit_width + width_before_next_break_point > box.x2
+                )
+                or (
+                    unit.is_cannot_appear_in_line_end_punctuation
+                    and current_x + unit_width * 2 > box.x2
+                )
             ):
-                if current_line_heights:
-                    current_x = box.x
-                    current_y, line_all_fit, current_line_heights = (
-                        self._advance_to_next_line(
-                            current_line_heights, line_skip, current_y, line_ys, box
-                        )
-                    )
-                    line_height = 0.0
-                    if not line_all_fit:
-                        all_units_fit = False
-                    if unit.is_space:
-                        line_height = max(line_height, unit_height)
-                        continue
-                else:
-                    # Unit wider than box at current scale — place it anyway to
-                    # prevent empty composition (which silently drops all text).
-                    all_units_fit = False
+                # 换行
+                current_x = box.x
+                if not current_line_heights:
+                    return [], False
+                max_height = max(current_line_heights)
+                mode_height = statistics.mode(current_line_heights)
 
+                current_y -= max(mode_height * line_skip, max_height * 1.05)
+                line_ys.append(current_y)
+                line_height = 0.0
+                current_line_heights = []  # 清空当前行高度列表
+
+                # 检查是否超出底部边界
+                # if current_y - unit_height < box.y:
+                if current_y < box.y:
+                    all_units_fit = False
+                    # 这里不要 break，继续排版剩余内容
+
+                if unit.is_space:
+                    line_height = max(line_height, unit_height)
+                    continue
+
+            # 放置当前单元
             relocated_unit = unit.relocate(current_x, current_y, scale)
             typeset_units.append(relocated_unit)
+
+            # 添加当前单元的高度到当前行高度列表
             if not unit.is_space:
                 current_line_heights.append(unit_height)
 
             prev_x = current_x
+            # 更新 x 坐标
             current_x = relocated_unit.box.x2
             if prev_x > current_x:
                 logger.warning(f"坐标回绕！！！TypesettingUnit: {unit.box}, ")
@@ -1581,87 +1451,6 @@ class Typesetting:
             last_unit = relocated_unit
 
         return typeset_units, all_units_fit
-
-    def _units_from_unicode_composition(
-        self,
-        composition,
-        paragraph: il_version_1.PdfParagraph,
-        get_font,
-    ) -> list[TypesettingUnit] | None:
-        """Convert a pdf_same_style_unicode_characters composition to TypesettingUnits.
-
-        Returns None when the composition should be skipped due to missing style/font.
-        """
-        style = composition.pdf_same_style_unicode_characters.pdf_style
-        if style is None:
-            logger.warning(
-                f"Style is None. Composition: {composition}. Paragraph: {paragraph}. "
-            )
-            return None
-        font_id = style.font_id
-        if font_id is None:
-            logger.warning(
-                f"Font ID is None. Composition: {composition}. Paragraph: {paragraph}. "
-            )
-            return None
-        font = get_font(font_id, paragraph.xobj_id)
-        unicode_text = composition.pdf_same_style_unicode_characters.unicode
-        if not unicode_text:
-            return []
-        debug_flag = composition.pdf_same_style_unicode_characters.debug_info or False
-        return [
-            TypesettingUnit(
-                unicode=char_unicode,
-                font=self.font_mapper.map(font, char_unicode),
-                original_font=font,
-                font_size=style.font_size,
-                style=style,
-                xobj_id=paragraph.xobj_id,
-                debug_info=debug_flag,
-            )
-            for char_unicode in unicode_text
-            if char_unicode not in ("\n",)
-        ]
-
-    def _units_from_composition(
-        self,
-        composition,
-        paragraph: il_version_1.PdfParagraph,
-        get_font,
-    ) -> list[TypesettingUnit] | None:
-        """Convert a single composition item to TypesettingUnits.
-
-        Returns a list of units, or None to signal an unknown/fatal composition type.
-        Returns an empty list for compositions that produce no units.
-        """
-        if composition.pdf_line:
-            return [
-                TypesettingUnit(char=char)
-                for char in composition.pdf_line.pdf_character
-            ]
-        if composition.pdf_character:
-            return [
-                TypesettingUnit(
-                    char=composition.pdf_character, debug_info=paragraph.debug_info
-                )
-            ]
-        if composition.pdf_same_style_characters:
-            return [
-                TypesettingUnit(char=char)
-                for char in composition.pdf_same_style_characters.pdf_character
-            ]
-        if composition.pdf_same_style_unicode_characters:
-            return self._units_from_unicode_composition(
-                composition, paragraph, get_font
-            )
-        if composition.pdf_formula:
-            return [TypesettingUnit(formular=composition.pdf_formula)]
-        logger.error(
-            f"Unknown composition type. "
-            f"Composition: {composition}. "
-            f"Paragraph: {paragraph}. ",
-        )
-        return []
 
     def create_typesetting_units(
         self,
@@ -1683,11 +1472,80 @@ class Typesetting:
         for composition in paragraph.pdf_paragraph_composition:
             if composition is None:
                 continue
-            units = self._units_from_composition(composition, paragraph, get_font)
-            if units is not None:
-                result.extend(units)
-
-        result = list(filter(lambda x: x.unicode is None or x.font is not None, result))
+            if composition.pdf_line:
+                result.extend(
+                    [
+                        TypesettingUnit(char=char)
+                        for char in composition.pdf_line.pdf_character
+                    ],
+                )
+            elif composition.pdf_character:
+                result.append(
+                    TypesettingUnit(
+                        char=composition.pdf_character,
+                        debug_info=paragraph.debug_info,
+                    ),
+                )
+            elif composition.pdf_same_style_characters:
+                result.extend(
+                    [
+                        TypesettingUnit(char=char)
+                        for char in composition.pdf_same_style_characters.pdf_character
+                    ],
+                )
+            elif composition.pdf_same_style_unicode_characters:
+                style = composition.pdf_same_style_unicode_characters.pdf_style
+                if style is None:
+                    logger.warning(
+                        f"Style is None. "
+                        f"Composition: {composition}. "
+                        f"Paragraph: {paragraph}. ",
+                    )
+                    continue
+                font_id = style.font_id
+                if font_id is None:
+                    logger.warning(
+                        f"Font ID is None. "
+                        f"Composition: {composition}. "
+                        f"Paragraph: {paragraph}. ",
+                    )
+                    continue
+                font = get_font(font_id, paragraph.xobj_id)
+                if composition.pdf_same_style_unicode_characters.unicode:
+                    result.extend(
+                        [
+                            TypesettingUnit(
+                                unicode=char_unicode,
+                                font=self.font_mapper.map(
+                                    font,
+                                    char_unicode,
+                                ),
+                                original_font=font,
+                                font_size=style.font_size,
+                                style=style,
+                                xobj_id=paragraph.xobj_id,
+                                debug_info=composition.pdf_same_style_unicode_characters.debug_info
+                                or False,
+                            )
+                            for char_unicode in composition.pdf_same_style_unicode_characters.unicode
+                            if char_unicode not in ("\n",)
+                        ],
+                    )
+            elif composition.pdf_formula:
+                result.extend([TypesettingUnit(formular=composition.pdf_formula)])
+            else:
+                logger.error(
+                    f"Unknown composition type. "
+                    f"Composition: {composition}. "
+                    f"Paragraph: {paragraph}. ",
+                )
+                continue
+        result = list(
+            filter(
+                lambda x: x.unicode is None or x.font is not None,
+                result,
+            ),
+        )
 
         if any(x.width < 0 for x in result):
             logger.warning("有排版单元宽度小于 0，请检查字体映射是否正确。")
@@ -1718,56 +1576,6 @@ class Typesetting:
                 )
         return composition
 
-    def _boxes_overlap_vertically(self, box_a: Box, box_b: Box) -> bool:
-        """Return True when box_a and box_b share any vertical range."""
-        return not (box_a.y >= box_b.y2 or box_a.y2 <= box_b.y)
-
-    def _boxes_overlap_horizontally(self, box_a: Box, box_b: Box) -> bool:
-        """Return True when box_a and box_b share any horizontal range."""
-        return not (box_a.x >= box_b.x2 or box_a.x2 <= box_b.x)
-
-    def _is_right_blocker(self, element_box: Box, current_box: Box) -> bool:
-        """Return True if element_box is to the right of and vertically overlaps current_box."""
-        return element_box.x > current_box.x and self._boxes_overlap_vertically(
-            element_box, current_box
-        )
-
-    def _is_below_blocker(self, element_box: Box, current_box: Box) -> bool:
-        """Return True if element_box is below and horizontally overlaps current_box."""
-        return element_box.y2 < current_box.y and self._boxes_overlap_horizontally(
-            element_box, current_box
-        )
-
-    def _iter_blocker_boxes_right(self, current_box: Box, page):
-        """Yield the x coordinate of every element that lies to the right of current_box
-        and has vertical overlap with it."""
-        for para in page.pdf_paragraph:
-            if para.box is None or para.box == current_box:
-                continue
-            if self._is_right_blocker(para.box, current_box):
-                yield para.box.x
-        for char in page.pdf_character:
-            if self._is_right_blocker(char.box, current_box):
-                yield char.box.x
-        for figure in page.pdf_figure:
-            if self._is_right_blocker(figure.box, current_box):
-                yield figure.box.x
-
-    def _iter_blocker_boxes_below(self, current_box: Box, page):
-        """Yield the y2 coordinate of every element that lies below current_box
-        and has horizontal overlap with it."""
-        for para in page.pdf_paragraph:
-            if para.box is None or para.box == current_box:
-                continue
-            if self._is_below_blocker(para.box, current_box):
-                yield para.box.y2
-        for char in page.pdf_character:
-            if self._is_below_blocker(char.box, current_box):
-                yield char.box.y2
-        for figure in page.pdf_figure:
-            if self._is_below_blocker(figure.box, current_box):
-                yield figure.box.y2
-
     def get_max_right_space(self, current_box: Box, page) -> float:
         """获取段落右侧最大可用空间
 
@@ -1778,9 +1586,30 @@ class Typesetting:
         Returns:
             可以扩展到的最大 x 坐标
         """
+        # 获取页面的裁剪框作为初始最大限制
         max_x = page.cropbox.box.x2 * 0.9
-        for x in self._iter_blocker_boxes_right(current_box, page):
-            max_x = min(max_x, x)
+
+        # 检查所有可能的阻挡元素
+        for para in page.pdf_paragraph:
+            if para.box == current_box or para.box is None:  # 跳过当前段落
+                continue
+            # 只考虑在当前段落右侧且有垂直重叠的元素
+            if para.box.x > current_box.x and not (
+                para.box.y >= current_box.y2 or para.box.y2 <= current_box.y
+            ):
+                max_x = min(max_x, para.box.x)
+        for char in page.pdf_character:
+            if char.box.x > current_box.x and not (
+                char.box.y >= current_box.y2 or char.box.y2 <= current_box.y
+            ):
+                max_x = min(max_x, char.box.x)
+        # 检查图形
+        for figure in page.pdf_figure:
+            if figure.box.x > current_box.x and not (
+                figure.box.y >= current_box.y2 or figure.box.y2 <= current_box.y
+            ):
+                max_x = min(max_x, figure.box.x)
+
         return max_x
 
     def get_max_bottom_space(self, current_box: Box, page: il_version_1.Page) -> float:
@@ -1793,9 +1622,30 @@ class Typesetting:
         Returns:
             可以扩展到的最小 y 坐标
         """
+        # 获取页面的裁剪框作为初始最小限制
         min_y = page.cropbox.box.y * 1.1
-        for y2 in self._iter_blocker_boxes_below(current_box, page):
-            min_y = max(min_y, y2)
+
+        # 检查所有可能的阻挡元素
+        for para in page.pdf_paragraph:
+            if para.box == current_box or para.box is None:  # 跳过当前段落
+                continue
+            # 只考虑在当前段落下方且有水平重叠的元素
+            if para.box.y2 < current_box.y and not (
+                para.box.x >= current_box.x2 or para.box.x2 <= current_box.x
+            ):
+                min_y = max(min_y, para.box.y2)
+        for char in page.pdf_character:
+            if char.box.y2 < current_box.y and not (
+                char.box.x >= current_box.x2 or char.box.x2 <= current_box.x
+            ):
+                min_y = max(min_y, char.box.y2)
+        # 检查图形
+        for figure in page.pdf_figure:
+            if figure.box.y2 < current_box.y and not (
+                figure.box.x >= current_box.x2 or figure.box.x2 <= current_box.x
+            ):
+                min_y = max(min_y, figure.box.y2)
+
         return min_y
 
     def _update_paragraph_render_order(self, paragraph: il_version_1.PdfParagraph):
