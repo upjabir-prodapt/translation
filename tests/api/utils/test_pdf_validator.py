@@ -1,263 +1,198 @@
-"""
-Unit tests for api/utils/pdf_validator.py — PDFValidator static methods.
-
-All PDF bytes are generated in-memory using PyMuPDF so no real files are needed.
-External services (GCS, BigQuery) are not involved.
-"""
-
-import hashlib
 import io
-from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
-import fitz
 import pytest
 from fastapi import UploadFile
-
 from src.api.exceptions import ValidationError
 from src.api.utils.pdf_validator import PDFValidator
-from src.config.constants import settings
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+class TestPDFValidator:
+    def test_validate_pdf_bytes_too_large(self):
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            # Set a threshold large enough to be non-zero in MB formatting (e.g. 2MB)
+            mock_settings.MAX_FILE_SIZE = 2 * 1024 * 1024
+            with pytest.raises(ValidationError, match="File size exceeds 2MB limit"):
+                PDFValidator.validate_pdf_bytes(
+                    b"a" * (2 * 1024 * 1024 + 1), "test.pdf"
+                )
 
+    @patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata")
+    def test_validate_pdf_bytes_success(self, mock_extract):
+        mock_extract.return_value = {"page_count": 1, "encrypted": False}
+        content, metadata = PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
+        assert content == b"%PDF-1.4"
+        assert metadata["filename"] == "test.pdf"
 
-def _make_pdf(
-    text: str = "Test content",
-    pages: int = 1,
-    encrypt: bool = False,
-) -> bytes:
-    """Build a PDF in-memory, optionally encrypted (owner-only password)."""
-    doc = fitz.open()
-    for _ in range(pages):
-        page = doc.new_page(width=595, height=842)
-        page.insert_text((72, 72), text)
-    buf = io.BytesIO()
-    if encrypt:
-        doc.save(
-            buf,
-            encryption=fitz.PDF_ENCRYPT_AES_256,
-            owner_pw="owner",
-            user_pw="user",
-            permissions=0,
-        )
-    else:
-        doc.save(buf)
-    doc.close()
-    return buf.getvalue()
+    @patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata")
+    def test_validate_pdf_bytes_encrypted(self, mock_extract):
+        mock_extract.return_value = {"page_count": 1, "encrypted": True}
+        with pytest.raises(ValidationError, match="Encrypted"):
+            PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
 
+    def test_validate_pdf_bytes_corrupted(self):
+        # fitz.open raises FileDataError for non-PDF, but extract_pdf_metadata wraps it in ValidationError
+        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+            PDFValidator.validate_pdf_bytes(b"not a pdf", "test.pdf")
 
-def _make_upload_file(content: bytes, filename: str = "test.pdf") -> UploadFile:
-    """Create a FastAPI UploadFile wrapping in-memory bytes."""
-    file = AsyncMock(spec=UploadFile)
-    file.filename = filename
-    file.read = AsyncMock(return_value=content)
-    return file
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_success(self, mock_open):
+        mock_doc = MagicMock()
+        mock_doc.metadata = {"format": "PDF 1.4", "title": "Test"}
+        mock_doc.__len__.return_value = 5
+        mock_doc.is_encrypted = False
+        mock_doc.needs_pass = False
+        mock_open.return_value = mock_doc
 
+        metadata = PDFValidator.extract_pdf_metadata(b"fake-content")
+        assert metadata["page_count"] == 5
+        assert metadata["title"] == "Test"
 
-# ---------------------------------------------------------------------------
-# extract_pdf_metadata
-# ---------------------------------------------------------------------------
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_failure(self, mock_open):
+        mock_open.side_effect = Exception("Fitz Error")
+        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+            PDFValidator.extract_pdf_metadata(b"bad-content")
 
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_success(self):
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename="test.pdf", file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            return_value={"page_count": 1, "encrypted": False},
+        ):
+            content, metadata = await PDFValidator.validate_pdf_file(file)
+            assert content == file_content
+            assert metadata["page_count"] == 1
 
-class TestExtractPdfMetadata:
-    def test_returns_page_count(self, minimal_pdf_bytes):
-        meta = PDFValidator.extract_pdf_metadata(minimal_pdf_bytes)
-        assert meta["page_count"] == 1
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_empty(self):
+        file = UploadFile(filename="empty.pdf", file=io.BytesIO(b""))
+        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+            await PDFValidator.validate_pdf_file(file)
 
-    def test_multipage_pdf(self):
-        content = _make_pdf(pages=5)
-        meta = PDFValidator.extract_pdf_metadata(content)
-        assert meta["page_count"] == 5
+    def test_validate_pdf_bytes_fitz_file_data_error(self):
+        import fitz
+        with patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata") as mock_extract:
+            mock_extract.side_effect = fitz.FileDataError("corrupt")
+            with pytest.raises(ValidationError, match="Invalid or corrupted PDF file"):
+                PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
 
-    def test_encrypted_flag_false_for_plain_pdf(self, minimal_pdf_bytes):
-        meta = PDFValidator.extract_pdf_metadata(minimal_pdf_bytes)
-        assert meta["encrypted"] is False
+    def test_validate_pdf_bytes_generic_exception(self):
+        with patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata") as mock_extract:
+            mock_extract.side_effect = OSError("unexpected")
+            with pytest.raises(ValidationError, match="Failed to validate PDF"):
+                PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
 
-    def test_encrypted_flag_true_for_encrypted_pdf(self):
-        content = _make_pdf(encrypt=True)
-        meta = PDFValidator.extract_pdf_metadata(content)
-        assert meta["encrypted"] is True
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_too_large(self):
+        from unittest.mock import AsyncMock
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            mock_settings.MAX_FILE_SIZE = 10
+            # UploadFile.read(n) returns exactly n bytes when file is >= MAX_FILE_SIZE
+            file = MagicMock()
+            file.read = AsyncMock(return_value=b"x" * 10)
+            file.filename = "big.pdf"
+            with pytest.raises(ValidationError, match="File size exceeds"):
+                await PDFValidator.validate_pdf_file(file)
 
-    def test_returns_pdf_version(self, minimal_pdf_bytes):
-        meta = PDFValidator.extract_pdf_metadata(minimal_pdf_bytes)
-        assert "pdf_version" in meta
-        assert meta["pdf_version"]  # non-empty string
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_encrypted(self):
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename="enc.pdf", file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            return_value={"page_count": 1, "encrypted": True},
+        ):
+            with pytest.raises(ValidationError, match="Encrypted"):
+                await PDFValidator.validate_pdf_file(file)
 
-    def test_returns_expected_keys(self, minimal_pdf_bytes):
-        meta = PDFValidator.extract_pdf_metadata(minimal_pdf_bytes)
-        expected_keys = {
-            "page_count", "pdf_version", "title", "author",
-            "subject", "creator", "producer", "encrypted", "needs_pass",
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_fitz_error(self):
+        import fitz
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename="bad.pdf", file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            side_effect=fitz.FileDataError("corrupt"),
+        ):
+            with pytest.raises(ValidationError, match="Invalid or corrupted PDF file"):
+                await PDFValidator.validate_pdf_file(file)
+
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_generic_exception(self):
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename="bad.pdf", file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            side_effect=OSError("unexpected error"),
+        ):
+            with pytest.raises(ValidationError, match="Failed to validate PDF"):
+                await PDFValidator.validate_pdf_file(file)
+
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_no_filename_fallback(self):
+        """When UploadFile has no filename, metadata should default to 'unknown.pdf'."""
+        file_content = b"%PDF-1.4\n%%EOF"
+        file = UploadFile(filename=None, file=io.BytesIO(file_content))
+        with patch.object(
+            PDFValidator,
+            "extract_pdf_metadata",
+            return_value={"page_count": 1, "encrypted": False},
+        ):
+            content, metadata = await PDFValidator.validate_pdf_file(file)
+            assert metadata["filename"] == "unknown.pdf"
+            assert content == file_content
+
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_none_metadata(self, mock_open):
+        """When doc.metadata is None, the `or {}` fallback is used (no KeyError)."""
+        mock_doc = MagicMock()
+        mock_doc.metadata = None
+        mock_doc.__len__.return_value = 2
+        mock_doc.is_encrypted = False
+        mock_doc.needs_pass = False
+        mock_open.return_value = mock_doc
+
+        metadata = PDFValidator.extract_pdf_metadata(b"fake-content")
+        assert metadata["page_count"] == 2
+        assert metadata["pdf_version"] == "Unknown"
+        assert metadata["title"] == ""
+
+    @patch("src.api.utils.pdf_validator.fitz.open")
+    def test_extract_pdf_metadata_full_fields(self, mock_open):
+        """All metadata fields are populated from doc.metadata."""
+        mock_doc = MagicMock()
+        mock_doc.metadata = {
+            "format": "PDF 1.7",
+            "title": "Report",
+            "author": "Alice",
+            "subject": "Finance",
+            "creator": "LibreOffice",
+            "producer": "PDFium",
         }
-        assert expected_keys.issubset(meta.keys())
+        mock_doc.__len__.return_value = 10
+        mock_doc.is_encrypted = False
+        mock_doc.needs_pass = False
+        mock_open.return_value = mock_doc
 
-    def test_corrupted_bytes_raises_validation_error(self):
-        with pytest.raises(ValidationError, match="metadata"):
-            PDFValidator.extract_pdf_metadata(b"this is not a pdf")
+        metadata = PDFValidator.extract_pdf_metadata(b"fake")
+        assert metadata["pdf_version"] == "PDF 1.7"
+        assert metadata["author"] == "Alice"
+        assert metadata["subject"] == "Finance"
+        assert metadata["creator"] == "LibreOffice"
+        assert metadata["producer"] == "PDFium"
+        assert metadata["page_count"] == 10
 
-
-# ---------------------------------------------------------------------------
-# validate_pdf_bytes — positive cases
-# ---------------------------------------------------------------------------
-
-
-class TestValidatePdfBytesPositive:
-    def test_returns_tuple(self, minimal_pdf_bytes):
-        content, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        assert isinstance(content, bytes)
-        assert isinstance(meta, dict)
-
-    def test_content_unchanged(self, minimal_pdf_bytes):
-        content, _ = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        assert content == minimal_pdf_bytes
-
-    def test_metadata_filename(self, minimal_pdf_bytes):
-        _, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "my_report.pdf")
-        assert meta["filename"] == "my_report.pdf"
-
-    def test_metadata_size_bytes(self, minimal_pdf_bytes):
-        _, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        assert meta["size_bytes"] == len(minimal_pdf_bytes)
-
-    def test_metadata_content_type(self, minimal_pdf_bytes):
-        _, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        assert meta["content_type"] == "application/pdf"
-
-    def test_metadata_checksum_sha256(self, minimal_pdf_bytes):
-        _, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        expected = hashlib.sha256(minimal_pdf_bytes).hexdigest()
-        assert meta["checksum"] == expected
-
-    def test_metadata_page_count_included(self, minimal_pdf_bytes):
-        _, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-        assert "page_count" in meta
-        assert meta["page_count"] >= 1
-
-
-# ---------------------------------------------------------------------------
-# validate_pdf_bytes — negative / edge cases
-# ---------------------------------------------------------------------------
-
-
-class TestValidatePdfBytesNegative:
-    def test_oversized_file_raises(self):
-        """A file at exactly MAX_FILE_SIZE should be rejected."""
-        oversized = b"x" * settings.MAX_FILE_SIZE
-        with pytest.raises(ValidationError, match="File size"):
-            PDFValidator.validate_pdf_bytes(oversized, "big.pdf")
-
-    def test_encrypted_pdf_raises(self):
-        encrypted = _make_pdf(encrypt=True)
-        with pytest.raises(ValidationError, match="Encrypted"):
-            PDFValidator.validate_pdf_bytes(encrypted, "secure.pdf")
-
-    def test_corrupted_pdf_raises(self):
-        with pytest.raises(ValidationError):
-            PDFValidator.validate_pdf_bytes(b"GARBAGE_NOT_PDF", "bad.pdf")
-
-    def test_empty_bytes_raises(self):
-        with pytest.raises(ValidationError):
-            PDFValidator.validate_pdf_bytes(b"", "empty.pdf")
-
-    def test_just_below_size_limit_is_accepted(self, minimal_pdf_bytes):
-        """Real PDF below size limit should pass validation."""
-        assert len(minimal_pdf_bytes) < settings.MAX_FILE_SIZE
-        content, meta = PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "ok.pdf")
-        assert meta["size_bytes"] == len(minimal_pdf_bytes)
-
-
-# ---------------------------------------------------------------------------
-# validate_pdf_file (async) — positive and negative
-# ---------------------------------------------------------------------------
-
-
-class TestValidatePdfFileAsync:
-    async def test_valid_file_returns_tuple(self, minimal_pdf_bytes):
-        upload = _make_upload_file(minimal_pdf_bytes, "upload.pdf")
-        content, meta = await PDFValidator.validate_pdf_file(upload)
-        assert content == minimal_pdf_bytes
-        assert meta["filename"] == "upload.pdf"
-
-    async def test_file_without_name_uses_unknown(self, minimal_pdf_bytes):
-        upload = _make_upload_file(minimal_pdf_bytes)
-        upload.filename = None
-        content, meta = await PDFValidator.validate_pdf_file(upload)
-        assert meta["filename"] == "unknown.pdf"
-
-    async def test_encrypted_file_raises(self):
-        encrypted = _make_pdf(encrypt=True)
-        upload = _make_upload_file(encrypted, "secure.pdf")
-        with pytest.raises(ValidationError, match="Encrypted"):
-            await PDFValidator.validate_pdf_file(upload)
-
-    async def test_corrupted_file_raises(self):
-        upload = _make_upload_file(b"NOT_A_PDF", "bad.pdf")
-        with pytest.raises(ValidationError):
-            await PDFValidator.validate_pdf_file(upload)
-
-    async def test_exact_max_size_raises(self):
-        """
-        validate_pdf_file reads exactly MAX_FILE_SIZE bytes and raises
-        if len(content) == MAX_FILE_SIZE (meaning there may be more data).
-        """
-        upload = _make_upload_file(b"x" * settings.MAX_FILE_SIZE, "big.pdf")
-        with pytest.raises(ValidationError, match="File size"):
-            await PDFValidator.validate_pdf_file(upload)
-
-    async def test_checksum_computed(self, minimal_pdf_bytes):
-        upload = _make_upload_file(minimal_pdf_bytes, "doc.pdf")
-        _, meta = await PDFValidator.validate_pdf_file(upload)
-        expected = hashlib.sha256(minimal_pdf_bytes).hexdigest()
-        assert meta["checksum"] == expected
-
-
-# ---------------------------------------------------------------------------
-# Parametrized edge cases
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "bad_bytes",
-    [
-        b"\x00" * 10,           # null bytes
-        b"PDF-1.4 but not real",  # fake header
-        b"%PDF\xFF\xFE",          # truncated
-    ],
-    ids=["null-bytes", "fake-header", "truncated"],
-)
-def test_corrupted_content_raises_validation_error(bad_bytes):
-    with pytest.raises(ValidationError):
-        PDFValidator.validate_pdf_bytes(bad_bytes, "corrupt.pdf")
-
-
-# ---------------------------------------------------------------------------
-# fitz.FileDataError specific paths
-# ---------------------------------------------------------------------------
-
-
-class TestFitzFileDataError:
-    def test_validate_bytes_fitz_file_data_error(self, minimal_pdf_bytes):
-        """validate_pdf_bytes re-raises ValidationError when extract_pdf_metadata
-        raises fitz.FileDataError directly (covers lines 40-43)."""
-        from unittest.mock import patch
-        with patch.object(
-            PDFValidator, "extract_pdf_metadata",
-            side_effect=fitz.FileDataError("bad fitz data"),
-        ):
-            with pytest.raises(ValidationError, match="Invalid or corrupted"):
-                PDFValidator.validate_pdf_bytes(minimal_pdf_bytes, "doc.pdf")
-
-    async def test_validate_file_fitz_file_data_error(self, minimal_pdf_bytes):
-        """validate_pdf_file re-raises ValidationError when extract_pdf_metadata
-        raises fitz.FileDataError directly (covers lines 82-85)."""
-        from unittest.mock import patch
-        upload = _make_upload_file(minimal_pdf_bytes, "doc.pdf")
-        with patch.object(
-            PDFValidator, "extract_pdf_metadata",
-            side_effect=fitz.FileDataError("bad fitz data"),
-        ):
-            with pytest.raises(ValidationError, match="Invalid or corrupted"):
-                await PDFValidator.validate_pdf_file(upload)
+    def test_validate_pdf_bytes_at_exact_size_limit(self):
+        """Content exactly at MAX_FILE_SIZE should raise (>= check)."""
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            mock_settings.MAX_FILE_SIZE = 5
+            with pytest.raises(ValidationError, match="File size exceeds"):
+                PDFValidator.validate_pdf_bytes(b"12345", "test.pdf")

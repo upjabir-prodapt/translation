@@ -463,18 +463,26 @@ class CCITTG4Parser(BitParser):
             if self.bytealign:
                 raise self.ByteSkip
 
-    def _do_vertical(self, dx: int) -> None:
-        x1 = self._curpos + 1
-        while 1:
-            if x1 == 0:
-                if self._color == 1 and self._refline[x1] != self._color:
+    def _find_next_ref_transition(self, start: int, color: int) -> int:
+        """Scan the reference line from `start` to find the next colour transition.
+
+        Returns the index of the first position where the colour changes away
+        from `color`, as used by both _do_vertical and _do_pass.
+        """
+        x = start
+        while True:
+            if x == 0:
+                if color == 1 and self._refline[x] != color:
                     break
-            elif x1 == len(self._refline) or (
-                self._refline[x1 - 1] == self._color
-                and self._refline[x1] != self._color
+            elif x == len(self._refline) or (
+                self._refline[x - 1] == color and self._refline[x] != color
             ):
                 break
-            x1 += 1
+            x += 1
+        return x
+
+    def _do_vertical(self, dx: int) -> None:
+        x1 = self._find_next_ref_transition(self._curpos + 1, self._color)
         x1 += dx
         x0 = max(0, self._curpos)
         x1 = max(0, min(self.width, x1))
@@ -487,28 +495,23 @@ class CCITTG4Parser(BitParser):
         self._curpos = x1
         self._color = 1 - self._color
 
+    def _find_next_ref_run_start(self, start: int, color: int) -> int:
+        """From `start`, find the next run-start on the reference line for the opposing colour."""
+        x = start
+        while True:
+            if x == 0:
+                if color == 0 and self._refline[x] == color:
+                    break
+            elif x == len(self._refline) or (
+                self._refline[x - 1] != color and self._refline[x] == color
+            ):
+                break
+            x += 1
+        return x
+
     def _do_pass(self) -> None:
-        x1 = self._curpos + 1
-        while 1:
-            if x1 == 0:
-                if self._color == 1 and self._refline[x1] != self._color:
-                    break
-            elif x1 == len(self._refline) or (
-                self._refline[x1 - 1] == self._color
-                and self._refline[x1] != self._color
-            ):
-                break
-            x1 += 1
-        while 1:
-            if x1 == 0:
-                if self._color == 0 and self._refline[x1] == self._color:
-                    break
-            elif x1 == len(self._refline) or (
-                self._refline[x1 - 1] != self._color
-                and self._refline[x1] == self._color
-            ):
-                break
-            x1 += 1
+        x1 = self._find_next_ref_transition(self._curpos + 1, self._color)
+        x1 = self._find_next_ref_run_start(x1, self._color)
         for x in range(self._curpos, x1):
             self._curline[x] = self._color
         self._curpos = x1
@@ -565,8 +568,8 @@ def ccittfaxdecode(data: bytes, params: dict[str, object]) -> bytes:
     if K == -1:
         cols = cast(int, params.get("Columns"))
         bytealign = cast(bool, params.get("EncodedByteAlign"))
-        reversed = cast(bool, params.get("BlackIs1"))
-        parser = CCITTFaxDecoder(cols, bytealign=bytealign, reversed=reversed)
+        is_reversed = cast(bool, params.get("BlackIs1"))
+        parser = CCITTFaxDecoder(cols, bytealign=bytealign, reversed=is_reversed)
     else:
         raise PDFValueError(K)
     parser.feedbytes(data)

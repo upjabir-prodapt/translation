@@ -1,14 +1,17 @@
 """Language detection service."""
 
 from pathlib import Path
+from typing import Any
 
 from src.api.services.processor_service import JobProcessor
 from src.api.services.progress_tracker import ProgressTracker
 
 
 class _NoopUpdater:
-    async def update_job(self, job_id: str, updates: dict) -> None:  # pragma: no cover
-        return None
+    async def update_job(self, *_args: Any, **_kwargs: Any) -> None:  # pragma: no cover
+        import asyncio
+
+        await asyncio.sleep(0)
 
 
 class LanguageDetectionService:
@@ -20,4 +23,3 @@ class LanguageDetectionService:
 
     def detect(self, input_pdf: Path) -> str:
         return self._processor.detect_source_language(input_pdf)
-

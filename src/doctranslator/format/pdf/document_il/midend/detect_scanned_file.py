@@ -6,7 +6,9 @@ import pymupdf
 import regex
 from skimage.metrics import structural_similarity
 
-from src.doctranslator.doctranslator_exception.DocTranslatorException import ScannedPDFError
+from src.doctranslator.doctranslator_exception.DocTranslatorException import (
+    ScannedPDFError,
+)
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
 from src.doctranslator.format.pdf.document_il.utils.style_helper import BLACK
@@ -125,8 +127,9 @@ class DetectScannedFile:
         if scanned >= threshold:
             if self.translation_config.auto_enable_ocr_workaround:
                 logger.warning(
-                    f"Detected {scanned} scanned pages, which is more than 80% of the total pages. "
+                    "Detected %d scanned pages (more than 80 percent of the total). "
                     "Turning on OCR workaround.",
+                    scanned,
                 )
                 self.translation_config.shared_context_cross_split_part.auto_enabled_ocr_workaround = True
                 self.translation_config.ocr_workaround = True
@@ -136,8 +139,9 @@ class DetectScannedFile:
                 self.translation_config.remove_non_formula_lines = False
             else:
                 logger.warning(
-                    f"Detected {scanned} scanned pages, which is more than 80% of the total pages. "
+                    "Detected %d scanned pages (more than 80 percent of the total). "
                     "Please check the input PDF file.",
+                    scanned,
                 )
                 raise ScannedPDFError("Scanned PDF detected.")
 

@@ -38,6 +38,7 @@ class TranslationService:
             bigquery=self.bigquery,
             storage=self.storage,
         )
+        self._background_tasks = set()
 
     async def submit_translation(self, request: TranslateRequest) -> TranslateResponse:
         """Submit a document for translation."""
@@ -118,7 +119,7 @@ class TranslationService:
             }
 
             await self.bigquery.upsert_translation_job(job_data)
-            await self._schedule_background_pipeline(job_id, job_data)
+            self._schedule_background_pipeline(job_id, job_data)
 
             logger.info(f"Submitted translation job {job_id}")
 
@@ -164,14 +165,18 @@ class TranslationService:
             "domain": domain,
         }
 
-    async def _schedule_background_pipeline(
+    def _schedule_background_pipeline(
         self,
         job_id: str,
         job_data: dict[str, Any],
     ) -> None:
         """Schedule API-local background translation pipeline."""
         if settings.API_USE_BACKGROUND_PIPELINE:
-            asyncio.create_task(self.orchestrator.run(job_id=job_id, job_data=job_data))
+            task = asyncio.create_task(
+                self.orchestrator.run(job_id=job_id, job_data=job_data)
+            )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
             logger.info(f"Scheduled in-process translation pipeline for job {job_id}")
             return
         raise RuntimeError("Cloud Tasks mode is disabled in this implementation")

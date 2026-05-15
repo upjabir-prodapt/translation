@@ -31,15 +31,13 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
     """Return True when an exception is likely transient for LLM calls."""
     if isinstance(
         exc,
-        (
-            ConnectionError,
-            TimeoutError,
-            OSError,
-            httpx.TimeoutException,
-            httpx.NetworkError,
-            httpx.RemoteProtocolError,
-            httpx.HTTPError,
-        ),
+        ConnectionError
+        | TimeoutError
+        | OSError
+        | httpx.TimeoutException
+        | httpx.NetworkError
+        | httpx.RemoteProtocolError
+        | httpx.HTTPError,
     ):
         return True
 
@@ -54,7 +52,9 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
     return any(keyword in error_message for keyword in _RETRYABLE_ERROR_SUBSTRINGS)
 
 
-def llm_retry(*, logger: logging.Logger) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def llm_retry(
+    *, logger: logging.Logger
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Build a Tenacity decorator for shared LLM retry policy."""
     return retry(
         stop=stop_after_attempt(settings.LLM_RETRY_MAX_ATTEMPTS),

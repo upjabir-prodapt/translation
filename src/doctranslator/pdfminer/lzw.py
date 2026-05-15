@@ -58,7 +58,7 @@ class LZWDecoder:
             self.prevbuf = b""
             self.nbits = 9
         elif code == 257:
-            pass
+            pass  # End-of-information code: no action needed, decoding stops naturally
         elif not self.prevbuf:
             x = self.prevbuf = cast(bytes, self.table[code])  # assume not None
         else:

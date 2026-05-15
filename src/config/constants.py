@@ -24,6 +24,8 @@ from pydantic_settings import BaseSettings
 from pydantic_settings import PydanticBaseSettingsSource
 from pydantic_settings import SettingsConfigDict
 
+DEFAULT_SECRET_VERSION = "latest"  # noqa: S105
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------
@@ -116,7 +118,7 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_LOCATION: str
     IS_LOCAL: bool = Field(default=True)
     APP_CONFIG_SECRET_NAME: str | None = None
-    APP_CONFIG_SECRET_VERSION: str = "latest"
+    APP_CONFIG_SECRET_VERSION: str = DEFAULT_SECRET_VERSION
 
     # -----------------------------
     # GCS
@@ -280,16 +282,26 @@ class Settings(BaseSettings):
     @property
     def assets_root_path(self) -> Path:
         """Canonical root for persisted asset cache files."""
-        return Path(self.ASSETS_ROOT) if self.ASSETS_ROOT else self.PROJECT_ROOT / "assets"
+        return (
+            Path(self.ASSETS_ROOT) if self.ASSETS_ROOT else self.PROJECT_ROOT / "assets"
+        )
 
     @property
     def temp_root_path(self) -> Path:
         """Canonical root for runtime temporary/job execution files."""
         if self.TEMP_DIR:
-            return Path(self.TEMP_DIR)
-        if self.IS_LOCAL:
-            return self.PROJECT_ROOT / "tmp"
-        return Path("/tmp")
+            path = Path(self.TEMP_DIR)
+        elif self.IS_LOCAL:
+            path = self.PROJECT_ROOT / "tmp"
+        else:
+            import tempfile
+
+            path = Path(tempfile.gettempdir()) / "translation-api"
+
+        # Ensure the directory exists with restricted permissions (owner only)
+        if not path.exists():
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return path
 
     # --------------------------------------------------
     # Post Initialization

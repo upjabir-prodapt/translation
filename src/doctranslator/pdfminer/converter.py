@@ -56,7 +56,7 @@ class PDFLayoutAnalyzer(PDFTextDevice):
     cur_item: LTLayoutContainer
     ctm: Matrix
 
-    def __init__(
+    def __init__(  # NOSONAR - pdfminer-compatible converter API keeps these keyword parameters
         self,
         rsrcmgr: PDFResourceManager,
         pageno: int = 1,
@@ -101,6 +101,249 @@ class PDFLayoutAnalyzer(PDFTextDevice):
         )
         self.cur_item.add(item)
 
+    def _make_curve(
+        self,
+        gstate: PDFGraphicState,
+        stroke: bool,
+        fill: bool,
+        evenodd: bool,
+        pts: list[Point],
+        transformed_path: list[PathSegment],
+        passthrough_instruction: object,
+        xobj_id: object,
+        current_clip_paths: object,
+        path: Sequence[PathSegment],
+    ) -> LTCurve:
+        """Build an LTCurve and attach metadata."""
+        curve = LTCurve(
+            gstate.linewidth,
+            pts,
+            stroke,
+            fill,
+            evenodd,
+            gstate.scolor,
+            gstate.ncolor,
+            transformed_path,
+            gstate.dash,
+        )
+        curve.passthrough_instruction = passthrough_instruction
+        curve.xobj_id = xobj_id
+        curve.render_order = self.il_creater.get_render_order_and_increase()
+        curve.ctm = self.ctm
+        curve.raw_path = path.copy()
+        curve.clip_paths = current_clip_paths
+        return curve
+
+    def _paint_line(
+        self,
+        gstate: PDFGraphicState,
+        stroke: bool,
+        fill: bool,
+        evenodd: bool,
+        pts: list[Point],
+        transformed_path: list[PathSegment],
+        passthrough_instruction: object,
+        xobj_id: object,
+        current_clip_paths: object,
+        path: Sequence[PathSegment],
+    ) -> None:
+        """Paint a single line segment (shape 'mlh' or 'ml')."""
+        line = LTLine(
+            gstate.linewidth,
+            pts[0],
+            pts[1],
+            stroke,
+            fill,
+            evenodd,
+            gstate.scolor,
+            gstate.ncolor,
+            original_path=transformed_path,
+            dashing_style=gstate.dash,
+        )
+        line.passthrough_instruction = passthrough_instruction
+        line.xobj_id = xobj_id
+        line.render_order = self.il_creater.get_render_order_and_increase()
+        line.ctm = self.ctm
+        line.raw_path = path.copy()
+        line.clip_paths = current_clip_paths
+        self.cur_item.add(line)
+
+    def _paint_rect_or_curve(
+        self,
+        gstate: PDFGraphicState,
+        stroke: bool,
+        fill: bool,
+        evenodd: bool,
+        pts: list[Point],
+        transformed_path: list[PathSegment],
+        passthrough_instruction: object,
+        xobj_id: object,
+        current_clip_paths: object,
+        path: Sequence[PathSegment],
+    ) -> None:
+        """Paint a rectangle if pts form a closed rectangle, otherwise a curve."""
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3), _ = pts
+        is_closed_loop = pts[0] == pts[4]
+        has_square_coordinates = (x0 == x1 and y1 == y2 and x2 == x3 and y3 == y0) or (
+            y0 == y1 and x1 == x2 and y2 == y3 and x3 == x0
+        )
+        if is_closed_loop and has_square_coordinates:
+            rect = LTRect(
+                gstate.linewidth,
+                (*pts[0], *pts[2]),
+                stroke,
+                fill,
+                evenodd,
+                gstate.scolor,
+                gstate.ncolor,
+                transformed_path,
+                gstate.dash,
+            )
+            rect.passthrough_instruction = passthrough_instruction
+            rect.xobj_id = xobj_id
+            rect.render_order = self.il_creater.get_render_order_and_increase()
+            rect.ctm = self.ctm
+            rect.raw_path = path.copy()
+            rect.clip_paths = current_clip_paths
+            self.cur_item.add(rect)
+        else:
+            self.cur_item.add(
+                self._make_curve(
+                    gstate,
+                    stroke,
+                    fill,
+                    evenodd,
+                    pts,
+                    transformed_path,
+                    passthrough_instruction,
+                    xobj_id,
+                    current_clip_paths,
+                    path,
+                )
+            )
+
+    def _transform_path(
+        self, path: Sequence[PathSegment]
+    ) -> tuple[list[Point], list[PathSegment]]:
+        """Compute transformed points and path segments for the given path."""
+        raw_pts = [cast(Point, p[-2:] if p[0] != "h" else path[0][-2:]) for p in path]
+        pts = [apply_matrix_pt(self.ctm, pt) for pt in raw_pts]
+        operators = [str(operation[0]) for operation in path]
+        transformed_points = [
+            [
+                apply_matrix_pt(self.ctm, (float(operand1), float(operand2)))
+                for operand1, operand2 in zip(
+                    operation[1::2], operation[2::2], strict=False
+                )
+            ]
+            for operation in path
+        ]
+        transformed_path = [
+            cast(PathSegment, (o, *p))
+            for o, p in zip(operators, transformed_points, strict=False)
+        ]
+        return pts, transformed_path
+
+    def _dispatch_path_shape(
+        self,
+        gstate: PDFGraphicState,
+        stroke: bool,
+        fill: bool,
+        evenodd: bool,
+        path: Sequence[PathSegment],
+        shape: str,
+        pts: list[Point],
+        transformed_path: list[PathSegment],
+        passthrough_instruction: object,
+        xobj_id: object,
+        current_clip_paths: object,
+    ) -> None:
+        """Dispatch painting to the appropriate helper based on path shape."""
+        if shape in {"mlh", "ml"}:
+            self._paint_line(
+                gstate,
+                stroke,
+                fill,
+                evenodd,
+                pts,
+                transformed_path,
+                passthrough_instruction,
+                xobj_id,
+                current_clip_paths,
+                path,
+            )
+        elif shape in {"mlllh", "mllll"}:
+            self._paint_rect_or_curve(
+                gstate,
+                stroke,
+                fill,
+                evenodd,
+                pts,
+                transformed_path,
+                passthrough_instruction,
+                xobj_id,
+                current_clip_paths,
+                path,
+            )
+        else:
+            self.cur_item.add(
+                self._make_curve(
+                    gstate,
+                    stroke,
+                    fill,
+                    evenodd,
+                    pts,
+                    transformed_path,
+                    passthrough_instruction,
+                    xobj_id,
+                    current_clip_paths,
+                    path,
+                )
+            )
+
+    def _paint_valid_path(
+        self,
+        gstate: PDFGraphicState,
+        stroke: bool,
+        fill: bool,
+        evenodd: bool,
+        path: Sequence[PathSegment],
+        current_clip_paths: object,
+    ) -> None:
+        """Handle a valid (m-starting) path: transform, normalise, and paint."""
+        # Although the 'h' command does not not literally provide a
+        # point-position, its position is (by definition) equal to the
+        # subpath's starting point.
+        #
+        # And, per Section 4.4's Table 4.9, all other path commands place
+        # their point-position in their final two arguments. (Any preceding
+        # arguments represent control points on Bézier curves.)
+        pts, transformed_path = self._transform_path(path)
+        shape = "".join(x[0] for x in path)
+
+        # Drop a redundant "l" on a path closed with "h"
+        if len(shape) > 3 and shape[-2:] == "lh" and pts[-2] == pts[0]:
+            shape = shape[:-2] + "h"
+            pts.pop()
+
+        passthrough_instruction = (
+            self.il_creater.passthrough_per_char_instruction.copy()
+        )
+        xobj_id = self.il_creater.xobj_id
+        self._dispatch_path_shape(
+            gstate,
+            stroke,
+            fill,
+            evenodd,
+            path,
+            shape,
+            pts,
+            transformed_path,
+            passthrough_instruction,
+            xobj_id,
+            current_clip_paths,
+        )
+
     def paint_path(
         self,
         gstate: PDFGraphicState,
@@ -119,140 +362,8 @@ class PDFLayoutAnalyzer(PDFTextDevice):
             # converts all `re` (rectangle) operators to their equivelent
             # `mlllh` representation, paths ingested by `.paint_path(...)` that
             # do not begin with the `m` operator are invalid.
-            pass
-
-        # elif shape.count("m") > 1:
-        #     # recurse if there are multiple m's in this shape
-        #     for m in re.finditer(r"m[^m]+", shape):
-        #         subpath = path[m.start(0) : m.end(0)]
-        #         self.paint_path(gstate, stroke, fill, evenodd, subpath)
-
-        else:
-            # Although the 'h' command does not not literally provide a
-            # point-position, its position is (by definition) equal to the
-            # subpath's starting point.
-            #
-            # And, per Section 4.4's Table 4.9, all other path commands place
-            # their point-position in their final two arguments. (Any preceding
-            # arguments represent control points on Bézier curves.)
-            raw_pts = [
-                cast(Point, p[-2:] if p[0] != "h" else path[0][-2:]) for p in path
-            ]
-            pts = [apply_matrix_pt(self.ctm, pt) for pt in raw_pts]
-
-            operators = [str(operation[0]) for operation in path]
-            transformed_points = [
-                [
-                    apply_matrix_pt(self.ctm, (float(operand1), float(operand2)))
-                    for operand1, operand2 in zip(
-                        operation[1::2], operation[2::2], strict=False
-                    )
-                ]
-                for operation in path
-            ]
-            transformed_path = [
-                cast(PathSegment, (o, *p))
-                for o, p in zip(operators, transformed_points, strict=False)
-            ]
-
-            # Drop a redundant "l" on a path closed with "h"
-            if len(shape) > 3 and shape[-2:] == "lh" and pts[-2] == pts[0]:
-                shape = shape[:-2] + "h"
-                pts.pop()
-
-            passthrough_instruction = (
-                self.il_creater.passthrough_per_char_instruction.copy()
-            )
-            xobj_id = self.il_creater.xobj_id
-            if shape in {"mlh", "ml"}:
-                # single line segment
-                #
-                # Note: 'ml', in conditional above, is a frequent anomaly
-                # that we want to support.
-                line = LTLine(
-                    gstate.linewidth,
-                    pts[0],
-                    pts[1],
-                    stroke,
-                    fill,
-                    evenodd,
-                    gstate.scolor,
-                    gstate.ncolor,
-                    original_path=transformed_path,
-                    dashing_style=gstate.dash,
-                )
-                line.passthrough_instruction = passthrough_instruction
-                line.xobj_id = xobj_id
-                line.render_order = self.il_creater.get_render_order_and_increase()
-                line.ctm = self.ctm
-                line.raw_path = path.copy()
-                line.clip_paths = current_clip_paths
-                self.cur_item.add(line)
-
-            elif shape in {"mlllh", "mllll"}:
-                (x0, y0), (x1, y1), (x2, y2), (x3, y3), _ = pts
-
-                is_closed_loop = pts[0] == pts[4]
-                has_square_coordinates = (
-                    x0 == x1 and y1 == y2 and x2 == x3 and y3 == y0
-                ) or (y0 == y1 and x1 == x2 and y2 == y3 and x3 == x0)
-                if is_closed_loop and has_square_coordinates:
-                    rect = LTRect(
-                        gstate.linewidth,
-                        (*pts[0], *pts[2]),
-                        stroke,
-                        fill,
-                        evenodd,
-                        gstate.scolor,
-                        gstate.ncolor,
-                        transformed_path,
-                        gstate.dash,
-                    )
-                    rect.passthrough_instruction = passthrough_instruction
-                    rect.xobj_id = xobj_id
-                    rect.render_order = self.il_creater.get_render_order_and_increase()
-                    rect.ctm = self.ctm
-                    rect.raw_path = path.copy()
-                    rect.clip_paths = current_clip_paths
-                    self.cur_item.add(rect)
-                else:
-                    curve = LTCurve(
-                        gstate.linewidth,
-                        pts,
-                        stroke,
-                        fill,
-                        evenodd,
-                        gstate.scolor,
-                        gstate.ncolor,
-                        transformed_path,
-                        gstate.dash,
-                    )
-                    curve.passthrough_instruction = passthrough_instruction
-                    curve.xobj_id = xobj_id
-                    curve.render_order = self.il_creater.get_render_order_and_increase()
-                    curve.ctm = self.ctm
-                    curve.raw_path = path.copy()
-                    curve.clip_paths = current_clip_paths
-                    self.cur_item.add(curve)
-            else:
-                curve = LTCurve(
-                    gstate.linewidth,
-                    pts,
-                    stroke,
-                    fill,
-                    evenodd,
-                    gstate.scolor,
-                    gstate.ncolor,
-                    transformed_path,
-                    gstate.dash,
-                )
-                curve.passthrough_instruction = passthrough_instruction
-                curve.xobj_id = xobj_id
-                curve.render_order = self.il_creater.get_render_order_and_increase()
-                curve.ctm = self.ctm
-                curve.raw_path = path.copy()
-                curve.clip_paths = current_clip_paths
-                self.cur_item.add(curve)
+            return
+        self._paint_valid_path(gstate, stroke, fill, evenodd, path, current_clip_paths)
 
     def render_char(
         self,
@@ -292,7 +403,7 @@ class PDFLayoutAnalyzer(PDFTextDevice):
         return "(cid:%d)" % cid
 
     def receive_layout(self, ltpage: LTPage) -> None:
-        pass
+        pass  # Intentionally not implemented: subclasses override this to process the analyzed page layout
 
 
 class PDFPageAggregator(PDFLayoutAnalyzer):
@@ -341,14 +452,14 @@ class PDFConverter(PDFLayoutAnalyzer, Generic[IOType]):
             return False
         elif isinstance(outfp, io.BytesIO):
             return True
-        elif isinstance(outfp, io.StringIO) or isinstance(outfp, io.TextIOBase):
+        elif isinstance(outfp, (io.StringIO, io.TextIOBase)):
             return False
 
         return True
 
 
 class TextConverter(PDFConverter[AnyIO]):
-    def __init__(
+    def __init__(  # NOSONAR - pdfminer-compatible converter API keeps these keyword parameters
         self,
         rsrcmgr: PDFResourceManager,
         outfp: AnyIO,
@@ -378,9 +489,8 @@ class TextConverter(PDFConverter[AnyIO]):
                 self.write_text(item.get_text())
             if isinstance(item, LTTextBox):
                 self.write_text("\n")
-            elif isinstance(item, LTImage):
-                if self.imagewriter is not None:
-                    self.imagewriter.export_image(item)
+            elif isinstance(item, LTImage) and self.imagewriter is not None:
+                self.imagewriter.export_image(item)
 
         if self.showpageno:
             self.write_text("Page %s\n" % ltpage.pageid)
@@ -402,7 +512,7 @@ class TextConverter(PDFConverter[AnyIO]):
         evenodd: bool,
         path: Sequence[PathSegment],
     ) -> None:
-        pass
+        pass  # Intentionally not implemented: TextConverter ignores path drawing to save RAM
 
 
 class HTMLConverter(PDFConverter[AnyIO]):
@@ -420,7 +530,7 @@ class HTMLConverter(PDFConverter[AnyIO]):
         "char": "black",
     }
 
-    def __init__(
+    def __init__(  # NOSONAR - pdfminer-compatible converter API keeps these keyword parameters
         self,
         rsrcmgr: PDFResourceManager,
         outfp: AnyIO,
@@ -434,8 +544,10 @@ class HTMLConverter(PDFConverter[AnyIO]):
         pagemargin: int = 50,
         imagewriter: ImageWriter | None = None,
         debug: int = 0,
-        rect_colors: dict[str, str] | None = None,
-        text_colors: dict[str, str] | None = None,
+        rect_colors_param: dict[str, str]
+        | None = None,  # NOSONAR - renamed to avoid clash with RECT_COLORS class var
+        text_colors_param: dict[str, str]
+        | None = None,  # NOSONAR - renamed to avoid clash with TEXT_COLORS class var
     ) -> None:
         PDFConverter.__init__(
             self,
@@ -452,10 +564,10 @@ class HTMLConverter(PDFConverter[AnyIO]):
         if not self.outfp_binary and self.codec:
             raise PDFValueError("Codec must not be specified for a text I/O output")
 
-        if text_colors is None:
-            text_colors = {"char": "black"}
-        if rect_colors is None:
-            rect_colors = {"curve": "black", "page": "gray"}
+        if text_colors_param is None:
+            text_colors_param = {"char": "black"}
+        if rect_colors_param is None:
+            rect_colors_param = {"curve": "black", "page": "gray"}
 
         self.scale = scale
         self.fontscale = fontscale
@@ -463,11 +575,11 @@ class HTMLConverter(PDFConverter[AnyIO]):
         self.showpageno = showpageno
         self.pagemargin = pagemargin
         self.imagewriter = imagewriter
-        self.rect_colors = rect_colors
-        self.text_colors = text_colors
+        self.instance_rect_colors = rect_colors_param
+        self.instance_text_colors = text_colors_param
         if debug:
-            self.rect_colors.update(self.RECT_COLORS)
-            self.text_colors.update(self.TEXT_COLORS)
+            self.instance_rect_colors.update(self.RECT_COLORS)
+            self.instance_text_colors.update(self.TEXT_COLORS)
         self._yoffset: float = self.pagemargin
         self._font: tuple[str, float] | None = None
         self._fontstack: list[tuple[str, float] | None] = []
@@ -511,7 +623,7 @@ class HTMLConverter(PDFConverter[AnyIO]):
         w: float,
         h: float,
     ) -> None:
-        color2 = self.rect_colors.get(color)
+        color2 = self.instance_rect_colors.get(color)
         if color2 is not None:
             s = (
                 '<span style="position:absolute; border: %s %dpx solid; '
@@ -563,7 +675,7 @@ class HTMLConverter(PDFConverter[AnyIO]):
         y: float,
         size: float,
     ) -> None:
-        color2 = self.text_colors.get(color)
+        color2 = self.instance_text_colors.get(color)
         if color2 is not None:
             s = (
                 '<span style="position:absolute; color:%s; left:%dpx; '
@@ -616,7 +728,7 @@ class HTMLConverter(PDFConverter[AnyIO]):
     def put_text(self, text: str, fontname: str, fontsize: float) -> None:
         font = (fontname, fontsize)
         if font != self._font:
-            if self._font is not None:
+            if self._font is not None:  # NOSONAR - inner if is not the only statement in the outer block
                 self.write("</span>")
             # Remove subset tag from fontname, see PDF Reference 5.5.3
             fontname_without_subset_tag = fontname.split("+")[-1]
@@ -630,90 +742,107 @@ class HTMLConverter(PDFConverter[AnyIO]):
     def put_newline(self) -> None:
         self.write("<br>")
 
+    def _show_html_group(self, item: "LTTextGroup | TextGroupElement") -> None:
+        """Recursively render a text group hierarchy as HTML borders."""
+        if isinstance(item, LTTextGroup):
+            self.place_border("textgroup", 1, item)
+            for child in item:
+                self._show_html_group(child)
+
+    def _render_html_item_exact(self, item: "LTItem") -> None:
+        """Render one layout item in exact-mode positioning."""
+        if isinstance(item, LTTextLine):
+            self.place_border("textline", 1, item)
+            for child in item:
+                self._render_html_item(child)
+        elif isinstance(item, LTTextBox):
+            self.place_border("textbox", 1, item)
+            self.place_text(
+                "textbox",
+                str(item.index + 1),
+                item.x0,
+                item.y1,
+                20,
+            )
+            for child in item:
+                self._render_html_item(child)
+        elif isinstance(item, LTChar):
+            self.place_border("char", 1, item)
+            self.place_text(
+                "char",
+                item.get_text(),
+                item.x0,
+                item.y1,
+                item.size,
+            )
+
+    def _render_html_page(self, item: "LTPage") -> None:
+        """Render an LTPage node to HTML."""
+        self._yoffset += item.y1
+        self.place_border("page", 1, item)
+        if self.showpageno:
+            self.write(
+                '<div style="position:absolute; top:%dpx;">'
+                % ((self._yoffset - item.y1) * self.scale),
+            )
+            self.write(f'<a name="{item.pageid}">Page {item.pageid}</a></div>\n')
+        for child in item:
+            self._render_html_item(child)
+        if item.groups is not None:
+            for group in item.groups:
+                self._show_html_group(group)
+
+    def _render_html_text_line(self, item: "LTTextLine") -> None:
+        """Render an LTTextLine item as HTML."""
+        for child in item:
+            self._render_html_item(child)
+        if self.layoutmode != "loose":
+            self.put_newline()
+
+    def _render_html_text_box(self, item: "LTTextBox") -> None:
+        """Render an LTTextBox item as HTML."""
+        self.begin_div(
+            "textbox",
+            1,
+            item.x0,
+            item.y1,
+            item.width,
+            item.height,
+            item.get_writing_mode(),
+        )
+        for child in item:
+            self._render_html_item(child)
+        self.end_div("textbox")
+
+    def _render_html_item(  # NOSONAR - dispatcher must handle all LTItem subtypes; complexity is inherent
+        self, item: "LTItem"
+    ) -> None:
+        """Recursively render a layout item and its children as HTML."""
+        if isinstance(item, LTPage):
+            self._render_html_page(item)
+        elif isinstance(item, LTCurve):
+            self.place_border("curve", 1, item)
+        elif isinstance(item, LTFigure):
+            self.begin_div("figure", 1, item.x0, item.y1, item.width, item.height)
+            for child in item:
+                self._render_html_item(child)
+            self.end_div("figure")
+        elif isinstance(item, LTImage):
+            self.place_image(item, 1, item.x0, item.y1, item.width, item.height)
+        elif self.layoutmode == "exact":
+            self._render_html_item_exact(item)
+        elif isinstance(item, LTTextLine):
+            self._render_html_text_line(item)
+        elif isinstance(item, LTTextBox):
+            self._render_html_text_box(item)
+        elif isinstance(item, LTChar):
+            fontname = make_compat_str(item.fontname)
+            self.put_text(item.get_text(), fontname, item.size)
+        elif isinstance(item, LTText):
+            self.write_text(item.get_text())
+
     def receive_layout(self, ltpage: LTPage) -> None:
-        def show_group(item: LTTextGroup | TextGroupElement) -> None:
-            if isinstance(item, LTTextGroup):
-                self.place_border("textgroup", 1, item)
-                for child in item:
-                    show_group(child)
-
-        def render(item: LTItem) -> None:
-            child: LTItem
-            if isinstance(item, LTPage):
-                self._yoffset += item.y1
-                self.place_border("page", 1, item)
-                if self.showpageno:
-                    self.write(
-                        '<div style="position:absolute; top:%dpx;">'
-                        % ((self._yoffset - item.y1) * self.scale),
-                    )
-                    self.write(
-                        f'<a name="{item.pageid}">Page {item.pageid}</a></div>\n',
-                    )
-                for child in item:
-                    render(child)
-                if item.groups is not None:
-                    for group in item.groups:
-                        show_group(group)
-            elif isinstance(item, LTCurve):
-                self.place_border("curve", 1, item)
-            elif isinstance(item, LTFigure):
-                self.begin_div("figure", 1, item.x0, item.y1, item.width, item.height)
-                for child in item:
-                    render(child)
-                self.end_div("figure")
-            elif isinstance(item, LTImage):
-                self.place_image(item, 1, item.x0, item.y1, item.width, item.height)
-            elif self.layoutmode == "exact":
-                if isinstance(item, LTTextLine):
-                    self.place_border("textline", 1, item)
-                    for child in item:
-                        render(child)
-                elif isinstance(item, LTTextBox):
-                    self.place_border("textbox", 1, item)
-                    self.place_text(
-                        "textbox",
-                        str(item.index + 1),
-                        item.x0,
-                        item.y1,
-                        20,
-                    )
-                    for child in item:
-                        render(child)
-                elif isinstance(item, LTChar):
-                    self.place_border("char", 1, item)
-                    self.place_text(
-                        "char",
-                        item.get_text(),
-                        item.x0,
-                        item.y1,
-                        item.size,
-                    )
-            elif isinstance(item, LTTextLine):
-                for child in item:
-                    render(child)
-                if self.layoutmode != "loose":
-                    self.put_newline()
-            elif isinstance(item, LTTextBox):
-                self.begin_div(
-                    "textbox",
-                    1,
-                    item.x0,
-                    item.y1,
-                    item.width,
-                    item.height,
-                    item.get_writing_mode(),
-                )
-                for child in item:
-                    render(child)
-                self.end_div("textbox")
-            elif isinstance(item, LTChar):
-                fontname = make_compat_str(item.fontname)
-                self.put_text(item.get_text(), fontname, item.size)
-            elif isinstance(item, LTText):
-                self.write_text(item.get_text())
-
-        render(ltpage)
+        self._render_html_item(ltpage)
         self._yoffset += self.pagemargin
 
     def close(self) -> None:
@@ -771,110 +900,122 @@ class XMLConverter(PDFConverter[AnyIO]):
             text = self.CONTROL.sub("", text)
         self.write(enc(text))
 
-    def receive_layout(self, ltpage: LTPage) -> None:
-        def show_group(item: LTItem) -> None:
-            if isinstance(item, LTTextBox):
-                self.write(
-                    '<textbox id="%d" bbox="%s" />\n'
-                    % (item.index, bbox2str(item.bbox)),
-                )
-            elif isinstance(item, LTTextGroup):
-                self.write('<textgroup bbox="%s">\n' % bbox2str(item.bbox))
-                for child in item:
-                    show_group(child)
-                self.write("</textgroup>\n")
+    def _render_xml_image(self, item: "LTImage") -> None:
+        """Write an XML image element to output."""
+        if self.imagewriter is not None:
+            name = self.imagewriter.export_image(item)
+            self.write(
+                '<image src="%s" width="%d" height="%d" />\n'
+                % (enc(name), item.width, item.height),
+            )
+        else:
+            self.write(
+                '<image width="%d" height="%d" />\n' % (item.width, item.height),
+            )
 
+    def _render_xml_page(self, item: "LTPage", render) -> None:
+        """Write XML for an LTPage node."""
+        self.write(
+            '<page id="%s" bbox="%s" rotate="%d">\n'
+            % (item.pageid, bbox2str(item.bbox), item.rotate)
+        )
+        for child in item:
+            render(child)
+        if item.groups is not None:
+            self.write("<layout>\n")
+            for group in item.groups:
+                self._show_group_xml(group)
+            self.write("</layout>\n")
+        self.write("</page>\n")
+
+    def _render_xml_char(self, item: "LTChar") -> None:
+        """Write XML for a single LTChar."""
+        s = '<text font="%s" bbox="%s" colourspace="%s" ncolour="%s" size="%.3f">' % (
+            enc(item.fontname),
+            bbox2str(item.bbox),
+            item.ncs.name,
+            item.graphicstate.ncolor,
+            item.size,
+        )
+        self.write(s)
+        self.write_text(item.get_text())
+        self.write("</text>\n")
+
+    def _render_xml_shape(self, item: "LTItem") -> None:
+        """Write XML for a primitive shape (line, rect, or curve)."""
+        if isinstance(item, LTLine):
+            self.write(
+                '<line linewidth="%d" bbox="%s" />\n'
+                % (item.linewidth, bbox2str(item.bbox))
+            )
+        elif isinstance(item, LTRect):
+            self.write(
+                '<rect linewidth="%d" bbox="%s" />\n'
+                % (item.linewidth, bbox2str(item.bbox))
+            )
+        elif isinstance(item, LTCurve):
+            self.write(
+                '<curve linewidth="%d" bbox="%s" pts="%s"/>\n'
+                % (item.linewidth, bbox2str(item.bbox), item.get_pts())
+            )
+
+    def _render_xml_text_containers(self, item: "LTItem", render: "Any") -> bool:
+        """Write XML for text-container items. Returns True if handled."""
+        if isinstance(item, LTTextLine):
+            self.write('<textline bbox="%s">\n' % bbox2str(item.bbox))
+            for child in item:
+                render(child)
+            self.write("</textline>\n")
+            return True
+        if isinstance(item, LTTextBox):
+            wmode = ' wmode="vertical"' if isinstance(item, LTTextBoxVertical) else ""
+            self.write(
+                '<textbox id="%d" bbox="%s"%s>\n'
+                % (item.index, bbox2str(item.bbox), wmode)
+            )
+            for child in item:
+                render(child)
+            self.write("</textbox>\n")
+            return True
+        return False
+
+    def _render_xml_item(self, item: "LTItem", render: "Any") -> None:
+        """Write one XML element for `item`, recursing into containers via `render`."""
+        if isinstance(item, LTPage):
+            self._render_xml_page(item, render)
+        elif isinstance(item, (LTLine, LTRect, LTCurve)):
+            self._render_xml_shape(item)
+        elif isinstance(item, LTFigure):
+            self.write(f'<figure name="{item.name}" bbox="{bbox2str(item.bbox)}">\n')
+            for child in item:
+                render(child)
+            self.write("</figure>\n")
+        elif self._render_xml_text_containers(item, render):
+            return
+        elif isinstance(item, LTChar):
+            self._render_xml_char(item)
+        elif isinstance(item, LTText):
+            self.write("<text>%s</text>\n" % item.get_text())
+        elif isinstance(item, LTImage):
+            self._render_xml_image(item)
+        else:
+            assert False, str(("Unhandled", item))
+
+    def _show_group_xml(self, item: "LTItem") -> None:
+        """Recursively write XML for a text-group hierarchy."""
+        if isinstance(item, LTTextBox):
+            self.write(
+                '<textbox id="%d" bbox="%s" />\n' % (item.index, bbox2str(item.bbox)),
+            )
+        elif isinstance(item, LTTextGroup):
+            self.write('<textgroup bbox="%s">\n' % bbox2str(item.bbox))
+            for child in item:
+                self._show_group_xml(child)
+            self.write("</textgroup>\n")
+
+    def receive_layout(self, ltpage: LTPage) -> None:
         def render(item: LTItem) -> None:
-            child: LTItem
-            if isinstance(item, LTPage):
-                s = '<page id="%s" bbox="%s" rotate="%d">\n' % (
-                    item.pageid,
-                    bbox2str(item.bbox),
-                    item.rotate,
-                )
-                self.write(s)
-                for child in item:
-                    render(child)
-                if item.groups is not None:
-                    self.write("<layout>\n")
-                    for group in item.groups:
-                        show_group(group)
-                    self.write("</layout>\n")
-                self.write("</page>\n")
-            elif isinstance(item, LTLine):
-                s = '<line linewidth="%d" bbox="%s" />\n' % (
-                    item.linewidth,
-                    bbox2str(item.bbox),
-                )
-                self.write(s)
-            elif isinstance(item, LTRect):
-                s = '<rect linewidth="%d" bbox="%s" />\n' % (
-                    item.linewidth,
-                    bbox2str(item.bbox),
-                )
-                self.write(s)
-            elif isinstance(item, LTCurve):
-                s = '<curve linewidth="%d" bbox="%s" pts="%s"/>\n' % (
-                    item.linewidth,
-                    bbox2str(item.bbox),
-                    item.get_pts(),
-                )
-                self.write(s)
-            elif isinstance(item, LTFigure):
-                s = f'<figure name="{item.name}" bbox="{bbox2str(item.bbox)}">\n'
-                self.write(s)
-                for child in item:
-                    render(child)
-                self.write("</figure>\n")
-            elif isinstance(item, LTTextLine):
-                self.write('<textline bbox="%s">\n' % bbox2str(item.bbox))
-                for child in item:
-                    render(child)
-                self.write("</textline>\n")
-            elif isinstance(item, LTTextBox):
-                wmode = ""
-                if isinstance(item, LTTextBoxVertical):
-                    wmode = ' wmode="vertical"'
-                s = '<textbox id="%d" bbox="%s"%s>\n' % (
-                    item.index,
-                    bbox2str(item.bbox),
-                    wmode,
-                )
-                self.write(s)
-                for child in item:
-                    render(child)
-                self.write("</textbox>\n")
-            elif isinstance(item, LTChar):
-                s = (
-                    '<text font="%s" bbox="%s" colourspace="%s" '
-                    'ncolour="%s" size="%.3f">'
-                    % (
-                        enc(item.fontname),
-                        bbox2str(item.bbox),
-                        item.ncs.name,
-                        item.graphicstate.ncolor,
-                        item.size,
-                    )
-                )
-                self.write(s)
-                self.write_text(item.get_text())
-                self.write("</text>\n")
-            elif isinstance(item, LTText):
-                self.write("<text>%s</text>\n" % item.get_text())
-            elif isinstance(item, LTImage):
-                if self.imagewriter is not None:
-                    name = self.imagewriter.export_image(item)
-                    self.write(
-                        '<image src="%s" width="%d" height="%d" />\n'
-                        % (enc(name), item.width, item.height),
-                    )
-                else:
-                    self.write(
-                        '<image width="%d" height="%d" />\n'
-                        % (item.width, item.height),
-                    )
-            else:
-                assert False, str(("Unhandled", item))
+            self._render_xml_item(item, render)
 
         render(ltpage)
 
@@ -974,88 +1115,101 @@ class HOCRConverter(PDFConverter[AnyIO]):
             text = self.CONTROL.sub("", text)
         self.write(text)
 
+    def _build_font_styles(self) -> str:
+        """Build CSS font style string based on working_font."""
+        bold_and_italic_styles = ""
+        if "Italic" in self.working_font:
+            bold_and_italic_styles = "font-style: italic; "
+        if "Bold" in self.working_font:
+            bold_and_italic_styles += "font-weight: bold; "
+        return bold_and_italic_styles
+
     def write_word(self) -> None:
         if len(self.working_text) > 0:
-            bold_and_italic_styles = ""
-            if "Italic" in self.working_font:
-                bold_and_italic_styles = "font-style: italic; "
-            if "Bold" in self.working_font:
-                bold_and_italic_styles += "font-weight: bold; "
+            bold_and_italic_styles = self._build_font_styles()
             self.write(
                 "<span style='font:\"%s\"; font-size:%d; %s' "
                 "class='ocrx_word' title='%s; x_font %s; "
                 "x_fsize %d'>%s</span>"
                 % (
-                    (
-                        self.working_font,
-                        self.working_size,
-                        bold_and_italic_styles,
-                        self.bbox_repr(self.working_bbox),
-                        self.working_font,
-                        self.working_size,
-                        self.working_text.strip(),
-                    )
+                    self.working_font,
+                    self.working_size,
+                    bold_and_italic_styles,
+                    self.bbox_repr(self.working_bbox),
+                    self.working_font,
+                    self.working_size,
+                    self.working_text.strip(),
                 ),
             )
         self.within_chars = False
 
-    def receive_layout(self, ltpage: LTPage) -> None:
-        def render(item: LTItem) -> None:
-            if self.within_chars and isinstance(item, LTAnno):
+    def _handle_hocr_char_continuation(self, item: "LTChar") -> None:
+        """Handle an LTChar when already inside a word (within_chars=True)."""
+        if len(item.get_text().strip()) == 0:
+            self.write_word()
+            self.write(item.get_text())
+        else:
+            if (
+                self.working_bbox[1] != item.bbox[1]
+                or self.working_font != item.fontname
+                or self.working_size != item.size
+            ):
                 self.write_word()
-            if isinstance(item, LTPage):
-                self.page_bbox = item.bbox
-                self.write(
-                    "<div class='ocr_page' id='%s' title='%s'>\n"
-                    % (item.pageid, self.bbox_repr(item.bbox)),
-                )
-                for child in item:
-                    render(child)
-                self.write("</div>\n")
-            elif isinstance(item, LTTextLine):
-                self.write(
-                    "<span class='ocr_line' title='%s'>" % (self.bbox_repr(item.bbox)),
-                )
-                for child_line in item:
-                    render(child_line)
-                self.write("</span>\n")
-            elif isinstance(item, LTTextBox):
-                self.write(
-                    "<div class='ocr_block' id='%d' title='%s'>\n"
-                    % (item.index, self.bbox_repr(item.bbox)),
-                )
-                for child in item:
-                    render(child)
-                self.write("</div>\n")
-            elif isinstance(item, LTChar):
-                if not self.within_chars:
-                    self.within_chars = True
-                    self.working_text = item.get_text()
-                    self.working_bbox = item.bbox
-                    self.working_font = item.fontname
-                    self.working_size = item.size
-                elif len(item.get_text().strip()) == 0:
-                    self.write_word()
-                    self.write(item.get_text())
-                else:
-                    if (
-                        self.working_bbox[1] != item.bbox[1]
-                        or self.working_font != item.fontname
-                        or self.working_size != item.size
-                    ):
-                        self.write_word()
-                        self.working_bbox = item.bbox
-                        self.working_font = item.fontname
-                        self.working_size = item.size
-                    self.working_text += item.get_text()
-                    self.working_bbox = (
-                        self.working_bbox[0],
-                        self.working_bbox[1],
-                        item.bbox[2],
-                        self.working_bbox[3],
-                    )
+                self.working_bbox = item.bbox
+                self.working_font = item.fontname
+                self.working_size = item.size
+            self.working_text += item.get_text()
+            self.working_bbox = (
+                self.working_bbox[0],
+                self.working_bbox[1],
+                item.bbox[2],
+                self.working_bbox[3],
+            )
 
-        render(ltpage)
+    def _handle_hocr_char(self, item: "LTChar") -> None:
+        """Handle an LTChar item in the HOCR render pass."""
+        if not self.within_chars:
+            self.within_chars = True
+            self.working_text = item.get_text()
+            self.working_bbox = item.bbox
+            self.working_font = item.fontname
+            self.working_size = item.size
+        else:
+            self._handle_hocr_char_continuation(item)
+
+    def _render_hocr_item(self, item: LTItem) -> None:
+        """Recursively render a single layout item into HOCR output."""
+        if self.within_chars and isinstance(item, LTAnno):
+            self.write_word()
+        if isinstance(item, LTPage):
+            self.page_bbox = item.bbox
+            self.write(
+                "<div class='ocr_page' id='%s' title='%s'>\n"
+                % (item.pageid, self.bbox_repr(item.bbox)),
+            )
+            for child in item:
+                self._render_hocr_item(child)
+            self.write("</div>\n")
+        elif isinstance(item, LTTextLine):
+            self.write(
+                "<span class='ocr_line' title='%s'>" % self.bbox_repr(item.bbox),
+            )
+            for child_line in item:
+                self._render_hocr_item(child_line)
+            self.write("</span>\n")
+        elif isinstance(item, LTTextBox):
+            self.write(
+                "<div class='ocr_block' id='%d' title='%s'>\n"
+                % (item.index, self.bbox_repr(item.bbox)),
+            )
+            for child in item:
+                self._render_hocr_item(child)
+            self.write("</div>\n")
+        elif isinstance(item, LTChar):
+            self._handle_hocr_char(item)
+
+    def receive_layout(self, ltpage: LTPage) -> None:
+        self._render_hocr_item(ltpage)
 
     def close(self) -> None:
         self.write_footer()

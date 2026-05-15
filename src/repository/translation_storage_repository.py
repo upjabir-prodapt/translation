@@ -5,7 +5,7 @@ from pathlib import Path
 from google.cloud import storage
 
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.repository.storage_repository import FileType
 from src.repository.storage_repository import StorageError
 from src.repository.storage_repository import StorageRepository
@@ -111,4 +111,3 @@ def get_translation_storage_repository(
 
         client = get_storage_client()
     return TranslationStorageRepository(client=client, bucket_name=bucket_name)
-

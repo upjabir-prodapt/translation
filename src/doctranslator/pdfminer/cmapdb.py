@@ -57,12 +57,15 @@ class CMapBase:
         self.attrs[k] = v
 
     def add_code2cid(self, code: str, cid: int) -> None:
+        # Not implemented in base class
         pass
 
     def add_cid2unichr(self, cid: int, code: PSLiteral | bytes | int) -> None:
+        # Not implemented in base class
         pass
 
     def use_cmap(self, cmap: "CMapBase") -> None:
+        # Not implemented in base class
         pass
 
     def decode(self, code: bytes) -> Iterable[int]:
@@ -307,8 +310,156 @@ class CMapParser(PSStackParser[PSKeyword]):
     KEYWORD_BEGINNOTDEFRANGE = KWD(b"beginnotdefrange")
     KEYWORD_ENDNOTDEFRANGE = KWD(b"endnotdefrange")
 
+    def _handle_endcidrange(self) -> None:
+        """Process endcidrange keyword: map CID ranges to unicode."""
+        objs = [obj for (__, obj) in self.popall()]
+        for start_byte, end_byte, cid in choplist(3, objs):
+            if not isinstance(start_byte, bytes):
+                self._warn_once("The start object of begincidrange is not a byte.")
+                continue
+            if not isinstance(end_byte, bytes):
+                self._warn_once("The end object of begincidrange is not a byte.")
+                continue
+            if not isinstance(cid, int):
+                self._warn_once("The cid object of begincidrange is not a byte.")
+                continue
+            if len(start_byte) != len(end_byte):
+                self._warn_once(
+                    "The start and end byte of begincidrange have different lengths.",
+                )
+                continue
+            start_prefix = start_byte[:-4]
+            end_prefix = end_byte[:-4]
+            if start_prefix != end_prefix:
+                self._warn_once(
+                    "The prefix of the start and end byte of "
+                    "begincidrange are not the same.",
+                )
+                continue
+            svar = start_byte[-4:]
+            evar = end_byte[-4:]
+            start = nunpack(svar)
+            end = nunpack(evar)
+            vlen = len(svar)
+            for i in range(end - start + 1):
+                x = start_prefix + struct.pack(">L", start + i)[-vlen:]
+                self.cmap.add_cid2unichr(cid + i, x)
+
+    def _apply_bfrange_list(self, start: int, end: int, code: list) -> None:
+        """Map a list-valued bfrange entry to unicode, one CID per element."""
+        if len(code) != end - start + 1:
+            self._warn_once(
+                "The difference between the start and end "
+                "offsets does not match the code length.",
+            )
+        for cid, unicode_value in zip(range(start, end + 1), code, strict=False):
+            self.cmap.add_cid2unichr(cid, unicode_value)
+
+    def _apply_bfrange_bytes(self, start: int, end: int, code: bytes) -> None:
+        """Map a bytes-valued bfrange entry to sequential unicode code points."""
+        var = code[-4:]
+        base = nunpack(var)
+        prefix = code[:-4]
+        vlen = len(var)
+        for i in range(end - start + 1):
+            x = prefix + struct.pack(">L", base + i)[-vlen:]
+            self.cmap.add_cid2unichr(start + i, x)
+
+    def _validate_bfrange_entry(
+        self, start_byte: object, end_byte: object
+    ) -> bool:
+        """Validate a single bfrange triplet; warn and return False if invalid."""
+        if not isinstance(start_byte, bytes):
+            self._warn_once("The start object is not a byte.")
+            return False
+        if not isinstance(end_byte, bytes):
+            self._warn_once("The end object is not a byte.")
+            return False
+        if len(start_byte) != len(end_byte):
+            self._warn_once("The start and end byte have different lengths.")
+            return False
+        return True
+
+    def _handle_endbfrange(self) -> None:
+        """Process endbfrange keyword: map byte ranges to unicode."""
+        objs = [obj for (__, obj) in self.popall()]
+        for start_byte, end_byte, code in choplist(3, objs):
+            if not self._validate_bfrange_entry(start_byte, end_byte):
+                continue
+            start = nunpack(start_byte)  # type: ignore[arg-type]
+            end = nunpack(end_byte)  # type: ignore[arg-type]
+            if isinstance(code, list):
+                self._apply_bfrange_list(start, end, code)
+            else:
+                assert isinstance(code, bytes)
+                self._apply_bfrange_bytes(start, end, code)
+
+    def _handle_def(self) -> None:
+        """Process def keyword: set a CMap attribute from the top two stack items."""
+        try:
+            ((_, k), (_, v)) = self.pop(2)
+            self.cmap.set_attr(literal_name(k), v)
+        except PSSyntaxError:
+            pass
+
+    def _handle_usecmap(self) -> None:
+        """Process usecmap keyword: inherit a named CMap into the current one."""
+        try:
+            ((_, cmapname),) = self.pop(1)
+            self.cmap.use_cmap(CMapDB.get_cmap(literal_name(cmapname)))
+        except PSSyntaxError:
+            pass
+        except CMapDB.CMapNotFound:
+            pass
+
+    def _handle_endcidchar(self) -> None:
+        """Process endcidchar keyword: map individual CIDs to unicode values."""
+        objs = [obj for (__, obj) in self.popall()]
+        for cid, code in choplist(2, objs):
+            if isinstance(code, bytes) and isinstance(cid, int):
+                self.cmap.add_cid2unichr(cid, code)
+
+    def _handle_endbfchar(self) -> None:
+        """Process endbfchar keyword: map individual byte sequences to unicode values."""
+        objs = [obj for (__, obj) in self.popall()]
+        for cid, code in choplist(2, objs):
+            if isinstance(cid, bytes) and isinstance(code, bytes):
+                self.cmap.add_cid2unichr(nunpack(cid), code)
+
+    def _is_begin_or_ignored_keyword(self, token: PSKeyword) -> bool:
+        """Return True for keywords whose only action is to clear the stack."""
+        return token in (
+            self.KEYWORD_BEGINCODESPACERANGE,
+            self.KEYWORD_ENDCODESPACERANGE,
+            self.KEYWORD_BEGINCIDRANGE,
+            self.KEYWORD_BEGINCIDCHAR,
+            self.KEYWORD_BEGINBFRANGE,
+            self.KEYWORD_BEGINBFCHAR,
+            self.KEYWORD_BEGINNOTDEFRANGE,
+            self.KEYWORD_ENDNOTDEFRANGE,
+        )
+
+    def _dispatch_cmap_keyword(self, pos: int, token: PSKeyword) -> None:
+        """Dispatch an in-cmap keyword to its handler (called only when _in_cmap is True)."""
+        if token is self.KEYWORD_DEF:
+            self._handle_def()
+        elif token is self.KEYWORD_USECMAP:
+            self._handle_usecmap()
+        elif self._is_begin_or_ignored_keyword(token):
+            self.popall()
+        elif token is self.KEYWORD_ENDCIDRANGE:
+            self._handle_endcidrange()
+        elif token is self.KEYWORD_ENDCIDCHAR:
+            self._handle_endcidchar()
+        elif token is self.KEYWORD_ENDBFRANGE:
+            self._handle_endbfrange()
+        elif token is self.KEYWORD_ENDBFCHAR:
+            self._handle_endbfchar()
+        else:
+            self.push((pos, token))
+
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
-        """ToUnicode CMaps
+        """Process one ToUnicode CMap keyword.
 
         See Section 5.9.2 - ToUnicode CMaps of the PDF Reference.
         """
@@ -317,148 +468,15 @@ class CMapParser(PSStackParser[PSKeyword]):
             self.popall()
             return
 
-        elif token is self.KEYWORD_ENDCMAP:
+        if token is self.KEYWORD_ENDCMAP:
             self._in_cmap = False
             return
 
         if not self._in_cmap:
             return
 
-        if token is self.KEYWORD_DEF:
-            try:
-                ((_, k), (_, v)) = self.pop(2)
-                self.cmap.set_attr(literal_name(k), v)
-            except PSSyntaxError:
-                pass
-            return
+        self._dispatch_cmap_keyword(pos, token)
 
-        if token is self.KEYWORD_USECMAP:
-            try:
-                ((_, cmapname),) = self.pop(1)
-                self.cmap.use_cmap(CMapDB.get_cmap(literal_name(cmapname)))
-            except PSSyntaxError:
-                pass
-            except CMapDB.CMapNotFound:
-                pass
-            return
-
-        if token is self.KEYWORD_BEGINCODESPACERANGE:
-            self.popall()
-            return
-        if token is self.KEYWORD_ENDCODESPACERANGE:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_BEGINCIDRANGE:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_ENDCIDRANGE:
-            objs = [obj for (__, obj) in self.popall()]
-            for start_byte, end_byte, cid in choplist(3, objs):
-                if not isinstance(start_byte, bytes):
-                    self._warn_once("The start object of begincidrange is not a byte.")
-                    continue
-                if not isinstance(end_byte, bytes):
-                    self._warn_once("The end object of begincidrange is not a byte.")
-                    continue
-                if not isinstance(cid, int):
-                    self._warn_once("The cid object of begincidrange is not a byte.")
-                    continue
-                if len(start_byte) != len(end_byte):
-                    self._warn_once(
-                        "The start and end byte of begincidrange have "
-                        "different lengths.",
-                    )
-                    continue
-                start_prefix = start_byte[:-4]
-                end_prefix = end_byte[:-4]
-                if start_prefix != end_prefix:
-                    self._warn_once(
-                        "The prefix of the start and end byte of "
-                        "begincidrange are not the same.",
-                    )
-                    continue
-                svar = start_byte[-4:]
-                evar = end_byte[-4:]
-                start = nunpack(svar)
-                end = nunpack(evar)
-                vlen = len(svar)
-                for i in range(end - start + 1):
-                    x = start_prefix + struct.pack(">L", start + i)[-vlen:]
-                    self.cmap.add_cid2unichr(cid + i, x)
-            return
-
-        if token is self.KEYWORD_BEGINCIDCHAR:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_ENDCIDCHAR:
-            objs = [obj for (__, obj) in self.popall()]
-            for cid, code in choplist(2, objs):
-                if isinstance(code, bytes) and isinstance(cid, int):
-                    self.cmap.add_cid2unichr(cid, code)
-            return
-
-        if token is self.KEYWORD_BEGINBFRANGE:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_ENDBFRANGE:
-            objs = [obj for (__, obj) in self.popall()]
-            for start_byte, end_byte, code in choplist(3, objs):
-                if not isinstance(start_byte, bytes):
-                    self._warn_once("The start object is not a byte.")
-                    continue
-                if not isinstance(end_byte, bytes):
-                    self._warn_once("The end object is not a byte.")
-                    continue
-                if len(start_byte) != len(end_byte):
-                    self._warn_once("The start and end byte have different lengths.")
-                    continue
-                start = nunpack(start_byte)
-                end = nunpack(end_byte)
-                if isinstance(code, list):
-                    if len(code) != end - start + 1:
-                        self._warn_once(
-                            "The difference between the start and end "
-                            "offsets does not match the code length.",
-                        )
-                    for cid, unicode_value in zip(
-                        range(start, end + 1), code, strict=False
-                    ):
-                        self.cmap.add_cid2unichr(cid, unicode_value)
-                else:
-                    assert isinstance(code, bytes)
-                    var = code[-4:]
-                    base = nunpack(var)
-                    prefix = code[:-4]
-                    vlen = len(var)
-                    for i in range(end - start + 1):
-                        x = prefix + struct.pack(">L", base + i)[-vlen:]
-                        self.cmap.add_cid2unichr(start + i, x)
-            return
-
-        if token is self.KEYWORD_BEGINBFCHAR:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_ENDBFCHAR:
-            objs = [obj for (__, obj) in self.popall()]
-            for cid, code in choplist(2, objs):
-                if isinstance(cid, bytes) and isinstance(code, bytes):
-                    self.cmap.add_cid2unichr(nunpack(cid), code)
-            return
-
-        if token is self.KEYWORD_BEGINNOTDEFRANGE:
-            self.popall()
-            return
-
-        if token is self.KEYWORD_ENDNOTDEFRANGE:
-            self.popall()
-            return
-
-        self.push((pos, token))
 
     def _warn_once(self, msg: str) -> None:
         """Warn once for each unique message"""

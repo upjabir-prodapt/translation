@@ -10,16 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from google import genai
+from google.genai import types as genai_types
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.config.retry import llm_retry
-
-from google import genai
-from google.genai import types as genai_types
 
 
 @dataclass(slots=True)
@@ -97,7 +96,9 @@ class GoogleADKJudgeAgent:
             config=config,
         )
 
-    def _judge_with_llm(self, source_text: str, translated_text: str) -> QualityJudgeLLMScores:
+    def _judge_with_llm(
+        self, source_text: str, translated_text: str
+    ) -> QualityJudgeLLMScores:
         if self._client is None:
             h = _compute_alignment_score(source_text, translated_text)
             return QualityJudgeLLMScores(
@@ -179,20 +180,23 @@ class GoogleADKJudgeAgent:
             parsed = response.parsed
             return parsed
         except Exception as exc:
-            logger.warning(f"Judge response parse failed; fallback heuristic will be used. Error: {exc}")
+            logger.warning(
+                f"Judge response parse failed; fallback heuristic will be used. Error: {exc}"
+            )
             parsed = (getattr(response, "text", "") or "").strip()
             try:
-                parsed = json.loads(parsed.replace("```json", "").replace("```", "").strip())
-                return parsed
+                parsed = json.loads(
+                    parsed.replace("```json", "").replace("```", "").strip()
+                )
+                return QualityJudgeLLMScores(**parsed)
             except Exception as parse_error:
                 logger.warning(f"Judge fallback JSON parse failed: {parse_error}")
-                return {
-                    "alignment_score":0.0,
-                    "omission_score":0.0,
-                    "hallucination_score":0.8,
-                    "reasons":["Judge parse failed, fallback heuristic used."],
-                }
-
+                return QualityJudgeLLMScores(
+                    alignment_score=0.0,
+                    omission_score=0.0,
+                    hallucination_score=0.8,
+                    reasons=["Judge parse failed, fallback heuristic used."],
+                )
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
         llm_scores = self._judge_with_llm(source_text, translated_text)
@@ -250,4 +254,3 @@ def extract_attempt_text(working_dir: Path) -> tuple[str, str]:
             if output_text:
                 translated.append(str(output_text))
     return "\n".join(source), "\n".join(translated)
-

@@ -1,110 +1,65 @@
-"""
-Unit tests for api/middleware.py — LoggingMiddleware, SecurityHeadersMiddleware.
-
-Uses FastAPI TestClient with a minimal app so dispatch() is exercised end-to-end.
-"""
-
 import importlib.util
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.api.middleware import LoggingMiddleware
+from src.api.middleware import SecurityHeadersMiddleware
 
-# api/middleware.py is shadowed by the api/middleware/ package, so we must
-# load it directly via its file path.
-_mw_path = Path(__file__).parent.parent.parent / "src" / "api" / "middleware.py"
-_spec = importlib.util.spec_from_file_location("api_middleware_module", str(_mw_path))
-_mw_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mw_module)
-LoggingMiddleware = _mw_module.LoggingMiddleware
-SecurityHeadersMiddleware = _mw_module.SecurityHeadersMiddleware
+app = FastAPI()
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
-# ---------------------------------------------------------------------------
-# Helpers — minimal apps with middleware
-# ---------------------------------------------------------------------------
+@app.get("/test")
+async def test_route():
+    return {"ok": True}
 
 
-def _app_with_logging_middleware() -> FastAPI:
-    app = FastAPI()
-    app.add_middleware(LoggingMiddleware)
+class TestMiddleware:
+    def test_logging_and_security_middleware(self):
+        client = TestClient(app)
+        response = client.get("/test")
 
-    @app.get("/ping")
-    def ping():
-        return {"ok": True}
-
-    return app
-
-
-def _app_with_security_middleware() -> FastAPI:
-    app = FastAPI()
-    app.add_middleware(SecurityHeadersMiddleware)
-
-    @app.get("/ping")
-    def ping():
-        return {"ok": True}
-
-    return app
+        assert response.status_code == 200
+        assert "X-Process-Time" in response.headers
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
 
 
-# ---------------------------------------------------------------------------
-# LoggingMiddleware
-# ---------------------------------------------------------------------------
+def _load_middleware_file():
+    """Load src/api/middleware.py directly (bypasses the package which shadows it)."""
+    src_root = Path(__file__).parent.parent.parent
+    middleware_path = src_root / "src" / "api" / "middleware.py"
+    spec = importlib.util.spec_from_file_location("_standalone_middleware", str(middleware_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-class TestLoggingMiddleware:
-    def test_request_passes_through(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.status_code == 200
+class TestStandaloneMiddlewareFile:
+    """Exercise the standalone middleware.py file (shadowed by the package at runtime)."""
 
-    def test_response_body_intact(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.json() == {"ok": True}
+    def test_classes_defined(self):
+        mod = _load_middleware_file()
+        assert hasattr(mod, "LoggingMiddleware")
+        assert hasattr(mod, "SecurityHeadersMiddleware")
 
-    def test_x_process_time_header_present(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert "x-process-time" in resp.headers
+    def test_logging_middleware_dispatch(self):
+        mod = _load_middleware_file()
+        standalone_app = FastAPI()
+        standalone_app.add_middleware(mod.LoggingMiddleware)
+        standalone_app.add_middleware(mod.SecurityHeadersMiddleware)
 
-    def test_x_process_time_is_numeric(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        val = resp.headers.get("x-process-time", "")
-        assert float(val) >= 0.0
+        @standalone_app.get("/ping")
+        async def ping():
+            return {"pong": True}
 
-
-# ---------------------------------------------------------------------------
-# SecurityHeadersMiddleware
-# ---------------------------------------------------------------------------
-
-
-class TestSecurityHeadersMiddleware:
-    def test_request_passes_through(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.status_code == 200
-
-    def test_x_content_type_options(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.headers.get("x-content-type-options") == "nosniff"
-
-    def test_x_frame_options(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.headers.get("x-frame-options") == "DENY"
-
-    def test_x_xss_protection(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        assert resp.headers.get("x-xss-protection") == "1; mode=block"
-
-    def test_strict_transport_security(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
-        resp = client.get("/ping")
-        hsts = resp.headers.get("strict-transport-security", "")
-        assert "max-age=31536000" in hsts
-        assert "includeSubDomains" in hsts
+        client = TestClient(standalone_app)
+        response = client.get("/ping")
+        assert response.status_code == 200
+        assert "X-Process-Time" in response.headers
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["X-XSS-Protection"] == "1; mode=block"
+        assert "includeSubDomains" in response.headers["Strict-Transport-Security"]

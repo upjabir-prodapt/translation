@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.doctranslator.glossary import Glossary
 from src.api.services.quality_judge_service import GoogleADKJudgeAgent
 from src.api.services.quality_judge_service import QualityJudgeResult
+from src.doctranslator.glossary import Glossary
 
 
 @dataclass(slots=True)
@@ -41,7 +41,9 @@ class VerificationService:
     def __init__(self):
         self._judge = GoogleADKJudgeAgent()
 
-    def _terminology_score(self, translated_text: str, glossaries: list[Glossary]) -> float:
+    def _terminology_score(
+        self, translated_text: str, glossaries: list[Glossary]
+    ) -> float:
         expected_terms = 0
         matched_terms = 0
         lowered_translation = translated_text.lower()
@@ -94,4 +96,3 @@ class VerificationService:
             reasons=reasons,
             judge_model=judge_result.model,
         )
-

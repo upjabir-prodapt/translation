@@ -113,9 +113,9 @@ class JBIG2StreamReader:
 
     def parse_flags(
         self,
-        segment: JBIG2Segment,
+        _segment: JBIG2Segment,
         flags: int,
-        field: bytes,
+        _field: bytes,
     ) -> JBIG2SegmentFlags:
         return {
             "deferred": check_flag(HEADER_FLAG_DEFERRED, flags),
@@ -141,7 +141,7 @@ class JBIG2StreamReader:
             ref_count = unpack_int(">L", field)
             ref_count = masked_value(REF_COUNT_LONG_MASK, ref_count)
             ret_bytes_count = int(math.ceil((ref_count + 1) / 8))
-            for ret_byte_index in range(ret_bytes_count):
+            for _ret_byte_index in range(ret_bytes_count):
                 ret_byte = unpack_int(">B", self.stream.read(1))
                 for bit_pos in range(7):
                     retain_segments.append(bit_set(bit_pos, ret_byte))
@@ -157,7 +157,7 @@ class JBIG2StreamReader:
 
         ref_size = calcsize(ref_format)
 
-        for ref_index in range(ref_count):
+        for _ref_index in range(ref_count):
             ref_data = self.stream.read(ref_size)
             ref = unpack_int(ref_format, ref_data)
             ref_segments.append(ref)
@@ -178,7 +178,7 @@ class JBIG2StreamReader:
         self,
         segment: JBIG2Segment,
         length: int,
-        field: bytes,
+        _field: bytes,
     ) -> int:
         if length:
             if (
@@ -304,46 +304,64 @@ class JBIG2StreamWriter:
 
         return pack(">B", flags)
 
+    def _encode_short_retention_flags(
+        self, ref_count: int, retain_segments: list[bool]
+    ) -> tuple[str, list[int]]:
+        """Encode retention flags when ref_count fits in the short (3-bit) field."""
+        flags_format = ">B"
+        flags_byte = mask_value(REF_COUNT_SHORT_MASK, ref_count)
+        for ref_index, ref_retain in enumerate(retain_segments):
+            if ref_retain:
+                flags_byte |= 1 << ref_index
+        return flags_format, [flags_byte]
+
+    def _encode_long_retention_flags(
+        self, ref_count: int, retain_segments: list[bool]
+    ) -> tuple[str, list[int]]:
+        """Encode retention flags when ref_count requires the long (32-bit) field."""
+        bytes_count = math.ceil((ref_count + 1) / 8)
+        flags_format = ">L" + ("B" * bytes_count)
+        flags_dword = mask_value(REF_COUNT_SHORT_MASK, REF_COUNT_LONG) << 24
+        flags: list[int] = [flags_dword]
+        for byte_index in range(bytes_count):
+            ret_byte = 0
+            ret_part = retain_segments[byte_index * 8 : byte_index * 8 + 8]
+            for bit_pos, ret_seg in enumerate(ret_part):
+                ret_byte |= 1 << bit_pos if ret_seg else ret_byte
+            flags.append(ret_byte)
+        return flags_format, flags
+
+    @staticmethod
+    def _ref_format_for_seg_num(seg_num: int) -> str:
+        """Return the struct format character for a reference segment number."""
+        if seg_num <= 256:
+            return "B"
+        elif seg_num <= 65536:
+            return "I"
+        else:
+            return "L"
+
     def encode_retention_flags(
         self,
         value: JBIG2RetentionFlags,
         segment: JBIG2Segment,
     ) -> bytes:
-        flags = []
-        flags_format = ">B"
         ref_count = value["ref_count"]
         assert isinstance(ref_count, int)
         retain_segments = cast(list[bool], value.get("retain_segments", []))
 
         if ref_count <= 4:
-            flags_byte = mask_value(REF_COUNT_SHORT_MASK, ref_count)
-            for ref_index, ref_retain in enumerate(retain_segments):
-                if ref_retain:
-                    flags_byte |= 1 << ref_index
-            flags.append(flags_byte)
+            flags_format, flags = self._encode_short_retention_flags(
+                ref_count, retain_segments
+            )
         else:
-            bytes_count = math.ceil((ref_count + 1) / 8)
-            flags_format = ">L" + ("B" * bytes_count)
-            flags_dword = mask_value(REF_COUNT_SHORT_MASK, REF_COUNT_LONG) << 24
-            flags.append(flags_dword)
-
-            for byte_index in range(bytes_count):
-                ret_byte = 0
-                ret_part = retain_segments[byte_index * 8 : byte_index * 8 + 8]
-                for bit_pos, ret_seg in enumerate(ret_part):
-                    ret_byte |= 1 << bit_pos if ret_seg else ret_byte
-
-                flags.append(ret_byte)
+            flags_format, flags = self._encode_long_retention_flags(
+                ref_count, retain_segments
+            )
 
         ref_segments = cast(list[int], value.get("ref_segments", []))
-
         seg_num = cast(int, segment["number"])
-        if seg_num <= 256:
-            ref_format = "B"
-        elif seg_num <= 65536:
-            ref_format = "I"
-        else:
-            ref_format = "L"
+        ref_format = self._ref_format_for_seg_num(seg_num)
 
         for ref in ref_segments:
             flags_format += ref_format

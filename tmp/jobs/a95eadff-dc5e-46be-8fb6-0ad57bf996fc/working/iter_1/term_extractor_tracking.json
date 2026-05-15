@@ -1,0 +1,361 @@
+{
+  "page": [
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "0/9",
+            "Proprietary & Confidential"
+          ],
+          "output": "[\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有および機密\"}\n]",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\n0/9\n\nProprietary & Confidential\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "1/9",
+            "Proprietary & Confidential",
+            "Creation",
+            "Creation date",
+            "Created by",
+            "Reviewed by",
+            "Approved by",
+            "01 September,",
+            "Arunkumar Anandan,",
+            "Associate Director –",
+            "HR",
+            "Lakshmipathi Itha,",
+            "Assistant Vice",
+            "president – HR",
+            "Sandip Mishra, CHRO",
+            "Ramanathan J, CFO",
+            "Version History",
+            "Version",
+            "Rationale for change",
+            "Revision description",
+            "Date",
+            "NA",
+            "Initial release",
+            "01 September,",
+            "NA",
+            "Reviewed as part of annual",
+            "Revision",
+            "01 June 2025"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内赴任規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"Prodaptの新入社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"2022\", \"tgt\": \"2022年\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"機密情報\"},\n  {\"src\": \"Creation date\", \"tgt\": \"作成日\"},\n  {\"src\": \"Created by\", \"tgt\": \"作成者\"},\n  {\"src\": \"Reviewed by\", \"tgt\": \"レビュー担当者\"},\n  {\"src\": \"Approved by\", \"tgt\": \"承認者\"},\n  {\"src\": \"01 September\", \"tgt\": \"9月1日\"},\n  {\"src\": \"Arunkumar Anandan\", \"tgt\": \"Arunkumar Anandan\"},\n  {\"src\": \"Associate Director – HR\", \"tgt\": \"人事アソシエイトディレクター\"},\n  {\"src\": \"Lakshmipathi Itha\", \"tgt\": \"Lakshmipathi Itha\"},\n  {\"src\": \"Assistant Vice president – HR\", \"tgt\": \"人事アシスタントバイスプレジデント\"},\n  {\"src\": \"Sandip Mishra\", \"tgt\": \"Sandip Mishra\"},\n  {\"src\": \"CHRO\", \"tgt\": \"最高人事責任者\"},\n  {\"src\": \"Ramanathan J\", \"tgt\": \"Ramanathan J\"},\n  {\"src\": \"CFO\", \"tgt\": \"最高財務責任者\"},\n  {\"src\": \"Version History\", \"tgt\": \"バージョン履歴\"},\n  {\"src\": \"Version\", \"tgt\": \"バージョン\"},\n  {\"src\": \"Rationale for change\", \"tgt\": \"変更理由\"},\n  {\"src\": \"Revision description\", \"tgt\": \"改訂内容\"},\n  {\"src\": \"Initial release\", \"tgt\": \"初版\"},\n  {\"src\": \"annual Revision\", \"tgt\": \"年次改訂\"},\n  {\"src\": \"01 June 2025\", \"tgt\": \"2025年6月1日\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n1/9\n\nProprietary & Confidential\n\nCreation\n\nCreation date\n\nCreated by\n\nReviewed by\n\nApproved by\n\n01 September,\n\nArunkumar Anandan,\n\nAssociate Director –\n\nHR\n\nLakshmipathi Itha,\n\nAssistant Vice\n\npresident – HR\n\nSandip Mishra, CHRO\n\nRamanathan J, CFO\n\nVersion History\n\nVersion\n\nRationale for change\n\nRevision description\n\nDate\n\nNA\n\nInitial release\n\n01 September,\n\nNA\n\nReviewed as part of annual\n\nRevision\n\n01 June 2025\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "2/9",
+            "Proprietary & Confidential",
+            "Table of Contents",
+            "1. Purpose ............................................................................................................................................................ 3",
+            "2. Scope ................................................................................................................................................................. 3",
+            "3. Effective Date ................................................................................................................................................. 3",
+            "4. Definitions ....................................................................................................................................................... 3",
+            "5. Guiding Principles ........................................................................................................................................ 4",
+            "6. Entitlements and Process ......................................................................................................................... 4",
+            "6.1 Entitlements ............................................................................................................................................... 4",
+            "6.2 Process ........................................................................................................................................................... 6",
+            "7. Amendment .................................................................................................................................................... 6",
+            "8. Interpretation ................................................................................................................................................ 6",
+            "Annexure 1: Relocation Reimbursement Declaration Form ............................................................ 7",
+            "Annexure 2: SLA and Responsibilities ...................................................................................................... 8"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転居規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"新規Prodapt社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有および機密\"},\n  {\"src\": \"Table of Contents\", \"tgt\": \"目次\"},\n  {\"src\": \"Purpose\", \"tgt\": \"目的\"},\n  {\"src\": \"Scope\", \"tgt\": \"適用範囲\"},\n  {\"src\": \"Effective Date\", \"tgt\": \"発効日\"},\n  {\"src\": \"Definitions\", \"tgt\": \"定義\"},\n  {\"src\": \"Guiding Principles\", \"tgt\": \"基本原則\"},\n  {\"src\": \"Entitlements and Process\", \"tgt\": \"権利と手続き\"},\n  {\"src\": \"Amendment\", \"tgt\": \"改訂\"},\n  {\"src\": \"Interpretation\", \"tgt\": \"解釈\"},\n  {\"src\": \"Annexure\", \"tgt\": \"付属書\"},\n  {\"src\": \"Relocation Reimbursement Declaration Form\", \"tgt\": \"転居費用払い戻し申告書\"},\n  {\"src\": \"SLA\", \"tgt\": \"SLA\"},\n  {\"src\": \"Responsibilities\", \"tgt\": \"責任\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n2/9\n\nProprietary & Confidential\n\nTable of Contents\n\n1. Purpose ............................................................................................................................................................ 3\n\n2. Scope ................................................................................................................................................................. 3\n\n3. Effective Date ................................................................................................................................................. 3\n\n4. Definitions ....................................................................................................................................................... 3\n\n5. Guiding Principles ........................................................................................................................................ 4\n\n6. Entitlements and Process ......................................................................................................................... 4\n\n6.1 Entitlements ............................................................................................................................................... 4\n\n6.2 Process ........................................................................................................................................................... 6\n\n7. Amendment .................................................................................................................................................... 6\n\n8. Interpretation ................................................................................................................................................ 6\n\nAnnexure 1: Relocation Reimbursement Declaration Form ............................................................ 7\n\nAnnexure 2: SLA and Responsibilities ...................................................................................................... 8\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "3/9",
+            "Proprietary & Confidential",
+            "1. Purpose",
+            "The purpose of the Relocation Policy is to provide financial and administrative relocation assistance to new Prodaptians being hired for a Prodapt base location within India that is not their current residence location.",
+            "2. Scope",
+            "The Relocation Policy is applicable to all newly-hired Prodaptians (both laterals and freshers) who are relocating from their current residence location to a Prodapt base location, and is intended to maximize their performance and minimize inconvenience to them during their relocation at the time of joining.",
+            "3. Effective Date",
+            "This policy is effective 01 September, 2022",
+            "4. Definitions",
+            "Term",
+            "Meaning",
+            "Base Location",
+            "The city for which the Prodaptian has been hired and",
+            "will be based out of.",
+            "Residence Location",
+            "The location in which the Prodatian is currently",
+            "employed and is expected to be residing, and which is",
+            "not same as the Prodapt Base Location.",
+            "Reporting Manager (RM)",
+            "For the IT business division: The Prodaptian’s",
+            "immediate supervisor at the base location.",
+            "For the TOPS business division: The Prodaptian’s",
+            "manager at DL or above, i.e. Manager, Senior",
+            "Manager and AGM, at the Base Location.",
+            "Clawback Clause",
+            "The recovery of funds paid out to the Prodaptian under",
+            "this policy in case they exit the company before the",
+            "completion of a pre-defined period from the date of",
+            "joining Prodapt."
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転居規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"新入Prodaptian\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"2022\", \"tgt\": \"2022年\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"機密情報\"},\n  {\"src\": \"Relocation Policy\", \"tgt\": \"転居規定\"},\n  {\"src\": \"financial and administrative relocation assistance\", \"tgt\": \"金銭的および事務的な転居支援\"},\n  {\"src\": \"Prodapt base location\", \"tgt\": \"Prodapt拠点\"},\n  {\"src\": \"current residence location\", \"tgt\": \"現居住地\"},\n  {\"src\": \"newly-hired Prodaptians\", \"tgt\": \"新規採用Prodaptian\"},\n  {\"src\": \"laterals\", \"tgt\": \"中途採用者\"},\n  {\"src\": \"freshers\", \"tgt\": \"新卒採用者\"},\n  {\"src\": \"relocation\", \"tgt\": \"転居\"},\n  {\"src\": \"Effective Date\", \"tgt\": \"発効日\"},\n  {\"src\": \"01 September, 2022\", \"tgt\": \"2022年9月1日\"},\n  {\"src\": \"Base Location\", \"tgt\": \"拠点所在地\"},\n  {\"src\": \"Prodaptian\", \"tgt\": \"Prodaptian\"},\n  {\"src\": \"Residence Location\", \"tgt\": \"居住地\"},\n  {\"src\": \"Reporting Manager\", \"tgt\": \"レポーティングマネージャー\"},\n  {\"src\": \"RM\", \"tgt\": \"RM\"},\n  {\"src\": \"IT business division\", \"tgt\": \"IT事業部門\"},\n  {\"src\": \"immediate supervisor\", \"tgt\": \"直属の上司\"},\n  {\"src\": \"TOPS business division\", \"tgt\": \"TOPS事業部門\"},\n  {\"src\": \"manager\", \"tgt\": \"マネージャー\"},\n  {\"src\": \"DL\", \"tgt\": \"DL\"},\n  {\"src\": \"Senior Manager\", \"tgt\": \"シニアマネージャー\"},\n  {\"src\": \"AGM\", \"tgt\": \"AGM\"},\n  {\"src\": \"Clawback Clause\", \"tgt\": \"クローバック条項\"},\n  {\"src\": \"recovery of funds\", \"tgt\": \"資金回収\"},\n  {\"src\": \"pre-defined period\", \"tgt\": \"所定期間\"},\n  {\"src\": \"date of joining\", \"tgt\": \"入社日\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n3/9\n\nProprietary & Confidential\n\n1. Purpose\n\nThe purpose of the Relocation Policy is to provide financial and administrative relocation assistance to new Prodaptians being hired for a Prodapt base location within India that is not their current residence location.\n\n2. Scope\n\nThe Relocation Policy is applicable to all newly-hired Prodaptians (both laterals and freshers) who are relocating from their current residence location to a Prodapt base location, and is intended to maximize their performance and minimize inconvenience to them during their relocation at the time of joining.\n\n3. Effective Date\n\nThis policy is effective 01 September, 2022\n\n4. Definitions\n\nTerm\n\nMeaning\n\nBase Location\n\nThe city for which the Prodaptian has been hired and\n\nwill be based out of.\n\nResidence Location\n\nThe location in which the Prodatian is currently\n\nemployed and is expected to be residing, and which is\n\nnot same as the Prodapt Base Location.\n\nReporting Manager (RM)\n\nFor the IT business division: The Prodaptian’s\n\nimmediate supervisor at the base location.\n\nFor the TOPS business division: The Prodaptian’s\n\nmanager at DL or above, i.e. Manager, Senior\n\nManager and AGM, at the Base Location.\n\nClawback Clause\n\nThe recovery of funds paid out to the Prodaptian under\n\nthis policy in case they exit the company before the\n\ncompletion of a pre-defined period from the date of\n\njoining Prodapt.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "4/9",
+            "Proprietary & Confidential",
+            "5. Guiding Principles",
+            "• The benefits listed in this document are meant to enable easy transition for new Prodaptians hired at a base location of Prodapt where an established office is present, and which is not their current residence location.",
+            "• The benefits include the cost of transferring goods from the residence location and the cost of setting up at the base location; interim living expenses, i.e. initial accommodation at the base location; and travel for the Prodaptian and their dependents, as applicable.",
+            "• The benefits will take the form of a one-time relocation reimbursement.",
+            "6. Entitlements and Process",
+            "6.1 Entitlements",
+            "All new Prodaptians who are relocating are entitled to:",
+            "• Travel for themselves and their dependents*. o Reimbursement will be of actual expenses incurred for the cost of tickets. o Reimbursement will be subject to a maximum of INR 10,000/- per ticket.",
+            "• Free company-provided accommodation for the first 14 days for self and dependents*. o In case accommodation is needed for more than 14 days, refer to the table below.",
+            "* ‘Dependents’ in this case is a maximum of five family members excluding the Prodaptian, and can be any combination of spouse, children, parents and in-laws.",
+            "• No other benefits or allowances will be provided apart from those listed in the table below."
+          ],
+          "output": "[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転居ポリシー\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"新規Prodapt社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有および機密\"},\n  {\"src\": \"Guiding Principles\", \"tgt\": \"指針\"},\n  {\"src\": \"benefits\", \"tgt\": \"給付\"},\n  {\"src\": \"easy transition\", \"tgt\": \"円滑な移行\"},\n  {\"src\": \"base location\", \"tgt\": \"拠点\"},\n  {\"src\": \"established office\", \"tgt\": \"既存オフィス\"},\n  {\"src\": \"current residence location\", \"tgt\": \"現居住地\"},\n  {\"src\": \"cost of transferring goods\", \"tgt\": \"引越し費用\"},\n  {\"src\": \"cost of setting up\", \"tgt\": \"生活準備費用\"},\n  {\"src\": \"interim living expenses\", \"tgt\": \"一時生活費\"},\n  {\"src\": \"initial accommodation\", \"tgt\": \"初期滞在先\"},\n  {\"src\": \"travel\", \"tgt\": \"旅費\"},\n  {\"src\": \"dependents\", \"tgt\": \"扶養家族\"},\n  {\"src\": \"one-time relocation reimbursement\", \"tgt\": \"一時転居費用精算\"},\n  {\"src\": \"Entitlements\", \"tgt\": \"資格\"},\n  {\"src\": \"Process\", \"tgt\": \"手順\"},\n  {\"src\": \"INR 10,000\", \"tgt\": \"10,000インドルピー\"},\n  {\"src\": \"company-provided accommodation\", \"tgt\": \"会社提供宿泊施設\"},\n  {\"src\": \"14 days\", \"tgt\": \"14日間\"},\n  {\"src\": \"family members\", \"tgt\": \"家族\"},\n  {\"src\": \"spouse\", \"tgt\": \"配偶者\"},\n  {\"src\": \"children\", \"tgt\": \"子供\"},\n  {\"src\": \"parents\", \"tgt\": \"両親\"},\n  {\"src\": \"in-laws\", \"tgt\": \"義理の家族\"},\n  {\"src\": \"allowances\", \"tgt\": \"手当\"}\n]",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n4/9\n\nProprietary & Confidential\n\n5. Guiding Principles\n\n• The benefits listed in this document are meant to enable easy transition for new Prodaptians hired at a base location of Prodapt where an established office is present, and which is not their current residence location.\n\n• The benefits include the cost of transferring goods from the residence location and the cost of setting up at the base location; interim living expenses, i.e. initial accommodation at the base location; and travel for the Prodaptian and their dependents, as applicable.\n\n• The benefits will take the form of a one-time relocation reimbursement.\n\n6. Entitlements and Process\n\n6.1 Entitlements\n\nAll new Prodaptians who are relocating are entitled to:\n\n• Travel for themselves and their dependents*. o Reimbursement will be of actual expenses incurred for the cost of tickets. o Reimbursement will be subject to a maximum of INR 10,000/- per ticket.\n\n• Free company-provided accommodation for the first 14 days for self and dependents*. o In case accommodation is needed for more than 14 days, refer to the table below.\n\n* ‘Dependents’ in this case is a maximum of five family members excluding the Prodaptian, and can be any combination of spouse, children, parents and in-laws.\n\n• No other benefits or allowances will be provided apart from those listed in the table below.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "5/9",
+            "Proprietary & Confidential",
+            "Item",
+            "Grade",
+            "Entitlement",
+            "Remarks",
+            "Travel for self and",
+            "dependents",
+            "Grades",
+            "P1, P2,",
+            "P3, P4",
+            "Distance <=500 km:",
+            "Train (2AC) or bus",
+            "Distance >500 km:",
+            "Air travel",
+            "Distance is measured from the",
+            "Prodaptian’s current residence",
+            "location to the Prodapt base",
+            "location.",
+            "Grades",
+            "P5 and",
+            "above",
+            "Air, train or bus",
+            "Any distance",
+            "All",
+            "Grades",
+            "Self-driven car",
+            ",",
+            "at INR 20"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転居規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"新規Prodapt社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Ver.\", \"tgt\": \"バージョン\"},\n  {\"src\": \"Doc ID\", \"tgt\": \"文書ID\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有情報および機密情報\"},\n  {\"src\": \"Item\", \"tgt\": \"項目\"},\n  {\"src\": \"Grade\", \"tgt\": \"等級\"},\n  {\"src\": \"Entitlement\", \"tgt\": \"資格\"},\n  {\"src\": \"Remarks\", \"tgt\": \"備考\"},\n  {\"src\": \"Travel\", \"tgt\": \"移動\"},\n  {\"src\": \"dependents\", \"tgt\": \"扶養家族\"},\n  {\"src\": \"Distance\", \"tgt\": \"距離\"},\n  {\"src\": \"km\", \"tgt\": \"km\"},\n  {\"src\": \"Train\", \"tgt\": \"列車\"},\n  {\"src\": \"2AC\", \"tgt\": \"2AC\"},\n  {\"src\": \"bus\", \"tgt\": \"バス\"},\n  {\"src\": \"Air travel\", \"tgt\": \"航空機移動\"},\n  {\"src\": \"Prodaptian’s current residence location\", \"tgt\": \"Prodapt社員の現居住地\"},\n  {\"src\": \"Prodapt base location\", \"tgt\": \"Prodapt拠点\"},\n  {\"src\": \"Air\", \"tgt\": \"航空機\"},\n  {\"src\": \"Self-driven car\", \"tgt\": \"自家用車\"},\n  {\"src\": \"INR\", \"tgt\": \"INR\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n5/9\n\nProprietary & Confidential\n\nItem\n\nGrade\n\nEntitlement\n\nRemarks\n\nTravel for self and\n\ndependents\n\nGrades\n\nP1, P2,\n\nP3, P4\n\nDistance <=500 km:\n\nTrain (2AC) or bus\n\nDistance >500 km:\n\nAir travel\n\nDistance is measured from the\n\nProdaptian’s current residence\n\nlocation to the Prodapt base\n\nlocation.\n\nGrades\n\nP5 and\n\nabove\n\nAir, train or bus\n\nAny distance\n\nAll\n\nGrades\n\nSelf-driven car\n\n,\n\nat INR 20\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        },
+        {
+          "pdf_unicodes": [
+            "per kilometre",
+            "Accommodation",
+            "All",
+            "Grades",
+            "Prodapt-provided",
+            "guesthouse",
+            "accommodation for all",
+            "Prodaptians and their",
+            "dependents for the first",
+            "14 days.",
+            "Any extension beyond 14 days",
+            "will be subject to:",
+            "A",
+            "pprova",
+            "l from RM",
+            "The Prodaptian bearing the",
+            "charges for the extra days.",
+            "The Prodaptian bearing the",
+            "perquisite tax, as per the",
+            "Income Tax Act",
+            ", either for the entire",
+            "accommodation rent paid",
+            "from day one of stay or 15%",
+            "of their salary, whichever is",
+            "less.",
+            "Movement of goods",
+            "and/or courier",
+            "charges (Maximum",
+            "Limits)",
+            "Grades",
+            "P1"
+          ],
+          "output": "[\n  {\"src\": \"kilometre\", \"tgt\": \"キロメートル\"},\n  {\"src\": \"Accommodation\", \"tgt\": \"宿泊施設\"},\n  {\"src\": \"Grades\", \"tgt\": \"等級\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"guesthouse\", \"tgt\": \"ゲストハウス\"},\n  {\"src\": \"Prodaptians\", \"tgt\": \"Prodapt社員\"},\n  {\"src\": \"dependents\", \"tgt\": \"扶養家族\"},\n  {\"src\": \"extension\", \"tgt\": \"延長\"},\n  {\"src\": \"RM\", \"tgt\": \"RM\"},\n  {\"src\": \"charges\", \"tgt\": \"費用\"},\n  {\"src\": \"extra days\", \"tgt\": \"追加日数\"},\n  {\"src\": \"perquisite tax\", \"tgt\": \"役得税\"},\n  {\"src\": \"Income Tax Act\", \"tgt\": \"所得税法\"},\n  {\"src\": \"accommodation rent\", \"tgt\": \"宿泊費\"},\n  {\"src\": \"day one of stay\", \"tgt\": \"滞在初日\"},\n  {\"src\": \"salary\", \"tgt\": \"給与\"},\n  {\"src\": \"Movement of goods\", \"tgt\": \"物品の移動\"},\n  {\"src\": \"courier charges\", \"tgt\": \"宅配便料金\"},\n  {\"src\": \"Maximum Limits\", \"tgt\": \"上限\"},\n  {\"src\": \"P1\", \"tgt\": \"P1\"}\n]",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nper kilometre\n\nAccommodation\n\nAll\n\nGrades\n\nProdapt-provided\n\nguesthouse\n\naccommodation for all\n\nProdaptians and their\n\ndependents for the first\n\n14 days.\n\nAny extension beyond 14 days\n\nwill be subject to:\n\nA\n\npprova\n\nl from RM\n\nThe Prodaptian bearing the\n\ncharges for the extra days.\n\nThe Prodaptian bearing the\n\nperquisite tax, as per the\n\nIncome Tax Act\n\n, either for the entire\n\naccommodation rent paid\n\nfrom day one of stay or 15%\n\nof their salary, whichever is\n\nless.\n\nMovement of goods\n\nand/or courier\n\ncharges (Maximum\n\nLimits)\n\nGrades\n\nP1\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        },
+        {
+          "pdf_unicodes": [
+            ",",
+            "P2",
+            "INR 25",
+            ",",
+            "On submission of actual bills",
+            "Grades",
+            "P3, P4",
+            "INR 50,000",
+            "Grades",
+            "P5+",
+            "INR 1,00,000",
+            "Clawback clause",
+            "applicability",
+            "All",
+            "Grades",
+            "NA",
+            "One year from date of",
+            "relocation"
+          ],
+          "output": "```json\n[\n  {\"src\": \"P2\", \"tgt\": \"P2\"},\n  {\"src\": \"INR\", \"tgt\": \"INR\"},\n  {\"src\": \"actual bills\", \"tgt\": \"実費請求書\"},\n  {\"src\": \"Grades\", \"tgt\": \"グレード\"},\n  {\"src\": \"P3\", \"tgt\": \"P3\"},\n  {\"src\": \"P4\", \"tgt\": \"P4\"},\n  {\"src\": \"P5+\", \"tgt\": \"P5+\"},\n  {\"src\": \"Clawback clause\", \"tgt\": \"クローバック条項\"},\n  {\"src\": \"applicability\", \"tgt\": \"適用\"},\n  {\"src\": \"NA\", \"tgt\": \"該当なし\"},\n  {\"src\": \"relocation\", \"tgt\": \"転居\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\n,\n\nP2\n\nINR 25\n\n,\n\nOn submission of actual bills\n\nGrades\n\nP3, P4\n\nINR 50,000\n\nGrades\n\nP5+\n\nINR 1,00,000\n\nClawback clause\n\napplicability\n\nAll\n\nGrades\n\nNA\n\nOne year from date of\n\nrelocation\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "6/9",
+            "Proprietary & Confidential",
+            "6.2 Process",
+            "• One-time reimbursement for the cost incurred for transfer of goods and/or courier charges. o This reimbursement must be claimed within one month of actual relocation to the Prodapt base location. o The Prodaptian must raise a reimbursement application in ERP using the following path: ERP > Reimbursement > Reimbursement Employee SelfService > Submit Expense o The reimbursement application must be accompanied by a declaration to the Finance team, together with the actual bills (see Annexure 1: Relocation Reimbursement Declaration Form)",
+            "7. Amendment",
+            "The company reserves the right to amend, modify, withdraw, and revise any or all clauses of this policy, depending upon the exigencies of business, without citing any reason whatsoever.",
+            "8. Interpretation",
+            "The Human Resources department has the final authority in interpreting any part of this policy document."
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転勤規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"プロダプト新入社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"プロダプト\"},\n  {\"src\": \"2022\", \"tgt\": \"2022年\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有情報かつ機密情報\"},\n  {\"src\": \"Process\", \"tgt\": \"手順\"},\n  {\"src\": \"One-time reimbursement\", \"tgt\": \"一時払い払い戻し\"},\n  {\"src\": \"cost incurred\", \"tgt\": \"発生費用\"},\n  {\"src\": \"transfer of goods\", \"tgt\": \"物品輸送\"},\n  {\"src\": \"courier charges\", \"tgt\": \"宅配便料金\"},\n  {\"src\": \"actual relocation\", \"tgt\": \"実際の転勤\"},\n  {\"src\": \"Prodapt base location\", \"tgt\": \"プロダプト拠点\"},\n  {\"src\": \"reimbursement application\", \"tgt\": \"払い戻し申請\"},\n  {\"src\": \"ERP\", \"tgt\": \"ERP\"},\n  {\"src\": \"Reimbursement Employee Self-Service\", \"tgt\": \"払い戻し従業員セルフサービス\"},\n  {\"src\": \"Submit Expense\", \"tgt\": \"経費提出\"},\n  {\"src\": \"declaration\", \"tgt\": \"申告書\"},\n  {\"src\": \"Finance team\", \"tgt\": \"経理チーム\"},\n  {\"src\": \"actual bills\", \"tgt\": \"領収書原本\"},\n  {\"src\": \"Relocation Reimbursement Declaration Form\", \"tgt\": \"転勤払い戻し申告書\"},\n  {\"src\": \"Amendment\", \"tgt\": \"改訂\"},\n  {\"src\": \"clauses of this policy\", \"tgt\": \"本規定の条項\"},\n  {\"src\": \"exigencies of business\", \"tgt\": \"業務上の必要性\"},\n  {\"src\": \"Interpretation\", \"tgt\": \"解釈\"},\n  {\"src\": \"Human Resources department\", \"tgt\": \"人事部\"},\n  {\"src\": \"final authority\", \"tgt\": \"最終決定権\"},\n  {\"src\": \"policy document\", \"tgt\": \"規定文書\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n6/9\n\nProprietary & Confidential\n\n6.2 Process\n\n• One-time reimbursement for the cost incurred for transfer of goods and/or courier charges. o This reimbursement must be claimed within one month of actual relocation to the Prodapt base location. o The Prodaptian must raise a reimbursement application in ERP using the following path: ERP > Reimbursement > Reimbursement Employee SelfService > Submit Expense o The reimbursement application must be accompanied by a declaration to the Finance team, together with the actual bills (see Annexure 1: Relocation Reimbursement Declaration Form)\n\n7. Amendment\n\nThe company reserves the right to amend, modify, withdraw, and revise any or all clauses of this policy, depending upon the exigencies of business, without citing any reason whatsoever.\n\n8. Interpretation\n\nThe Human Resources department has the final authority in interpreting any part of this policy document.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "7/9",
+            "Proprietary & Confidential",
+            "Annexure 1: Relocation Reimbursement Declaration Form",
+            "Date: <date>",
+            "To,",
+            "The Accounts Department, Prodapt Solutions Private Limited, No. 25,A&B, South Phase, Fifth Cross Street Thiru Vi Ka Industrial Estate, Chennai 600032",
+            "SUB: RELOCATION EXPENSES",
+            "Dear Team,",
+            "I, <employee name>, holding employee ID <emp ID>, working in <department> under project cost code <cost code>, have joined Prodapt at <base location> effective <date of joining>.",
+            "Due to this, I have incurred costs of Rs. <amount in numerals> (Rupees <amount in words> only) towards movement of household goods and other materials from <current residence location> to <Prodapt base location>.",
+            "I request you to reimburse this amount as per the Domestic Relocation Policy for New Prodaptians: India.",
+            "I also hereby declare that I will repay the same if I exit Prodapt within one (1) year from the date of relocation.",
+            "Thanking You,",
+            "<Signature>",
+            "Employee name: <employee name> Employee ID: <emp ID>"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy for New Prodaptians: India\", \"tgt\": \"新Prodapt社員向け国内転居規定：インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"社外秘・機密\"},\n  {\"src\": \"Annexure 1\", \"tgt\": \"別紙1\"},\n  {\"src\": \"Relocation Reimbursement Declaration Form\", \"tgt\": \"転居費用精算申告書\"},\n  {\"src\": \"Accounts Department\", \"tgt\": \"経理部\"},\n  {\"src\": \"Prodapt Solutions Private Limited\", \"tgt\": \"Prodapt Solutions Private Limited\"},\n  {\"src\": \"Thiru Vi Ka Industrial Estate, Chennai 600032\", \"tgt\": \"Thiru Vi Ka工業団地、チェンナイ 600032\"},\n  {\"src\": \"RELOCATION EXPENSES\", \"tgt\": \"転居費用\"},\n  {\"src\": \"employee ID\", \"tgt\": \"従業員ID\"},\n  {\"src\": \"project cost code\", \"tgt\": \"プロジェクト費用コード\"},\n  {\"src\": \"base location\", \"tgt\": \"配属拠点\"},\n  {\"src\": \"household goods\", \"tgt\": \"家財道具\"},\n  {\"src\": \"materials\", \"tgt\": \"物品\"},\n  {\"src\": \"current residence location\", \"tgt\": \"現居住地\"},\n  {\"src\": \"date of relocation\", \"tgt\": \"転居日\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n7/9\n\nProprietary & Confidential\n\nAnnexure 1: Relocation Reimbursement Declaration Form\n\nDate: <date>\n\nTo,\n\nThe Accounts Department, Prodapt Solutions Private Limited, No. 25,A&B, South Phase, Fifth Cross Street Thiru Vi Ka Industrial Estate, Chennai 600032\n\nSUB: RELOCATION EXPENSES\n\nDear Team,\n\nI, <employee name>, holding employee ID <emp ID>, working in <department> under project cost code <cost code>, have joined Prodapt at <base location> effective <date of joining>.\n\nDue to this, I have incurred costs of Rs. <amount in numerals> (Rupees <amount in words> only) towards movement of household goods and other materials from <current residence location> to <Prodapt base location>.\n\nI request you to reimburse this amount as per the Domestic Relocation Policy for New Prodaptians: India.\n\nI also hereby declare that I will repay the same if I exit Prodapt within one (1) year from the date of relocation.\n\nThanking You,\n\n<Signature>\n\nEmployee name: <employee name> Employee ID: <emp ID>\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Domestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46",
+            "© Prodapt 2022",
+            "8/9",
+            "Proprietary & Confidential",
+            "Annexure 2: SLA and Responsibilities",
+            "#",
+            "Activity",
+            "Owner",
+            "Completion time Remarks",
+            "1.",
+            "The Prodaptian raises the",
+            "relocation",
+            "reimbursement request as",
+            "per the regular",
+            "reimbursement process",
+            "using the following path:",
+            "ERP > Reimbursement >",
+            "Reimbursement",
+            "Employee Self-Service >",
+            "Submit Expense",
+            "Prodaptian",
+            "Within one month",
+            "of relocation",
+            "Actual bills must be",
+            "submitted",
+            "2.",
+            "Finance credits the",
+            "relocation",
+            "reimbursement to the",
+            "salary account of the",
+            "Prodaptian"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Domestic Relocation Policy\", \"tgt\": \"国内転居規定\"},\n  {\"src\": \"New Prodaptians\", \"tgt\": \"Prodapt新入社員\"},\n  {\"src\": \"India\", \"tgt\": \"インド\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"専有および機密\"},\n  {\"src\": \"Annexure 2\", \"tgt\": \"別紙2\"},\n  {\"src\": \"SLA\", \"tgt\": \"SLA\"},\n  {\"src\": \"Responsibilities\", \"tgt\": \"責任\"},\n  {\"src\": \"Activity\", \"tgt\": \"活動\"},\n  {\"src\": \"Owner\", \"tgt\": \"担当者\"},\n  {\"src\": \"Completion time\", \"tgt\": \"完了期限\"},\n  {\"src\": \"Remarks\", \"tgt\": \"備考\"},\n  {\"src\": \"Prodaptian\", \"tgt\": \"Prodapt社員\"},\n  {\"src\": \"relocation reimbursement request\", \"tgt\": \"転居費用精算申請\"},\n  {\"src\": \"reimbursement process\", \"tgt\": \"精算プロセス\"},\n  {\"src\": \"ERP\", \"tgt\": \"ERP\"},\n  {\"src\": \"Reimbursement\", \"tgt\": \"精算\"},\n  {\"src\": \"Employee Self-Service\", \"tgt\": \"従業員セルフサービス\"},\n  {\"src\": \"Submit Expense\", \"tgt\": \"経費申請\"},\n  {\"src\": \"Actual bills\", \"tgt\": \"実費請求書\"},\n  {\"src\": \"Finance\", \"tgt\": \"経理部\"},\n  {\"src\": \"salary account\", \"tgt\": \"給与口座\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nDomestic Relocation Policy for New Prodaptians: India | Ver. 1.0 | Doc ID: SUP/HR/PO/46\n\n© Prodapt 2022\n\n8/9\n\nProprietary & Confidential\n\nAnnexure 2: SLA and Responsibilities\n\n#\n\nActivity\n\nOwner\n\nCompletion time Remarks\n\n1.\n\nThe Prodaptian raises the\n\nrelocation\n\nreimbursement request as\n\nper the regular\n\nreimbursement process\n\nusing the following path:\n\nERP > Reimbursement >\n\nReimbursement\n\nEmployee Self-Service >\n\nSubmit Expense\n\nProdaptian\n\nWithin one month\n\nof relocation\n\nActual bills must be\n\nsubmitted\n\n2.\n\nFinance credits the\n\nrelocation\n\nreimbursement to the\n\nsalary account of the\n\nProdaptian\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        },
+        {
+          "pdf_unicodes": [
+            "Finance",
+            "By 17th or 27th of",
+            "current month, or",
+            "7th of following",
+            "month",
+            "In case payment",
+            "dates fall on a",
+            "holiday, payment",
+            "will be made on",
+            "the next working",
+            "day.",
+            "Refer to",
+            "Reimbursement",
+            "and Allowances",
+            "policy for more",
+            "details"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Finance\", \"tgt\": \"財務\"},\n  {\"src\": \"current month\", \"tgt\": \"当月\"},\n  {\"src\": \"following month\", \"tgt\": \"翌月\"},\n  {\"src\": \"payment dates\", \"tgt\": \"支払日\"},\n  {\"src\": \"holiday\", \"tgt\": \"休日\"},\n  {\"src\": \"payment\", \"tgt\": \"支払い\"},\n  {\"src\": \"working day\", \"tgt\": \"営業日\"},\n  {\"src\": \"Reimbursement and Allowances policy\", \"tgt\": \"経費精算および手当規定\"},\n  {\"src\": \"Reimbursement\", \"tgt\": \"経費精算\"},\n  {\"src\": \"Allowances\", \"tgt\": \"手当\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into ja.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into ja.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nFinance\n\nBy 17th or 27th of\n\ncurrent month, or\n\n7th of following\n\nmonth\n\nIn case payment\n\ndates fall on a\n\nholiday, payment\n\nwill be made on\n\nthe next working\n\nday.\n\nRefer to\n\nReimbursement\n\nand Allowances\n\npolicy for more\n\ndetails\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    }
+  ]
+}

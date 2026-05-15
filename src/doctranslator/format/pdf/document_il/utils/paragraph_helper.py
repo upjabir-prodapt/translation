@@ -6,33 +6,41 @@ from src.doctranslator.format.pdf.document_il import il_version_1
 logger = logging.getLogger(__name__)
 
 
+def _collect_chars_from_composition(
+    composition: il_version_1.PdfParagraphComposition,
+    paragraph: il_version_1.PdfParagraph,
+) -> list:
+    """Return the character list contributed by *composition*."""
+    if composition.pdf_line:
+        return list(composition.pdf_line.pdf_character)
+    if composition.pdf_same_style_characters:
+        return list(composition.pdf_same_style_characters.pdf_character)
+    if composition.pdf_same_style_unicode_characters:
+        return []
+    if composition.pdf_formula:
+        return list(composition.pdf_formula.pdf_character)
+    if composition.pdf_character:
+        return [composition.pdf_character]
+    logger.error(
+        f"Unknown composition type. "
+        f"Composition: {composition}. "
+        f"Paragraph: {paragraph}. ",
+    )
+    return []
+
+
+def _count_cid_chars(chars: list) -> int:
+    """Return the number of characters whose unicode value matches the CID pattern."""
+    cid_pattern = re.compile(r"^\(cid:\d+\)$")
+    return sum(1 for char in chars if cid_pattern.match(char.char_unicode))
+
+
 def is_cid_paragraph(paragraph: il_version_1.PdfParagraph):
     chars: list[il_version_1.PdfCharacter] = []
     for composition in paragraph.pdf_paragraph_composition:
-        if composition.pdf_line:
-            chars.extend(composition.pdf_line.pdf_character)
-        elif composition.pdf_same_style_characters:
-            chars.extend(composition.pdf_same_style_characters.pdf_character)
-        elif composition.pdf_same_style_unicode_characters:
-            continue
-        #     chars.extend(composition.pdf_same_style_unicode_characters.unicode)
-        elif composition.pdf_formula:
-            chars.extend(composition.pdf_formula.pdf_character)
-        elif composition.pdf_character:
-            chars.append(composition.pdf_character)
-        else:
-            logger.error(
-                f"Unknown composition type. "
-                f"Composition: {composition}. "
-                f"Paragraph: {paragraph}. ",
-            )
-            continue
+        chars.extend(_collect_chars_from_composition(composition, paragraph))
 
-    cid_count = 0
-    for char in chars:
-        if re.match(r"^\(cid:\d+\)$", char.char_unicode):
-            cid_count += 1
-
+    cid_count = _count_cid_chars(chars)
     return cid_count > len(chars) * 0.8
 
 
@@ -52,6 +60,30 @@ def is_pure_numeric_paragraph(paragraph) -> bool:
     return bool(NUMERIC_PATTERN.match(text))
 
 
+def _composition_is_whitespace_only(composition) -> bool:
+    """Return True if a paragraph composition contains only whitespace characters.
+
+    Returns False if the composition type is unknown or contains non-whitespace.
+    Returns None if the composition is a formula (which is always allowed).
+    """
+    if composition.pdf_formula:
+        return True
+    if composition.pdf_character:
+        return composition.pdf_character.char_unicode.isspace()
+    if composition.pdf_line:
+        return all(
+            char.char_unicode.isspace() for char in composition.pdf_line.pdf_character
+        )
+    if composition.pdf_same_style_characters:
+        return all(
+            char.char_unicode.isspace()
+            for char in composition.pdf_same_style_characters.pdf_character
+        )
+    if composition.pdf_same_style_unicode_characters:
+        return composition.pdf_same_style_unicode_characters.unicode.isspace()
+    return False
+
+
 def is_placeholder_only_paragraph(paragraph: il_version_1.PdfParagraph) -> bool:
     """Check if a paragraph contains only placeholders and whitespace.
 
@@ -65,30 +97,7 @@ def is_placeholder_only_paragraph(paragraph: il_version_1.PdfParagraph) -> bool:
     if not paragraph or not paragraph.unicode:
         return False
 
-    for composition in paragraph.pdf_paragraph_composition:
-        if composition.pdf_formula:
-            # Formula composition is allowed
-            continue
-        elif composition.pdf_character:
-            # Check if single character is whitespace
-            if not composition.pdf_character.char_unicode.isspace():
-                return False
-        elif composition.pdf_line:
-            # Check if all characters in the line are whitespace
-            for char in composition.pdf_line.pdf_character:
-                if not char.char_unicode.isspace():
-                    return False
-        elif composition.pdf_same_style_characters:
-            # Check if all characters in the group are whitespace
-            for char in composition.pdf_same_style_characters.pdf_character:
-                if not char.char_unicode.isspace():
-                    return False
-        elif composition.pdf_same_style_unicode_characters:
-            # Check if the unicode content is only whitespace
-            if not composition.pdf_same_style_unicode_characters.unicode.isspace():
-                return False
-        else:
-            # Unknown composition type, conservatively return False
-            return False
-
-    return True
+    return all(
+        _composition_is_whitespace_only(composition)
+        for composition in paragraph.pdf_paragraph_composition
+    )

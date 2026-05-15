@@ -20,7 +20,7 @@ from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
 from src.api.schemas.responses import TranslationResult
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -110,67 +110,22 @@ class JobService:
             raise JobNotFoundError(job_id)
 
         status = job_data.get("status", "unknown")
-        timestamps = job_data.get("timestamps", {}) if isinstance(job_data.get("timestamps"), dict) else {}
-        submitted_at = job_data.get("submitted_at") or timestamps.get("submitted_at") or job_data.get("created_at")
+        timestamps = (
+            job_data.get("timestamps", {})
+            if isinstance(job_data.get("timestamps"), dict)
+            else {}
+        )
+        submitted_at = (
+            job_data.get("submitted_at")
+            or timestamps.get("submitted_at")
+            or job_data.get("created_at")
+        )
         completed_at = job_data.get("completed_at") or timestamps.get("completed_at")
 
         result: TranslationResult | None = None
 
         if status in ("completed", "human_review_required"):
-            raw_result = job_data.get("result", {}) or {}
-            source_doc = job_data.get("source_document", {}) or {}
-            translation_cfg = job_data.get("translation_config", {}) or {}
-
-            # Build download URL from GCS URI
-            download_url: str | None = None
-            output_gcs_uri = raw_result.get("output_gcs_uri")
-            if output_gcs_uri:
-                try:
-                    download_url = await self.storage.generate_signed_url(
-                        blob_path=output_gcs_uri, expires_in=3600
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Could not generate download URL for job {job_id}: {e}"
-                    )
-
-            # Determine output filename
-            output_filename = (
-                source_doc.get("output_filename") or f"{job_id}_translated.pdf"
-            )
-
-            translated_doc = TranslatedDocumentResult(
-                content=None,  # not returned inline; use download_url
-                format=source_doc.get("format", "pdf"),
-                filename=output_filename,
-                download_url=download_url,
-            )
-
-            metadata = TranslationMetadata(
-                source_language=source_doc.get("source_language")
-                or translation_cfg.get("source_language"),
-                target_language=translation_cfg.get("target_language"),
-                domain=translation_cfg.get("domain"),
-                model_used=raw_result.get("model_used"),
-                model_version=raw_result.get("model_version"),
-                quality_score=raw_result.get("confidence_score"),
-                ab_test_variant=raw_result.get("ab_variant"),
-                chunks_processed=raw_result.get("chunks"),
-                retry_attempts=int(raw_result.get("retry_count", 0) or 0),
-            )
-
-            labels = TranslationLabels(
-                translation_intent=raw_result.get("intent") or translation_cfg.get("intent"),
-                processing_time_seconds=job_data.get("processing_seconds"),
-                token_count=raw_result.get("token_count"),
-                cost_usd=raw_result.get("cost_usd"),
-            )
-
-            result = TranslationResult(
-                translated_document=translated_doc,
-                metadata=metadata,
-                labels=labels,
-            )
+            result = await self._build_translation_result(job_id, job_data)
 
         return JobDetailResponse(
             job_id=job_data["job_id"],
@@ -181,16 +136,77 @@ class JobService:
             error_message=self._job_error_message(job_data),
         )
 
+    async def _build_translation_result(
+        self, job_id: str, job_data: dict[str, Any]
+    ) -> TranslationResult:
+        raw_result = job_data.get("result", {}) or {}
+        source_doc = job_data.get("source_document", {}) or {}
+        translation_cfg = job_data.get("translation_config", {}) or {}
+
+        # Build download URL from GCS URI
+        download_url: str | None = None
+        output_gcs_uri = raw_result.get("output_gcs_uri")
+        if output_gcs_uri:
+            try:
+                download_url = await self.storage.generate_signed_url(
+                    blob_path=output_gcs_uri, expires_in=3600
+                )
+            except Exception as e:
+                logger.warning(f"Could not generate download URL for job {job_id}: {e}")
+
+        # Determine output filename
+        output_filename = (
+            source_doc.get("output_filename") or f"{job_id}_translated.pdf"
+        )
+
+        translated_doc = TranslatedDocumentResult(
+            content=None,  # not returned inline; use download_url
+            format=source_doc.get("format", "pdf"),
+            filename=output_filename,
+            download_url=download_url,
+        )
+
+        metadata = TranslationMetadata(
+            source_language=source_doc.get("source_language")
+            or translation_cfg.get("source_language"),
+            target_language=translation_cfg.get("target_language"),
+            domain=translation_cfg.get("domain"),
+            model_used=raw_result.get("model_used"),
+            model_version=raw_result.get("model_version"),
+            quality_score=raw_result.get("confidence_score"),
+            ab_test_variant=raw_result.get("ab_variant"),
+            chunks_processed=raw_result.get("chunks"),
+            retry_attempts=int(raw_result.get("retry_count", 0) or 0),
+        )
+
+        labels = TranslationLabels(
+            translation_intent=raw_result.get("intent")
+            or translation_cfg.get("intent"),
+            processing_time_seconds=job_data.get("processing_seconds"),
+            token_count=raw_result.get("token_count"),
+            cost_usd=raw_result.get("cost_usd"),
+        )
+
+        return TranslationResult(
+            translated_document=translated_doc,
+            metadata=metadata,
+            labels=labels,
+        )
+
     async def list_jobs(
         self, status: str | None = None, limit: int = 10, offset: int = 0
     ) -> JobListResponse:
         """List jobs with filtering and pagination."""
-        jobs = await self.bigquery.list_translation_jobs(status=status, limit=limit, offset=offset)
+        jobs = await self.bigquery.list_translation_jobs(
+            status=status, limit=limit, offset=offset
+        )
 
         # Convert to response format
         job_responses = []
         for job in jobs:
-            progress, current_stage = self._progress_and_stage(str(job.get("status", "")))
+            progress, current_stage = self._progress_and_stage(
+                str(job.get("status", ""))
+            )
             cost_attribution = job.get("cost_attribution", {})
             job_responses.append(
                 JobStatusResponse(
@@ -246,7 +262,6 @@ class JobService:
             },
         )
 
-        # TODO: Send cancellation signal to in-process pipeline task.
         logger.info(f"Cancelled job {job_id}")
 
     async def get_download_url(self, job_id: str, file_type: str) -> DownloadResponse:
@@ -325,7 +340,9 @@ class JobService:
 
             # Check for updates
             progress, current_stage = self._progress_and_stage(str(job_data["status"]))
-            current_update = job_data.get("completed_at") or job_data.get("submitted_at")
+            current_update = job_data.get("completed_at") or job_data.get(
+                "submitted_at"
+            )
             if last_update != current_update:
                 yield {
                     "type": "progress",

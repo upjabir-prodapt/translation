@@ -21,11 +21,15 @@ class DlpService:
     """Apply deterministic placeholder masking for PII-like patterns."""
 
     EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-    PHONE_PATTERN = re.compile(r"\b(?:\+?\d[\d\s().-]{7,}\d)\b")
+    PHONE_PATTERN = re.compile(r"\b\+?\d[\d\s().-]{7,}\d\b")
 
     def select_provider(self, source_language: str) -> str:
         normalized = (source_language or "").lower()
-        return "google_cloud_dlp" if normalized in {"en", "eng", "english"} else "vertex_ai_dlp"
+        return (
+            "google_cloud_dlp"
+            if normalized in {"en", "eng", "english"}
+            else "vertex_ai_dlp"
+        )
 
     def _iter_chunk_windows(
         self, chunks: list[str], provider: str, max_chars_per_request: int
@@ -89,5 +93,6 @@ class DlpService:
                         )
                 masked_chunks[chunk_index] = masked_text
 
-        return DlpResult(masked_chunks=masked_chunks, token_rows=token_rows, dlp_provider=provider)
-
+        return DlpResult(
+            masked_chunks=masked_chunks, token_rows=token_rows, dlp_provider=provider
+        )

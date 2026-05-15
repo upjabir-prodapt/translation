@@ -1,6 +1,7 @@
 """Async helpers for proper async/sync bridging."""
 
 import asyncio
+from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Coroutine
 from typing import TypeVar
@@ -52,11 +53,11 @@ class AsyncBridge:
             ) from None
 
 
-def sync_to_async[T](
+def sync_to_async(
     func: Callable[..., T],
     *args,
     **kwargs,
-) -> asyncio.Future[T]:
+) -> Awaitable[T]:
     """Run a sync function in an executor thread.
 
     Args:

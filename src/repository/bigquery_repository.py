@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -21,13 +22,19 @@ class BigQueryRepository:
         client: bigquery.Client | None = None,
         dataset: str | None = None,
     ):
-        self.client = client or bigquery.Client(project=settings.GOOGLE_CLOUD_PROJECT_ID)
+        self.client = client or bigquery.Client(
+            project=settings.GOOGLE_CLOUD_PROJECT_ID
+        )
         self.dataset = dataset or settings.BIGQUERY_DATASET
-        self.jobs_table = f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_TABLE}"
+        self.jobs_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_TABLE}"
+        )
         self.cost_attribution_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_COST_TABLE}"
         )
-        self.dlp_tokens_table = f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
+        self.dlp_tokens_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
+        )
 
     def _to_json_string(self, value: Any) -> str | None:
         if value is None:
@@ -35,6 +42,11 @@ class BigQueryRepository:
         if isinstance(value, str):
             return value
         return json.dumps(value, ensure_ascii=False)
+
+    def _validate_table_name(self, table_name: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", table_name):
+            raise ValueError("Invalid BigQuery table identifier")
+        return table_name
 
     async def _insert_rows_json(self, table: str, rows: list[dict[str, Any]]) -> None:
         try:
@@ -72,7 +84,9 @@ class BigQueryRepository:
             "job_id": str(job_data["job_id"]),
             "status": str(job_data.get("status", "queued")),
             "source_document": self._to_json_string(job_data.get("source_document")),
-            "translation_config": self._to_json_string(job_data.get("translation_config")),
+            "translation_config": self._to_json_string(
+                job_data.get("translation_config")
+            ),
             "cost_attribution": self._to_json_string(job_data.get("cost_attribution")),
             "result": self._to_json_string(job_data.get("result")),
             "error_message": job_data.get("error_message"),
@@ -81,8 +95,9 @@ class BigQueryRepository:
             "completed_at": completed_at,
         }
 
-        query = f"""
-        MERGE `{self.jobs_table}` T
+        jobs_table = self._validate_table_name(self.jobs_table)
+        query = f"""  # noqa: S608
+        MERGE `{jobs_table}` T
         USING (
             SELECT
                 @job_id AS job_id,
@@ -128,7 +143,9 @@ class BigQueryRepository:
                 bigquery.ScalarQueryParameter(
                     "error_message", "STRING", row["error_message"]
                 ),
-                bigquery.ScalarQueryParameter("source_hash", "STRING", row["source_hash"]),
+                bigquery.ScalarQueryParameter(
+                    "source_hash", "STRING", row["source_hash"]
+                ),
                 bigquery.ScalarQueryParameter(
                     "submitted_at", "TIMESTAMP", row["submitted_at"]
                 ),
@@ -152,9 +169,10 @@ class BigQueryRepository:
             ) from exc
 
     async def get_translation_job(self, job_id: str) -> dict[str, Any] | None:
-        query = f"""
+        jobs_table = self._validate_table_name(self.jobs_table)
+        query = f"""  # noqa: S608
         SELECT *
-        FROM `{self.jobs_table}`
+        FROM `{jobs_table}`
         WHERE job_id = @job_id
         LIMIT 1
         """
@@ -183,10 +201,11 @@ class BigQueryRepository:
         limit: int = 10,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        jobs_table = self._validate_table_name(self.jobs_table)
         where_clause = "WHERE status = @status" if status else ""
-        query = f"""
+        query = f"""  # noqa: S608
         SELECT *
-        FROM `{self.jobs_table}`
+        FROM `{jobs_table}`
         {where_clause}
         ORDER BY submitted_at DESC
         LIMIT @limit OFFSET @offset
@@ -265,9 +284,10 @@ class BigQueryRepository:
         await self._insert_rows_json(self.dlp_tokens_table, prepared_rows)
 
     async def read_dlp_tokens(self, job_id: str) -> list[dict[str, Any]]:
-        query = f"""
+        dlp_tokens_table = self._validate_table_name(self.dlp_tokens_table)
+        query = f"""  # noqa: S608
         SELECT job_id, chunk_index, token, original_value, info_type, masked_at
-        FROM `{self.dlp_tokens_table}`
+        FROM `{dlp_tokens_table}`
         WHERE job_id = @job_id
         ORDER BY chunk_index ASC
         """
@@ -319,7 +339,9 @@ class BigQueryRepository:
             "job_id": job_data["job_id"],
             "status": job_data.get("status", "completed"),
             "source_document": self._to_json_string(job_data.get("source_document")),
-            "translation_config": self._to_json_string(job_data.get("translation_config")),
+            "translation_config": self._to_json_string(
+                job_data.get("translation_config")
+            ),
             "cost_attribution": self._to_json_string(job_data.get("cost_attribution")),
             "result": self._to_json_string(job_data.get("result")),
             "error_message": job_data.get("error_message"),

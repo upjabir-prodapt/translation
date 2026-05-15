@@ -1,0 +1,375 @@
+{
+  "page": [
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility",
+            "© Prodapt 2022",
+            "0/9",
+            "Proprietary & Confidential",
+            "Creche Facility Policy Policy",
+            "Ver. 1.0"
+          ],
+          "output": "```json\n[\n  {\n    \"src\": \"Creche Facility\",\n    \"tgt\": \"Kinderkrippe\"\n  },\n  {\n    \"src\": \"Prodapt\",\n    \"tgt\": \"Prodapt\"\n  },\n  {\n    \"src\": \"2022\",\n    \"tgt\": \"2022\"\n  },\n  {\n    \"src\": \"Proprietary & Confidential\",\n    \"tgt\": \"Geschützt und vertraulich\"\n  },\n  {\n    \"src\": \"Creche Facility Policy\",\n    \"tgt\": \"Kinderkrippenrichtlinie\"\n  }\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility\n\n© Prodapt 2022\n\n0/9\n\nProprietary & Confidential\n\nCreche Facility Policy Policy\n\nVer. 1.0\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "1/8",
+            "Proprietary & Confidential",
+            "Creation",
+            "Creation date",
+            "Created by",
+            "Reviewed by",
+            "Approved by",
+            "01 Oct, 2024",
+            "Senthil Vel",
+            "Murugan R,",
+            "Sr. Manager HR",
+            "Saipriya S,",
+            "Director HR",
+            "Amrita Choudhury,",
+            "Senior Director-HR",
+            "Version History",
+            "Version",
+            "Rationale for change",
+            "Revision description",
+            "Date",
+            "NA",
+            "Initial release",
+            "01 April, 2025"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"Eigentum und vertraulich\"},\n  {\"src\": \"Creation\", \"tgt\": \"Erstellung\"},\n  {\"src\": \"Creation date\", \"tgt\": \"Erstellungsdatum\"},\n  {\"src\": \"Created by\", \"tgt\": \"Erstellt von\"},\n  {\"src\": \"Reviewed by\", \"tgt\": \"Geprüft von\"},\n  {\"src\": \"Approved by\", \"tgt\": \"Genehmigt von\"},\n  {\"src\": \"01 Oct, 2024\", \"tgt\": \"01. Okt. 2024\"},\n  {\"src\": \"Senthil Vel\", \"tgt\": \"Senthil Vel\"},\n  {\"src\": \"Murugan R\", \"tgt\": \"Murugan R\"},\n  {\"src\": \"Sr. Manager HR\", \"tgt\": \"Senior Manager HR\"},\n  {\"src\": \"Saipriya S\", \"tgt\": \"Saipriya S\"},\n  {\"src\": \"Director HR\", \"tgt\": \"Direktor HR\"},\n  {\"src\": \"Amrita Choudhury\", \"tgt\": \"Amrita Choudhury\"},\n  {\"src\": \"Senior Director-HR\", \"tgt\": \"Senior Direktor HR\"},\n  {\"src\": \"Version History\", \"tgt\": \"Versionsverlauf\"},\n  {\"src\": \"Version\", \"tgt\": \"Version\"},\n  {\"src\": \"Rationale for change\", \"tgt\": \"Begründung der Änderung\"},\n  {\"src\": \"Revision description\", \"tgt\": \"Revisionsbeschreibung\"},\n  {\"src\": \"Date\", \"tgt\": \"Datum\"},\n  {\"src\": \"Initial release\", \"tgt\": \"Erstveröffentlichung\"},\n  {\"src\": \"01 April, 2025\", \"tgt\": \"01. April 2025\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n1/8\n\nProprietary & Confidential\n\nCreation\n\nCreation date\n\nCreated by\n\nReviewed by\n\nApproved by\n\n01 Oct, 2024\n\nSenthil Vel\n\nMurugan R,\n\nSr. Manager HR\n\nSaipriya S,\n\nDirector HR\n\nAmrita Choudhury,\n\nSenior Director-HR\n\nVersion History\n\nVersion\n\nRationale for change\n\nRevision description\n\nDate\n\nNA\n\nInitial release\n\n01 April, 2025\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "2/8",
+            "Proprietary & Confidential",
+            "Table of Contents",
+            "1. Purpose .................................................................................................... 3",
+            "2. Scope ....................................................................................................... 3",
+            "3. Objectives ................................................................................................ 3",
+            "4. Eligibility ................................................................................................... 3",
+            "5. Creche Operating Hours ........................................................................... 3",
+            "6. Enrolment Process: .................................................................................. 4",
+            "7. Fees and Payment .................................................................................... 4",
+            "8. Health And Safety .................................................................................... 4",
+            "9. Meals and Nutrition: ................................................................................. 5",
+            "10. Drop-Off and Pick-Up Policy: .................................................................... 5",
+            "11. Termination of Services: .......................................................................... 5",
+            "12. Parental Responsibilities: ......................................................................... 6",
+            "13. Empanelled Creche Vendor details: ......................................................... 6",
+            "14. Amendment of Policy: .............................................................................. 7",
+            "15. Liability disclaimer: ................................................................................... 8",
+            "16. Grievances and Redressal: ....................................................................... 8",
+            "17. Confidentiality and Data Protection: ........................................................ 8"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kinderkrippe\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"Eigentum und Vertraulich\"},\n  {\"src\": \"Table of Contents\", \"tgt\": \"Inhaltsverzeichnis\"},\n  {\"src\": \"Purpose\", \"tgt\": \"Zweck\"},\n  {\"src\": \"Scope\", \"tgt\": \"Geltungsbereich\"},\n  {\"src\": \"Objectives\", \"tgt\": \"Ziele\"},\n  {\"src\": \"Eligibility\", \"tgt\": \"Teilnahmeberechtigung\"},\n  {\"src\": \"Creche Operating Hours\", \"tgt\": \"Öffnungszeiten der Kinderkrippe\"},\n  {\"src\": \"Enrolment Process\", \"tgt\": \"Anmeldeprozess\"},\n  {\"src\": \"Fees and Payment\", \"tgt\": \"Gebühren und Zahlung\"},\n  {\"src\": \"Health And Safety\", \"tgt\": \"Gesundheit und Sicherheit\"},\n  {\"src\": \"Meals and Nutrition\", \"tgt\": \"Mahlzeiten und Ernährung\"},\n  {\"src\": \"Drop-Off and Pick-Up Policy\", \"tgt\": \"Richtlinie für Abholung und Bringen\"},\n  {\"src\": \"Termination of Services\", \"tgt\": \"Beendigung der Dienstleistungen\"},\n  {\"src\": \"Parental Responsibilities\", \"tgt\": \"Elterliche Pflichten\"},\n  {\"src\": \"Empanelled Creche Vendor\", \"tgt\": \"Vertraglich gebundener Kinderkrippenanbieter\"},\n  {\"src\": \"Amendment of Policy\", \"tgt\": \"Änderung der Richtlinie\"},\n  {\"src\": \"Liability disclaimer\", \"tgt\": \"Haftungsausschluss\"},\n  {\"src\": \"Grievances and Redressal\", \"tgt\": \"Beschwerden und Abhilfe\"},\n  {\"src\": \"Confidentiality and Data Protection\", \"tgt\": \"Vertraulichkeit und Datenschutz\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n2/8\n\nProprietary & Confidential\n\nTable of Contents\n\n1. Purpose .................................................................................................... 3\n\n2. Scope ....................................................................................................... 3\n\n3. Objectives ................................................................................................ 3\n\n4. Eligibility ................................................................................................... 3\n\n5. Creche Operating Hours ........................................................................... 3\n\n6. Enrolment Process: .................................................................................. 4\n\n7. Fees and Payment .................................................................................... 4\n\n8. Health And Safety .................................................................................... 4\n\n9. Meals and Nutrition: ................................................................................. 5\n\n10. Drop-Off and Pick-Up Policy: .................................................................... 5\n\n11. Termination of Services: .......................................................................... 5\n\n12. Parental Responsibilities: ......................................................................... 6\n\n13. Empanelled Creche Vendor details: ......................................................... 6\n\n14. Amendment of Policy: .............................................................................. 7\n\n15. Liability disclaimer: ................................................................................... 8\n\n16. Grievances and Redressal: ....................................................................... 8\n\n17. Confidentiality and Data Protection: ........................................................ 8\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "3/8",
+            "Proprietary & Confidential",
+            "1. Purpose",
+            "The purpose of this policy is to provide a structured guideline for the employees on availing the crèche facility, which was empanelled with Prodapt on the discounted pricing. This policy outlines eligibility, enrolment, fees, and other conditions to ensure the facility operates independently and effectively while meeting the needs of both employees and their children.",
+            "2. Scope",
+            "This policy applies to all eligible employees of Prodapt who wish to enroll their children in the corporate crèche facility. It covers the services provided, operational guidelines, roles and responsibilities, and the rights and obligations of both the company and employees.",
+            "3. Objectives",
+            "To support employees with childcare needs.",
+            "To create a family-friendly work environment.",
+            "To improve work-life balance and employee retention.",
+            "To ensur",
+            "e the safety and well-being of children while parents/guardians are at wor",
+            "k.",
+            "4. Eligibility",
+            "• All full-time and part-time employees of Prodapt are eligible to apply for the crèche facility for their children.",
+            "• Children between the ages of 6 months and 6 years are eligible for enrolment.",
+            "• Right for admission based on the seat availability by the service provider.",
+            "• Discounted rates provide by the specific creche facility empanelled with Prodapt, as detailed in below Clause 13 of this policy document.",
+            "5. Creche Operating Hours",
+            "• Prodaptians must check the timings of the creche facility which may vary based on the location and the service provider.",
+            "• Prodaptians must check the Creche facilities operation on weekends, public holidays, and during any company-declared holidays as per their location and operational model."
+          ],
+          "output": "```json\n[\n  {\n    \"src\": \"Creche Facility\",\n    \"tgt\": \"Kindertagesstätte\"\n  },\n  {\n    \"src\": \"Policy\",\n    \"tgt\": \"Richtlinie\"\n  },\n  {\n    \"src\": \"Prodapt\",\n    \"tgt\": \"Prodapt\"\n  },\n  {\n    \"src\": \"Proprietary & Confidential\",\n    \"tgt\": \"Eigentum und vertraulich\"\n  },\n  {\n    \"src\": \"Purpose\",\n    \"tgt\": \"Zweck\"\n  },\n  {\n    \"src\": \"structured guideline\",\n    \"tgt\": \"strukturierter Leitfaden\"\n  },\n  {\n    \"src\": \"employees\",\n    \"tgt\": \"Mitarbeiter\"\n  },\n  {\n    \"src\": \"discounted pricing\",\n    \"tgt\": \"ermäßigte Preise\"\n  },\n  {\n    \"src\": \"eligibility\",\n    \"tgt\": \"Berechtigung\"\n  },\n  {\n    \"src\": \"enrolment\",\n    \"tgt\": \"Anmeldung\"\n  },\n  {\n    \"src\": \"fees\",\n    \"tgt\": \"Gebühren\"\n  },\n  {\n    \"src\": \"conditions\",\n    \"tgt\": \"Bedingungen\"\n  },\n  {\n    \"src\": \"children\",\n    \"tgt\": \"Kinder\"\n  },\n  {\n    \"src\": \"Scope\",\n    \"tgt\": \"Geltungsbereich\"\n  },\n  {\n    \"src\": \"eligible employees\",\n    \"tgt\": \"berechtigte Mitarbeiter\"\n  },\n  {\n    \"src\": \"corporate crèche facility\",\n    \"tgt\": \"betriebliche Kindertagesstätte\"\n  },\n  {\n    \"src\": \"services provided\",\n    \"tgt\": \"erbrachte Leistungen\"\n  },\n  {\n    \"src\": \"operational guidelines\",\n    \"tgt\": \"Betriebsrichtlinien\"\n  },\n  {\n    \"src\": \"roles and responsibilities\",\n    \"tgt\": \"Rollen und Verantwortlichkeiten\"\n  },\n  {\n    \"src\": \"rights and obligations\",\n    \"tgt\": \"Rechte und Pflichten\"\n  },\n  {\n    \"src\": \"company\",\n    \"tgt\": \"Unternehmen\"\n  },\n  {\n    \"src\": \"Objectives\",\n    \"tgt\": \"Ziele\"\n  },\n  {\n    \"src\": \"childcare needs\",\n    \"tgt\": \"Kinderbetreuungsbedarf\"\n  },\n  {\n    \"src\": \"family-friendly work environment\",\n    \"tgt\": \"familienfreundliches Arbeitsumfeld\"\n  },\n  {\n    \"src\": \"work-life balance\",\n    \"tgt\": \"Work-Life-Balance\"\n  },\n  {\n    \"src\": \"employee retention\",\n    \"tgt\": \"Mitarbeiterbindung\"\n  },\n  {\n    \"src\": \"safety and well-being\",\n    \"tgt\": \"Sicherheit und Wohlbefinden\"\n  },\n  {\n    \"src\": \"parents/guardians\",\n    \"tgt\": \"Eltern/Erziehungsberechtigte\"\n  },\n  {\n    \"src\": \"full-time employees\",\n    \"tgt\": \"Vollzeitmitarbeiter\"\n  },\n  {\n    \"src\": \"part-time employees\",\n    \"tgt\": \"Teilzeitmitarbeiter\"\n  },\n  {\n    \"src\": \"Right for admission\",\n    \"tgt\": \"Recht auf Aufnahme\"\n  },\n  {\n    \"src\": \"seat availability\",\n    \"tgt\": \"Platzverfügbarkeit\"\n  },\n  {\n    \"src\": \"service provider\",\n    \"tgt\": \"Dienstleister\"\n  },\n  {\n    \"src\": \"Discounted rates\",\n    \"tgt\": \"ermäßigte Tarife\"\n  },\n  {\n    \"src\": \"policy document\",\n    \"tgt\": \"Richtliniendokument\"\n  },\n  {\n    \"src\": \"Creche Operating Hours\",\n    \"tgt\": \"Öffnungszeiten der Kindertagesstätte\"\n  },\n  {\n    \"src\": \"Prodaptians\",\n    \"tgt\": \"Prodapt-Mitarbeiter\"\n  },\n  {\n    \"src\": \"timings\",\n    \"tgt\": \"Öffnungszeiten\"\n  },\n  {\n    \"src\": \"location\",\n    \"tgt\": \"Standort\"\n  },\n  {\n    \"src\": \"weekends\",\n    \"tgt\": \"Wochenenden\"\n  },\n  {\n    \"src\": \"public holidays\",\n    \"tgt\": \"Feiertage\"\n  },\n  {\n    \"src\": \"company-declared holidays\",\n    \"tgt\": \"betrieblich festgelegte Feiertage\"\n  },\n  {\n    \"src\": \"operational model\",\n    \"tgt\": \"Betriebsmodell\"\n  }\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n3/8\n\nProprietary & Confidential\n\n1. Purpose\n\nThe purpose of this policy is to provide a structured guideline for the employees on availing the crèche facility, which was empanelled with Prodapt on the discounted pricing. This policy outlines eligibility, enrolment, fees, and other conditions to ensure the facility operates independently and effectively while meeting the needs of both employees and their children.\n\n2. Scope\n\nThis policy applies to all eligible employees of Prodapt who wish to enroll their children in the corporate crèche facility. It covers the services provided, operational guidelines, roles and responsibilities, and the rights and obligations of both the company and employees.\n\n3. Objectives\n\nTo support employees with childcare needs.\n\nTo create a family-friendly work environment.\n\nTo improve work-life balance and employee retention.\n\nTo ensur\n\ne the safety and well-being of children while parents/guardians are at wor\n\nk.\n\n4. Eligibility\n\n• All full-time and part-time employees of Prodapt are eligible to apply for the crèche facility for their children.\n\n• Children between the ages of 6 months and 6 years are eligible for enrolment.\n\n• Right for admission based on the seat availability by the service provider.\n\n• Discounted rates provide by the specific creche facility empanelled with Prodapt, as detailed in below Clause 13 of this policy document.\n\n5. Creche Operating Hours\n\n• Prodaptians must check the timings of the creche facility which may vary based on the location and the service provider.\n\n• Prodaptians must check the Creche facilities operation on weekends, public holidays, and during any company-declared holidays as per their location and operational model.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "4/8",
+            "Proprietary & Confidential",
+            "• Prodaptians are required to drop off and pick up their children within the specified hours",
+            "6. Enrolment Process:",
+            "• Prodaptian interested in enrolling their children must reach any of the creche facility listed below based on their work location and produce their company ID card copy for the enrolment at discounted rate.",
+            "• Prodaptians are advised to check on the safety, hygiene and other parameters while enrolling the child",
+            "• Enrolment form will be shared by the Creche vendor and the Prodaptian should fill and submit the enrolment form directly to the facility.",
+            "• All required documents (e.g., birth certificate, medical records) must be submitted along with the enrolment form.",
+            "• The creche facility will share the information of the enrolment to Prodapt on monthly basis for the records.",
+            "• The above process is followed for the cancellation of the Creche service as well.",
+            "7. Fees and Payment",
+            "The Creche facility is provided at a discounted rate exclusively to the Prodaptian. The Monthly fee to be paid by the Prodaptian directly to the Creche vendor.",
+            "• Any additional expenses incurred apart from the monthly fee will be borne by the Prodaptian (E.g. Food/Celebration or any damages).",
+            "• Any fee due to late communication of the disenrollment of the benefit will be borne by the Prodaptian.",
+            "• Prodapt will try best to maintain the costing, but these are subject to change as per the prevailing market conditions and vendors.",
+            "8. Health And Safety",
+            "• The Parents can visit creche facility before the enrolment to check the facility and verify the health and safety regulations."
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kinderkrippe\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Prodaptians\", \"tgt\": \"Prodapt-Mitarbeiter\"},\n  {\"src\": \"specified hours\", \"tgt\": \"festgelegte Zeiten\"},\n  {\"src\": \"Enrolment Process\", \"tgt\": \"Anmeldeprozess\"},\n  {\"src\": \"work location\", \"tgt\": \"Arbeitsort\"},\n  {\"src\": \"company ID card copy\", \"tgt\": \"Kopie des Firmenausweises\"},\n  {\"src\": \"enrolment\", \"tgt\": \"Anmeldung\"},\n  {\"src\": \"discounted rate\", \"tgt\": \"vergünstigter Tarif\"},\n  {\"src\": \"safety\", \"tgt\": \"Sicherheit\"},\n  {\"src\": \"hygiene\", \"tgt\": \"Hygiene\"},\n  {\"src\": \"Enrolment form\", \"tgt\": \"Anmeldeformular\"},\n  {\"src\": \"Creche vendor\", \"tgt\": \"Krippenanbieter\"},\n  {\"src\": \"required documents\", \"tgt\": \"erforderliche Unterlagen\"},\n  {\"src\": \"birth certificate\", \"tgt\": \"Geburtsurkunde\"},\n  {\"src\": \"medical records\", \"tgt\": \"medizinische Unterlagen\"},\n  {\"src\": \"cancellation\", \"tgt\": \"Kündigung\"},\n  {\"src\": \"Creche service\", \"tgt\": \"Krippendienst\"},\n  {\"src\": \"Fees\", \"tgt\": \"Gebühren\"},\n  {\"src\": \"Payment\", \"tgt\": \"Zahlung\"},\n  {\"src\": \"Monthly fee\", \"tgt\": \"Monatsgebühr\"},\n  {\"src\": \"additional expenses\", \"tgt\": \"zusätzliche Ausgaben\"},\n  {\"src\": \"damages\", \"tgt\": \"Schäden\"},\n  {\"src\": \"disenrollment\", \"tgt\": \"Abmeldung\"},\n  {\"src\": \"benefit\", \"tgt\": \"Leistung\"},\n  {\"src\": \"costing\", \"tgt\": \"Kosten\"},\n  {\"src\": \"market conditions\", \"tgt\": \"Marktbedingungen\"},\n  {\"src\": \"Health\", \"tgt\": \"Gesundheit\"},\n  {\"src\": \"Safety\", \"tgt\": \"Sicherheit\"},\n  {\"src\": \"Parents\", \"tgt\": \"Eltern\"},\n  {\"src\": \"health and safety regulations\", \"tgt\": \"Gesundheits- und Sicherheitsvorschriften\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n4/8\n\nProprietary & Confidential\n\n• Prodaptians are required to drop off and pick up their children within the specified hours\n\n6. Enrolment Process:\n\n• Prodaptian interested in enrolling their children must reach any of the creche facility listed below based on their work location and produce their company ID card copy for the enrolment at discounted rate.\n\n• Prodaptians are advised to check on the safety, hygiene and other parameters while enrolling the child\n\n• Enrolment form will be shared by the Creche vendor and the Prodaptian should fill and submit the enrolment form directly to the facility.\n\n• All required documents (e.g., birth certificate, medical records) must be submitted along with the enrolment form.\n\n• The creche facility will share the information of the enrolment to Prodapt on monthly basis for the records.\n\n• The above process is followed for the cancellation of the Creche service as well.\n\n7. Fees and Payment\n\nThe Creche facility is provided at a discounted rate exclusively to the Prodaptian. The Monthly fee to be paid by the Prodaptian directly to the Creche vendor.\n\n• Any additional expenses incurred apart from the monthly fee will be borne by the Prodaptian (E.g. Food/Celebration or any damages).\n\n• Any fee due to late communication of the disenrollment of the benefit will be borne by the Prodaptian.\n\n• Prodapt will try best to maintain the costing, but these are subject to change as per the prevailing market conditions and vendors.\n\n8. Health And Safety\n\n• The Parents can visit creche facility before the enrolment to check the facility and verify the health and safety regulations.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "5/8",
+            "Proprietary & Confidential",
+            "• Parents must inform the creche staff of any allergies, medical conditions, or special needs their child may have.",
+            "• In case of emergencies, parents will be contacted immediately, and the company reserves the right to seek medical attention if necessary.",
+            "• Parents are advised to visit the facility before enrolment to verify these standards. Parents are expected to perform their due diligence as to the kind of services being provided by the creche including the health, environment, hygiene aspects and take decision whether to opt a particular creche listed below.",
+            "9. Meals and Nutrition:",
+            "It is the responsibility of the parent to provide the meals and snacks while dropping their kid to the facility.",
+            "The Creche staff will feed the kids with the food provided by the parent during the break time.",
+            "10. Drop-Off and Pick-Up Policy:",
+            "• Parents are required to drop and pickup during the stipulated hours as per the schedule mentioned by the creche facility",
+            "• In-between hours visit to the creche can be facilitated by Prodapt through cab facility for which the Helpdesk ticket to be raised at least before 4 hours of the journey.",
+            "• Late pick-ups may incur additional cost which will be borne by the parent.",
+            "• Parents must notify the creche facility in case of leave or absence. In the event of long absence, parents must provide written notice.",
+            "11. Termination of Services:",
+            "Prodapt reserves the right to terminate the use of the creche facility for any child in case of:",
+            "• Non-Compliance with the rules.",
+            "• Persistent disruptive behaviour that poses risk to others.",
+            "• Irregular usage of the facility, if it is less than 50% in a month."
+          ],
+          "output": "[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"Eigentum und vertraulich\"},\n  {\"src\": \"Parents\", \"tgt\": \"Eltern\"},\n  {\"src\": \"creche staff\", \"tgt\": \"Betreuungspersonal\"},\n  {\"src\": \"allergies\", \"tgt\": \"Allergien\"},\n  {\"src\": \"medical conditions\", \"tgt\": \"medizinische Bedingungen\"},\n  {\"src\": \"special needs\", \"tgt\": \"besondere Bedürfnisse\"},\n  {\"src\": \"child\", \"tgt\": \"Kind\"},\n  {\"src\": \"emergencies\", \"tgt\": \"Notfälle\"},\n  {\"src\": \"company\", \"tgt\": \"Unternehmen\"},\n  {\"src\": \"medical attention\", \"tgt\": \"ärztliche Versorgung\"},\n  {\"src\": \"enrolment\", \"tgt\": \"Anmeldung\"},\n  {\"src\": \"due diligence\", \"tgt\": \"Sorgfaltspflicht\"},\n  {\"src\": \"services\", \"tgt\": \"Dienstleistungen\"},\n  {\"src\": \"health\", \"tgt\": \"Gesundheit\"},\n  {\"src\": \"environment\", \"tgt\": \"Umgebung\"},\n  {\"src\": \"hygiene aspects\", \"tgt\": \"Hygieneaspekte\"},\n  {\"src\": \"Meals\", \"tgt\": \"Mahlzeiten\"},\n  {\"src\": \"Nutrition\", \"tgt\": \"Ernährung\"},\n  {\"src\": \"snacks\", \"tgt\": \"Zwischenmahlzeiten\"},\n  {\"src\": \"break time\", \"tgt\": \"Pausenzeit\"},\n  {\"src\": \"Drop-Off and Pick-Up Policy\", \"tgt\": \"Abhol- und Bringrichtlinie\"},\n  {\"src\": \"stipulated hours\", \"tgt\": \"festgelegte Zeiten\"},\n  {\"src\": \"schedule\", \"tgt\": \"Zeitplan\"},\n  {\"src\": \"cab facility\", \"tgt\": \"Fahrdienst\"},\n  {\"src\": \"Helpdesk ticket\", \"tgt\": \"Helpdesk-Ticket\"},\n  {\"src\": \"journey\", \"tgt\": \"Fahrt\"},\n  {\"src\": \"Late pick-ups\", \"tgt\": \"verspätete Abholung\"},\n  {\"src\": \"additional cost\", \"tgt\": \"zusätzliche Kosten\"},\n  {\"src\": \"leave\", \"tgt\": \"Abwesenheit\"},\n  {\"src\": \"absence\", \"tgt\": \"Abwesenheit\"},\n  {\"src\": \"written notice\", \"tgt\": \"schriftliche Mitteilung\"},\n  {\"src\": \"Termination of Services\", \"tgt\": \"Kündigung der Dienstleistungen\"},\n  {\"src\": \"Non-Compliance\", \"tgt\": \"Nichteinhaltung\"},\n  {\"src\": \"rules\", \"tgt\": \"Regeln\"},\n  {\"src\": \"Persistent disruptive behaviour\", \"tgt\": \"anhaltendes störendes Verhalten\"},\n  {\"src\": \"risk\", \"tgt\": \"Risiko\"},\n  {\"src\": \"Irregular usage\", \"tgt\": \"unregelmäßige Nutzung\"}\n]",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n5/8\n\nProprietary & Confidential\n\n• Parents must inform the creche staff of any allergies, medical conditions, or special needs their child may have.\n\n• In case of emergencies, parents will be contacted immediately, and the company reserves the right to seek medical attention if necessary.\n\n• Parents are advised to visit the facility before enrolment to verify these standards. Parents are expected to perform their due diligence as to the kind of services being provided by the creche including the health, environment, hygiene aspects and take decision whether to opt a particular creche listed below.\n\n9. Meals and Nutrition:\n\nIt is the responsibility of the parent to provide the meals and snacks while dropping their kid to the facility.\n\nThe Creche staff will feed the kids with the food provided by the parent during the break time.\n\n10. Drop-Off and Pick-Up Policy:\n\n• Parents are required to drop and pickup during the stipulated hours as per the schedule mentioned by the creche facility\n\n• In-between hours visit to the creche can be facilitated by Prodapt through cab facility for which the Helpdesk ticket to be raised at least before 4 hours of the journey.\n\n• Late pick-ups may incur additional cost which will be borne by the parent.\n\n• Parents must notify the creche facility in case of leave or absence. In the event of long absence, parents must provide written notice.\n\n11. Termination of Services:\n\nProdapt reserves the right to terminate the use of the creche facility for any child in case of:\n\n• Non-Compliance with the rules.\n\n• Persistent disruptive behaviour that poses risk to others.\n\n• Irregular usage of the facility, if it is less than 50% in a month.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "6/8",
+            "Proprietary & Confidential",
+            "• In case of termination of employment of the parent/(s) from Prodapt.",
+            "12. Parental Responsibilities:",
+            "• Parents are responsible for informing the creche staff of any changes in contact information, health conditions, or other pertinent information about their child.",
+            "• Parents are encouraged to participate in creche activities or meetings as scheduled.",
+            "• Parents are expected to maintain a respectful, professional, and cooperative relationship with the Creche staffs.",
+            "• The below rates are estimated basis on 8 hours a day for 22 working days.",
+            "• Any grievances or concerns should be reported to the Creche Administrator or the REFS team.",
+            "• Parents are responsible to keep Prodapt informed immediately as to any issues concerning environment, health, sanitation, safety, data protection and confidentiality, child’s due care, nutrition, creche staff’s qualification and capability in childcare, first aid, and emergency procedures. CCTV cameras, play materials, and the composition of the crèche administrative committee or any other issues of alarming concerns can be brought to Prodapt’s attention and Prodapt may get involved to discuss with Creche Administrator in this matter, though the resolution of such matters are not in the hands of Prodapt.",
+            "13. Empanelled Creche Vendor details:",
+            "Prodapt",
+            "Office",
+            "location",
+            "Day Care",
+            "Facility",
+            "Name",
+            "Address & Phone number",
+            "Age Group",
+            "Indicative Price",
+            "per child & Per",
+            "month",
+            "Chennai HQ",
+            "Euro Kids",
+            "Vidha – Franchisee of Eurokids",
+            "74, Defence Colony, Ekkatuthangal,",
+            "Chennai",
+            ",",
+            "Tamil Nadu – 600032",
+            "Contact Person: Dr Sowndarya",
+            "Contact Number: __DLP_TOKEN_0001__",
+            "Mail ID:",
+            "__DLP_TOKEN_0002__",
+            "Distance from office: approx 1.5 kms",
+            "6 months to",
+            "2 years",
+            "INR.17",
+            ",",
+            "2Years to",
+            "6Years",
+            "INR.13",
+            ","
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary\", \"tgt\": \"Eigentumsrechtlich\"},\n  {\"src\": \"Confidential\", \"tgt\": \"Vertraulich\"},\n  {\"src\": \"termination of employment\", \"tgt\": \"Beendigung des Arbeitsverhältnisses\"},\n  {\"src\": \"parent\", \"tgt\": \"Elternteil\"},\n  {\"src\": \"Parental Responsibilities\", \"tgt\": \"Elterliche Pflichten\"},\n  {\"src\": \"creche staff\", \"tgt\": \"Krippenpersonal\"},\n  {\"src\": \"contact information\", \"tgt\": \"Kontaktinformationen\"},\n  {\"src\": \"health conditions\", \"tgt\": \"Gesundheitszustand\"},\n  {\"src\": \"pertinent information\", \"tgt\": \"relevante Informationen\"},\n  {\"src\": \"creche activities\", \"tgt\": \"Krippenaktivitäten\"},\n  {\"src\": \"meetings\", \"tgt\": \"Besprechungen\"},\n  {\"src\": \"rates\", \"tgt\": \"Tarife\"},\n  {\"src\": \"working days\", \"tgt\": \"Arbeitstage\"},\n  {\"src\": \"grievances\", \"tgt\": \"Beschwerden\"},\n  {\"src\": \"concerns\", \"tgt\": \"Bedenken\"},\n  {\"src\": \"Creche Administrator\", \"tgt\": \"Krippenverwaltung\"},\n  {\"src\": \"REFS team\", \"tgt\": \"REFS-Team\"},\n  {\"src\": \"environment\", \"tgt\": \"Umgebung\"},\n  {\"src\": \"health\", \"tgt\": \"Gesundheit\"},\n  {\"src\": \"sanitation\", \"tgt\": \"Hygiene\"},\n  {\"src\": \"safety\", \"tgt\": \"Sicherheit\"},\n  {\"src\": \"data protection\", \"tgt\": \"Datenschutz\"},\n  {\"src\": \"confidentiality\", \"tgt\": \"Vertraulichkeit\"},\n  {\"src\": \"child’s due care\", \"tgt\": \"angemessene Betreuung des Kindes\"},\n  {\"src\": \"nutrition\", \"tgt\": \"Ernährung\"},\n  {\"src\": \"creche staff’s qualification\", \"tgt\": \"Qualifikation des Krippenpersonals\"},\n  {\"src\": \"capability in childcare\", \"tgt\": \"Fähigkeit in der Kinderbetreuung\"},\n  {\"src\": \"first aid\", \"tgt\": \"Erste Hilfe\"},\n  {\"src\": \"emergency procedures\", \"tgt\": \"Notfallverfahren\"},\n  {\"src\": \"CCTV cameras\", \"tgt\": \"Überwachungskameras\"},\n  {\"src\": \"play materials\", \"tgt\": \"Spielmaterialien\"},\n  {\"src\": \"crèche administrative committee\", \"tgt\": \"Verwaltungsausschuss der Kindertagesstätte\"},\n  {\"src\": \"Empanelled Creche Vendor\", \"tgt\": \"Zugelassener Krippenanbieter\"},\n  {\"src\": \"Office location\", \"tgt\": \"Bürostandort\"},\n  {\"src\": \"Day Care Facility\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Name\", \"tgt\": \"Name\"},\n  {\"src\": \"Address\", \"tgt\": \"Adresse\"},\n  {\"src\": \"Phone number\", \"tgt\": \"Telefonnummer\"},\n  {\"src\": \"Age Group\", \"tgt\": \"Altersgruppe\"},\n  {\"src\": \"Indicative Price\", \"tgt\": \"Richtpreis\"},\n  {\"src\": \"per child\", \"tgt\": \"pro Kind\"},\n  {\"src\": \"Per month\", \"tgt\": \"pro Monat\"},\n  {\"src\": \"Chennai HQ\", \"tgt\": \"Chennai HQ\"},\n  {\"src\": \"Euro Kids\", \"tgt\": \"Euro Kids\"},\n  {\"src\": \"Vidha\", \"tgt\": \"Vidha\"},\n  {\"src\": \"Franchisee\", \"tgt\": \"Franchisenehmer\"},\n  {\"src\": \"Defence Colony\", \"tgt\": \"Defence Colony\"},\n  {\"src\": \"Ekkatuthangal\", \"tgt\": \"Ekkatuthangal\"},\n  {\"src\": \"Chennai\", \"tgt\": \"Chennai\"},\n  {\"src\": \"Tamil Nadu\", \"tgt\": \"Tamil Nadu\"},\n  {\"src\": \"Contact Person\", \"tgt\": \"Ansprechpartner\"},\n  {\"src\": \"Dr Sowndarya\", \"tgt\": \"Dr Sowndarya\"},\n  {\"src\": \"Contact Number\", \"tgt\": \"Kontaktnummer\"},\n  {\"src\": \"Mail ID\", \"tgt\": \"E-Mail-Adresse\"},\n  {\"src\": \"Distance from office\", \"tgt\": \"Entfernung zum Büro\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n6/8\n\nProprietary & Confidential\n\n• In case of termination of employment of the parent/(s) from Prodapt.\n\n12. Parental Responsibilities:\n\n• Parents are responsible for informing the creche staff of any changes in contact information, health conditions, or other pertinent information about their child.\n\n• Parents are encouraged to participate in creche activities or meetings as scheduled.\n\n• Parents are expected to maintain a respectful, professional, and cooperative relationship with the Creche staffs.\n\n• The below rates are estimated basis on 8 hours a day for 22 working days.\n\n• Any grievances or concerns should be reported to the Creche Administrator or the REFS team.\n\n• Parents are responsible to keep Prodapt informed immediately as to any issues concerning environment, health, sanitation, safety, data protection and confidentiality, child’s due care, nutrition, creche staff’s qualification and capability in childcare, first aid, and emergency procedures. CCTV cameras, play materials, and the composition of the crèche administrative committee or any other issues of alarming concerns can be brought to Prodapt’s attention and Prodapt may get involved to discuss with Creche Administrator in this matter, though the resolution of such matters are not in the hands of Prodapt.\n\n13. Empanelled Creche Vendor details:\n\nProdapt\n\nOffice\n\nlocation\n\nDay Care\n\nFacility\n\nName\n\nAddress & Phone number\n\nAge Group\n\nIndicative Price\n\nper child & Per\n\nmonth\n\nChennai HQ\n\nEuro Kids\n\nVidha – Franchisee of Eurokids\n\n74, Defence Colony, Ekkatuthangal,\n\nChennai\n\n,\n\nTamil Nadu – 600032\n\nContact Person: Dr Sowndarya\n\nContact Number: __DLP_TOKEN_0001__\n\nMail ID:\n\n__DLP_TOKEN_0002__\n\nDistance from office: approx 1.5 kms\n\n6 months to\n\n2 years\n\nINR.17\n\n,\n\n2Years to\n\n6Years\n\nINR.13\n\n,\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "7/8",
+            "Proprietary & Confidential",
+            "Chennai",
+            "OMR",
+            "Little Elly",
+            "Little Elly-Preschool",
+            "8th Cross St, behind Brigade World",
+            "Trade Centre, Phase-1,",
+            "Tirumalai Nagar, Perungudi, Chennai,",
+            "Tamil Nadu 600096",
+            "Contact Person: Ms Kavitha",
+            "Contact Number: __DLP_TOKEN_0003__",
+            "Mail ID: __DLP_TOKEN_0004__",
+            "Distance from office: approx 2 kms",
+            "6 months to",
+            "2 years",
+            "INR.10,560+",
+            "one time",
+            "registration fee",
+            "of INr.5000",
+            "Chennai",
+            "One",
+            "2Years to",
+            "6Years",
+            "INR.12",
+            ",",
+            "one time",
+            "registration fee",
+            "of INr.8000",
+            "Bengaluru",
+            "Toon",
+            "Demy",
+            "Toon Demy",
+            "Vaishnavi Tech Park",
+            "Toon Demy, Ground Floor, Ambalipura,",
+            "Sarjapur Road, Bellandur,",
+            "Bangalore 560103",
+            "Contact Person: Amrita Roy",
+            "Contact Number: __DLP_TOKEN_0005__",
+            "Mail Id: __DLP_TOKEN_0006__",
+            "Distance from office: Within the",
+            "Building",
+            "6 months to",
+            "2 years",
+            "INR.19,800 (For",
+            "10Hrs per day)",
+            "2Years to",
+            "6Years",
+            "INR.16,500 (For",
+            "10Hrs per day)",
+            "Hyderabad",
+            "IRA Grow",
+            "& Shine",
+            "IRA GROW AND SHINE",
+            "MSR Arcade, 1-95/5/125 & 126,",
+            "Patrika Nagar,",
+            "Hitech City Hyderabad – 500081",
+            "Contact Person: Allekkhya Gade",
+            "Contact Number : __DLP_TOKEN_0007__"
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kinderkrippeneinrichtung\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"Proprietär und Vertraulich\"},\n  {\"src\": \"Chennai\", \"tgt\": \"Chennai\"},\n  {\"src\": \"OMR\", \"tgt\": \"OMR\"},\n  {\"src\": \"Little Elly\", \"tgt\": \"Little Elly\"},\n  {\"src\": \"Little Elly-Preschool\", \"tgt\": \"Little Elly-Vorschule\"},\n  {\"src\": \"Brigade World Trade Centre\", \"tgt\": \"Brigade World Trade Centre\"},\n  {\"src\": \"Tirumalai Nagar\", \"tgt\": \"Tirumalai Nagar\"},\n  {\"src\": \"Perungudi\", \"tgt\": \"Perungudi\"},\n  {\"src\": \"Tamil Nadu\", \"tgt\": \"Tamil Nadu\"},\n  {\"src\": \"Contact Person\", \"tgt\": \"Ansprechpartner\"},\n  {\"src\": \"Ms Kavitha\", \"tgt\": \"Frau Kavitha\"},\n  {\"src\": \"Contact Number\", \"tgt\": \"Kontaktnummer\"},\n  {\"src\": \"Mail ID\", \"tgt\": \"E-Mail-Adresse\"},\n  {\"src\": \"Distance from office\", \"tgt\": \"Entfernung vom Büro\"},\n  {\"src\": \"registration fee\", \"tgt\": \"Anmeldegebühr\"},\n  {\"src\": \"Bengaluru\", \"tgt\": \"Bengaluru\"},\n  {\"src\": \"Toon Demy\", \"tgt\": \"Toon Demy\"},\n  {\"src\": \"Vaishnavi Tech Park\", \"tgt\": \"Vaishnavi Tech Park\"},\n  {\"src\": \"Ambalipura\", \"tgt\": \"Ambalipura\"},\n  {\"src\": \"Sarjapur Road\", \"tgt\": \"Sarjapur Road\"},\n  {\"src\": \"Bellandur\", \"tgt\": \"Bellandur\"},\n  {\"src\": \"Amrita Roy\", \"tgt\": \"Amrita Roy\"},\n  {\"src\": \"Hyderabad\", \"tgt\": \"Hyderabad\"},\n  {\"src\": \"IRA Grow & Shine\", \"tgt\": \"IRA Grow & Shine\"},\n  {\"src\": \"MSR Arcade\", \"tgt\": \"MSR Arcade\"},\n  {\"src\": \"Patrika Nagar\", \"tgt\": \"Patrika Nagar\"},\n  {\"src\": \"Hitech City Hyderabad\", \"tgt\": \"Hitech City Hyderabad\"},\n  {\"src\": \"Allekkhya Gade\", \"tgt\": \"Allekkhya Gade\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n7/8\n\nProprietary & Confidential\n\nChennai\n\nOMR\n\nLittle Elly\n\nLittle Elly-Preschool\n\n8th Cross St, behind Brigade World\n\nTrade Centre, Phase-1,\n\nTirumalai Nagar, Perungudi, Chennai,\n\nTamil Nadu 600096\n\nContact Person: Ms Kavitha\n\nContact Number: __DLP_TOKEN_0003__\n\nMail ID: __DLP_TOKEN_0004__\n\nDistance from office: approx 2 kms\n\n6 months to\n\n2 years\n\nINR.10,560+\n\none time\n\nregistration fee\n\nof INr.5000\n\nChennai\n\nOne\n\n2Years to\n\n6Years\n\nINR.12\n\n,\n\none time\n\nregistration fee\n\nof INr.8000\n\nBengaluru\n\nToon\n\nDemy\n\nToon Demy\n\nVaishnavi Tech Park\n\nToon Demy, Ground Floor, Ambalipura,\n\nSarjapur Road, Bellandur,\n\nBangalore 560103\n\nContact Person: Amrita Roy\n\nContact Number: __DLP_TOKEN_0005__\n\nMail Id: __DLP_TOKEN_0006__\n\nDistance from office: Within the\n\nBuilding\n\n6 months to\n\n2 years\n\nINR.19,800 (For\n\n10Hrs per day)\n\n2Years to\n\n6Years\n\nINR.16,500 (For\n\n10Hrs per day)\n\nHyderabad\n\nIRA Grow\n\n& Shine\n\nIRA GROW AND SHINE\n\nMSR Arcade, 1-95/5/125 & 126,\n\nPatrika Nagar,\n\nHitech City Hyderabad – 500081\n\nContact Person: Allekkhya Gade\n\nContact Number : __DLP_TOKEN_0007__\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        },
+        {
+          "pdf_unicodes": [
+            "Mail ID : __DLP_TOKEN_0008__",
+            "Distance from office:",
+            "Workafella- 300Mtrs",
+            "Smartworks Raheja – approx 1.5 kms",
+            "6 months to",
+            "2 years",
+            "INR.17",
+            ",",
+            "600+One",
+            "time",
+            "Registration fee",
+            "2Years to",
+            "6Years",
+            "INR.16",
+            ",",
+            "720+One",
+            "time",
+            "Registration fee",
+            "Pune",
+            "Eurokids",
+            "Baner",
+            "Eurokids",
+            "Nisarg Vihar Row House. 4 & 5, near",
+            "Mitcon,",
+            "Balewadi, Pune, Maharashtra 411045",
+            "Contact person - Mr. Sachin Karale",
+            "Contact Number : __DLP_TOKEN_0009__",
+            "Mrs. Meenal Ranade",
+            "Contact Number : __DLP_TOKEN_0010__",
+            "Mail ID : __DLP_TOKEN_0011__",
+            "Distance from office: approx 200 Mtrs",
+            "2Years to",
+            "6Years",
+            "(Below 2",
+            "years is not",
+            "available)",
+            "INR.13",
+            ",",
+            "+One time",
+            "Registration fee",
+            "14. Amendment of Policy:",
+            "Prodapt reserves rights to amend this policy any time. Notice of amendments will be communicated to the Prodaptians through Voice portal."
+          ],
+          "output": "[\n  {\"src\": \"Mail ID\", \"tgt\": \"E-Mail-ID\"},\n  {\"src\": \"Distance from office\", \"tgt\": \"Entfernung zum Büro\"},\n  {\"src\": \"Workafella\", \"tgt\": \"Workafella\"},\n  {\"src\": \"Smartworks Raheja\", \"tgt\": \"Smartworks Raheja\"},\n  {\"src\": \"6 months\", \"tgt\": \"6 Monate\"},\n  {\"src\": \"2 years\", \"tgt\": \"2 Jahre\"},\n  {\"src\": \"One time Registration fee\", \"tgt\": \"Einmalige Anmeldegebühr\"},\n  {\"src\": \"6 Years\", \"tgt\": \"6 Jahre\"},\n  {\"src\": \"Pune\", \"tgt\": \"Pune\"},\n  {\"src\": \"Eurokids\", \"tgt\": \"Eurokids\"},\n  {\"src\": \"Baner\", \"tgt\": \"Baner\"},\n  {\"src\": \"Nisarg Vihar Row House\", \"tgt\": \"Nisarg Vihar Reihenhaus\"},\n  {\"src\": \"Mitcon\", \"tgt\": \"Mitcon\"},\n  {\"src\": \"Balewadi\", \"tgt\": \"Balewadi\"},\n  {\"src\": \"Maharashtra\", \"tgt\": \"Maharashtra\"},\n  {\"src\": \"Contact person\", \"tgt\": \"Ansprechpartner\"},\n  {\"src\": \"Mr. Sachin Karale\", \"tgt\": \"Herr Sachin Karale\"},\n  {\"src\": \"Contact Number\", \"tgt\": \"Kontaktnummer\"},\n  {\"src\": \"Mrs. Meenal Ranade\", \"tgt\": \"Frau Meenal Ranade\"},\n  {\"src\": \"Amendment of Policy\", \"tgt\": \"Änderung der Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Notice of amendments\", \"tgt\": \"Mitteilung über Änderungen\"},\n  {\"src\": \"Prodaptians\", \"tgt\": \"Prodaptianer\"},\n  {\"src\": \"Voice portal\", \"tgt\": \"Sprachportal\"}\n]",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nMail ID : __DLP_TOKEN_0008__\n\nDistance from office:\n\nWorkafella- 300Mtrs\n\nSmartworks Raheja – approx 1.5 kms\n\n6 months to\n\n2 years\n\nINR.17\n\n,\n\n600+One\n\ntime\n\nRegistration fee\n\n2Years to\n\n6Years\n\nINR.16\n\n,\n\n720+One\n\ntime\n\nRegistration fee\n\nPune\n\nEurokids\n\nBaner\n\nEurokids\n\nNisarg Vihar Row House. 4 & 5, near\n\nMitcon,\n\nBalewadi, Pune, Maharashtra 411045\n\nContact person - Mr. Sachin Karale\n\nContact Number : __DLP_TOKEN_0009__\n\nMrs. Meenal Ranade\n\nContact Number : __DLP_TOKEN_0010__\n\nMail ID : __DLP_TOKEN_0011__\n\nDistance from office: approx 200 Mtrs\n\n2Years to\n\n6Years\n\n(Below 2\n\nyears is not\n\navailable)\n\nINR.13\n\n,\n\n+One time\n\nRegistration fee\n\n14. Amendment of Policy:\n\nProdapt reserves rights to amend this policy any time. Notice of amendments will be communicated to the Prodaptians through Voice portal.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    },
+    {
+      "paragraph": [
+        {
+          "pdf_unicodes": [
+            "Creche Facility: Policy | Ver. 1.0",
+            "© Prodapt 2025",
+            "8/8",
+            "Proprietary & Confidential",
+            "15. Liability disclaimer:",
+            "Prodapt shall not be liable either directly or indirectly for any thing connecting to creche. Prodapt disclaims all liabilities whatsoever in connecting to Parents joining their child to a specific creche of their choice.",
+            "16. Grievances and Redressal:",
+            "• Prodapt is committed to providing a fair and impartial process for employees to raise and resolve grievances related to the crèche facility.",
+            "• This policy applies to all employees of Prodapt who utilize the crèche facility. It covers grievances related to the quality of services, health and safety standards, staff behaviour, and any other concerns that may arise.",
+            "• Informal Resolution: Employees are encouraged to try and resolve their grievances informally by raising the issue with their immediate manager or the crèche staff. If the issue cannot be resolved informally, the employee may seek the assistance of HRBP. In some cases, HRBP may offer mediation or conciliation services to help facilitate a resolution between the parties involved.",
+            "• Formal Resolution: If the grievance cannot be resolved informally or the employee is dissatisfied with the outcome, they may initiate a formal grievance procedure by submitting a written grievance to the HR department. The grievance will be reviewed by the Grievance Redressal Committee, and a resolution will be proposed within 7 days.",
+            "17. Confidentiality and Data Protection:",
+            "All personal information collected during the grievance process will be handled in accordance with data protection laws. The confidentiality of the parties involved will be maintained throughout the process."
+          ],
+          "output": "```json\n[\n  {\"src\": \"Creche Facility\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Policy\", \"tgt\": \"Richtlinie\"},\n  {\"src\": \"Prodapt\", \"tgt\": \"Prodapt\"},\n  {\"src\": \"Proprietary & Confidential\", \"tgt\": \"Eigentum und vertraulich\"},\n  {\"src\": \"Liability disclaimer\", \"tgt\": \"Haftungsausschluss\"},\n  {\"src\": \"creche\", \"tgt\": \"Kindertagesstätte\"},\n  {\"src\": \"Parents\", \"tgt\": \"Eltern\"},\n  {\"src\": \"liabilities\", \"tgt\": \"Haftung\"},\n  {\"src\": \"Grievances and Redressal\", \"tgt\": \"Beschwerden und Abhilfe\"},\n  {\"src\": \"employees\", \"tgt\": \"Mitarbeiter\"},\n  {\"src\": \"grievances\", \"tgt\": \"Beschwerden\"},\n  {\"src\": \"quality of services\", \"tgt\": \"Dienstleistungsqualität\"},\n  {\"src\": \"health and safety standards\", \"tgt\": \"Gesundheits- und Sicherheitsstandards\"},\n  {\"src\": \"staff behaviour\", \"tgt\": \"Personalverhalten\"},\n  {\"src\": \"Informal Resolution\", \"tgt\": \"Informelle Lösung\"},\n  {\"src\": \"immediate manager\", \"tgt\": \"direkter Vorgesetzter\"},\n  {\"src\": \"crèche staff\", \"tgt\": \"Personal der Kindertagesstätte\"},\n  {\"src\": \"HRBP\", \"tgt\": \"HRBP\"},\n  {\"src\": \"mediation or conciliation services\", \"tgt\": \"Mediations- oder Schlichtungsdienste\"},\n  {\"src\": \"parties involved\", \"tgt\": \"beteiligte Parteien\"},\n  {\"src\": \"Formal Resolution\", \"tgt\": \"Formelle Lösung\"},\n  {\"src\": \"grievance procedure\", \"tgt\": \"Beschwerdeverfahren\"},\n  {\"src\": \"written grievance\", \"tgt\": \"schriftliche Beschwerde\"},\n  {\"src\": \"HR department\", \"tgt\": \"Personalabteilung\"},\n  {\"src\": \"Grievance Redressal Committee\", \"tgt\": \"Ausschuss für Beschwerdebeilegung\"},\n  {\"src\": \"Confidentiality and Data Protection\", \"tgt\": \"Vertraulichkeit und Datenschutz\"},\n  {\"src\": \"personal information\", \"tgt\": \"personenbezogene Daten\"},\n  {\"src\": \"grievance process\", \"tgt\": \"Beschwerdeprozess\"},\n  {\"src\": \"data protection laws\", \"tgt\": \"Datenschutzgesetze\"}\n]\n```",
+          "input": "\nYou are an expert multilingual terminologist. Extract key terms from the text and translate them into de.\n\n### Extraction Rules\n1. Include only: named entities (people, orgs, locations, theorem/algorithm names, dates) and domain-specific nouns/noun phrases essential to meaning.\n2. No full sentences. Ignore function words.\n3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.\n4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.\n5. Extract each term once. Keep order of first appearance.\n\n### Translation Rules\n1. Translate each term into de.\n2. If in the reference glossary, use its translation exactly.\n3. Keep proper names in original language unless a well-known translation exists.\n4. Ensure consistent translations.\n\n\n\n### Output Format\n- Return ONLY a valid JSON array.\n- Each element: {\"src\": \"...\", \"tgt\": \"...\"}.\n- No comments, no backticks, no extra text.\n- If no terms: [].\n\n### Example\nFor terms “LLM”, “GPT”:\n[\n  {\"src\": \"LLM\", \"tgt\": \"大语言模型\"},\n  {\"src\": \"GPT\", \"tgt\": \"GPT\"}\n]\n\nInput Text:\n```\nCreche Facility: Policy | Ver. 1.0\n\n© Prodapt 2025\n\n8/8\n\nProprietary & Confidential\n\n15. Liability disclaimer:\n\nProdapt shall not be liable either directly or indirectly for any thing connecting to creche. Prodapt disclaims all liabilities whatsoever in connecting to Parents joining their child to a specific creche of their choice.\n\n16. Grievances and Redressal:\n\n• Prodapt is committed to providing a fair and impartial process for employees to raise and resolve grievances related to the crèche facility.\n\n• This policy applies to all employees of Prodapt who utilize the crèche facility. It covers grievances related to the quality of services, health and safety standards, staff behaviour, and any other concerns that may arise.\n\n• Informal Resolution: Employees are encouraged to try and resolve their grievances informally by raising the issue with their immediate manager or the crèche staff. If the issue cannot be resolved informally, the employee may seek the assistance of HRBP. In some cases, HRBP may offer mediation or conciliation services to help facilitate a resolution between the parties involved.\n\n• Formal Resolution: If the grievance cannot be resolved informally or the employee is dissatisfied with the outcome, they may initiate a formal grievance procedure by submitting a written grievance to the HR department. The grievance will be reviewed by the Grievance Redressal Committee, and a resolution will be proposed within 7 days.\n\n17. Confidentiality and Data Protection:\n\nAll personal information collected during the grievance process will be handled in accordance with data protection laws. The confidentiality of the parties involved will be maintained throughout the process.\n```\n\nReturn JSON ONLY. NO OTHER TEXT.\nResult:\n"
+        }
+      ]
+    }
+  ]
+}

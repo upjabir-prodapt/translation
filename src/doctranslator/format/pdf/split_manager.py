@@ -96,6 +96,49 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
     # Section detection
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _fixed_chunk_fallback(total_pages: int) -> tuple[list[int], list[str | None]]:
+        """Return fixed 20-page chunk boundaries as fallback split points."""
+        logger.debug("No usable TOC found; falling back to fixed 20-page chunks.")
+        fallback_starts = list(range(0, total_pages, 20))
+        fallback_titles: list[str | None] = [None] * len(fallback_starts)
+        return fallback_starts, fallback_titles
+
+    @staticmethod
+    def _extract_toc_entries(toc: list) -> list:
+        """Return the best set of TOC entries (prefer level-1, fall back to level-2)."""
+        for target_level in (1, 2):
+            entries = [e for e in toc if e[0] == target_level]
+            if entries:
+                return entries
+        return []
+
+    @staticmethod
+    def _deduplicate_and_sort_sections(
+        entries: list,
+    ) -> tuple[list[int], list[str | None]]:
+        """Convert TOC entries to deduplicated, sorted 0-based page lists."""
+        seen: set[int] = set()
+        section_starts: list[int] = []
+        titles: list[str | None] = []
+
+        for entry in entries:
+            page_0based = max(0, entry[2] - 1)
+            if page_0based not in seen:
+                seen.add(page_0based)
+                section_starts.append(page_0based)
+                titles.append(entry[1] if len(entry) > 1 else None)
+
+        order = sorted(range(len(section_starts)), key=lambda i: section_starts[i])
+        section_starts = [section_starts[i] for i in order]
+        titles = [titles[i] for i in order]
+
+        if section_starts[0] != 0:
+            section_starts.insert(0, 0)
+            titles.insert(0, None)
+
+        return section_starts, titles
+
     def _get_sections_from_toc(
         self, doc, total_pages: int
     ) -> tuple[list[int], list[str | None]]:
@@ -105,53 +148,42 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
         Page numbers are 0-based.
         """
         toc = doc.get_toc()
+        if not toc:
+            return self._fixed_chunk_fallback(total_pages)
 
-        if toc:
-            # Prefer level-1 headings; fall back to level-2 if none found
-            for target_level in (1, 2):
-                entries = [e for e in toc if e[0] == target_level]
-                if entries:
-                    break
+        entries = self._extract_toc_entries(toc)
+        if not entries:
+            return self._fixed_chunk_fallback(total_pages)
 
-            if entries:
-                # Convert 1-based page numbers from TOC to 0-based
-                seen: set[int] = set()
-                section_starts: list[int] = []
-                titles: list[str | None] = []
+        section_starts, titles = self._deduplicate_and_sort_sections(entries)
+        if len(section_starts) > 1:
+            logger.debug(
+                f"Using TOC-based sections: {list(zip(section_starts, titles, strict=False))}"
+            )
+            return section_starts, titles
 
-                for entry in entries:
-                    page_0based = max(0, entry[2] - 1)
-                    if page_0based not in seen:
-                        seen.add(page_0based)
-                        section_starts.append(page_0based)
-                        titles.append(entry[1] if len(entry) > 1 else None)
-
-                section_starts_sorted = sorted(
-                    range(len(section_starts)), key=lambda i: section_starts[i]
-                )
-                section_starts = [section_starts[i] for i in section_starts_sorted]
-                titles = [titles[i] for i in section_starts_sorted]
-
-                # Always ensure we start from page 0
-                if section_starts[0] != 0:
-                    section_starts.insert(0, 0)
-                    titles.insert(0, None)
-
-                if len(section_starts) > 1:
-                    logger.debug(
-                        f"Using TOC-based sections: {list(zip(section_starts, titles, strict=False))}"
-                    )
-                    return section_starts, titles
-
-        # Fallback: fixed 20-page chunks
-        logger.debug("No usable TOC found; falling back to fixed 20-page chunks.")
-        fallback_starts = list(range(0, total_pages, 20))
-        fallback_titles: list[str | None] = [None] * len(fallback_starts)
-        return fallback_starts, fallback_titles
+        return self._fixed_chunk_fallback(total_pages)
 
     # ------------------------------------------------------------------
     # SplitPoint construction
     # ------------------------------------------------------------------
+
+    def _section_end_page(
+        self, i: int, section_starts: list[int], total_pages: int
+    ) -> int:
+        """Return the last page (inclusive) of section i."""
+        if i + 1 < len(section_starts):
+            return section_starts[i + 1] - 1
+        return total_pages - 1
+
+    def _section_actual_start_and_overlap(
+        self, i: int, section_start: int
+    ) -> tuple[int, int]:
+        """Return (actual_start, overlap) for a section, applying overlap only after the first."""
+        if i == 0:
+            return section_start, 0
+        actual_start = max(0, section_start - self.overlap_pages)
+        return actual_start, section_start - actual_start
 
     def _build_split_points(
         self,
@@ -162,22 +194,10 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
         split_points: list[SplitPoint] = []
 
         for i, section_start in enumerate(section_starts):
-            # Section ends one page before the next section starts (or at doc end)
-            section_end = (
-                section_starts[i + 1] - 1
-                if i + 1 < len(section_starts)
-                else total_pages - 1
+            section_end = self._section_end_page(i, section_starts, total_pages)
+            actual_start, overlap = self._section_actual_start_and_overlap(
+                i, section_start
             )
-
-            if i == 0:
-                # First chunk: no overlap — the document beginning is its own context
-                actual_start = section_start
-                overlap = 0
-            else:
-                # Subsequent chunks: extend backwards for context
-                actual_start = max(0, section_start - self.overlap_pages)
-                overlap = section_start - actual_start
-
             split_points.append(
                 SplitPoint(
                     start_page=actual_start,

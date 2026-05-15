@@ -133,5 +133,5 @@ def get_file_size(path: Path) -> int:
     """
     try:
         return path.stat().st_size
-    except (FileNotFoundError, OSError):
+    except OSError:
         return 0

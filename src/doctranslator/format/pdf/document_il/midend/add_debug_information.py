@@ -1,5 +1,6 @@
 import logging
 
+from ...translation_config import TranslationConfig
 from .. import GraphicState
 from .. import il_version_1
 from ..utils.style_helper import BLUE
@@ -7,7 +8,6 @@ from ..utils.style_helper import ORANGE
 from ..utils.style_helper import PINK
 from ..utils.style_helper import TEAL
 from ..utils.style_helper import YELLOW
-from ...translation_config import TranslationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,64 @@ class AddDebugInformation:
             xobj_id=-1,
         )
 
+    def _is_debug_paragraph(self, paragraph: il_version_1.PdfParagraph) -> bool:
+        """Return True if the paragraph is a debug-annotated paragraph to skip."""
+        return any(
+            x.pdf_same_style_unicode_characters.debug_info
+            for x in paragraph.pdf_paragraph_composition
+            if x.pdf_same_style_unicode_characters
+        )
+
+    def _add_formula_debug_info(
+        self, composition, page: il_version_1.Page, new_paragraphs: list
+    ):
+        """Add debug rectangles and labels for a formula composition."""
+        new_paragraphs.append(
+            self._create_text("formula", ORANGE, composition.pdf_formula.box),
+        )
+        page.pdf_rectangle.append(
+            self._create_rectangle(composition.pdf_formula.box, ORANGE),
+        )
+        for char in composition.pdf_formula.pdf_character:
+            page.pdf_rectangle.append(
+                self._create_rectangle(char.visual_bbox.box, TEAL, line_width=0.2),
+            )
+
+    def _add_paragraph_debug_info(
+        self,
+        paragraph: il_version_1.PdfParagraph,
+        page: il_version_1.Page,
+        new_paragraphs: list,
+    ):
+        """Add debug rectangle and label for a single paragraph."""
+        page.pdf_rectangle.append(self._create_rectangle(paragraph.box, BLUE))
+        debug_text = "paragraph"
+        if hasattr(paragraph, "debug_id") and paragraph.debug_id:
+            debug_text = f"paragraph[{paragraph.debug_id}]-[{paragraph.layout_label}]"
+        new_paragraphs.append(self._create_text(debug_text, BLUE, paragraph.box))
+
+        for composition in paragraph.pdf_paragraph_composition:
+            if composition.pdf_formula:
+                self._add_formula_debug_info(composition, page, new_paragraphs)
+
+    def _add_xobj_debug_info(self, page: il_version_1.Page):
+        """Add debug rectangles for all xobjects on the page."""
+        for xobj in page.pdf_xobject:
+            page.pdf_rectangle.append(self._create_rectangle(xobj.box, YELLOW))
+
+    def _add_form_debug_info(self, page: il_version_1.Page, new_paragraphs: list):
+        """Add debug rectangles and labels for all forms on the page."""
+        for form in page.pdf_form:
+            debug_text = "Form"
+            if form.pdf_form_subtype.pdf_xobj_form:
+                debug_text += f"[{form.pdf_form_subtype.pdf_xobj_form.do_args}]"
+            elif form.pdf_form_subtype.pdf_inline_form:
+                debug_text += "[inline]"
+            new_paragraphs.append(
+                self._create_text(debug_text, PINK, form.box, font_size=0.4),
+            )
+            page.pdf_rectangle.append(self._create_rectangle(form.box, PINK))
+
     def process_page(self, page: il_version_1.Page):
         # Add page number text at top-left corner
         page_width = page.cropbox.box.x2 - page.cropbox.box.x
@@ -86,95 +144,19 @@ class AddDebugInformation:
             x2=page.cropbox.box.x2,
             y2=page.cropbox.box.y2 - page_height * 0.02,
         )
-        page_number_paragraph = self._create_text(
-            page_number_text,
-            BLUE,
-            page_number_box,
+        page.pdf_paragraph.append(
+            self._create_text(page_number_text, BLUE, page_number_box)
         )
-        page.pdf_paragraph.append(page_number_paragraph)
 
         new_paragraphs = []
 
         for paragraph in page.pdf_paragraph:
             if not paragraph.pdf_paragraph_composition:
                 continue
-            if any(
-                x.pdf_same_style_unicode_characters.debug_info
-                for x in paragraph.pdf_paragraph_composition
-                if x.pdf_same_style_unicode_characters
-            ):
+            if self._is_debug_paragraph(paragraph):
                 continue
-            # Create a rectangle box
-            rect = self._create_rectangle(paragraph.box, BLUE)
-
-            page.pdf_rectangle.append(rect)
-
-            # Create text label at top-left corner
-            # Note: PDF coordinates are from bottom-left,
-            # so we use y2 for top position
-
-            debug_text = "paragraph"
-            if hasattr(paragraph, "debug_id") and paragraph.debug_id:
-                debug_text = (
-                    f"paragraph[{paragraph.debug_id}]-[{paragraph.layout_label}]"
-                )
-            new_paragraphs.append(self._create_text(debug_text, BLUE, paragraph.box))
-
-            for composition in paragraph.pdf_paragraph_composition:
-                if composition.pdf_formula:
-                    new_paragraphs.append(
-                        self._create_text(
-                            "formula",
-                            ORANGE,
-                            composition.pdf_formula.box,
-                        ),
-                    )
-                    page.pdf_rectangle.append(
-                        self._create_rectangle(
-                            composition.pdf_formula.box,
-                            ORANGE,
-                        ),
-                    )
-                    for char in composition.pdf_formula.pdf_character:
-                        page.pdf_rectangle.append(
-                            self._create_rectangle(
-                                char.visual_bbox.box, TEAL, line_width=0.2
-                            ),
-                        )
-                        # page.pdf_rectangle.append(
-                        #     self._create_rectangle(char.box, CYAN, line_width=0.2),
-                        # )
-
-            for xobj in page.pdf_xobject:
-                # new_paragraphs.append(
-                #     self._create_text(
-                #         "xobj",
-                #         YELLOW,
-                #         xobj.box,
-                #     ),
-                # )
-                page.pdf_rectangle.append(
-                    self._create_rectangle(
-                        xobj.box,
-                        YELLOW,
-                    ),
-                )
-
-            for form in page.pdf_form:
-                debug_text = "Form"
-                if form.pdf_form_subtype.pdf_xobj_form:
-                    debug_text += f"[{form.pdf_form_subtype.pdf_xobj_form.do_args}]"
-                elif form.pdf_form_subtype.pdf_inline_form:
-                    debug_text += "[inline]"
-
-                new_paragraphs.append(
-                    self._create_text(debug_text, PINK, form.box, font_size=0.4),
-                )
-                page.pdf_rectangle.append(
-                    self._create_rectangle(
-                        form.box,
-                        PINK,
-                    ),
-                )
+            self._add_paragraph_debug_info(paragraph, page, new_paragraphs)
+            self._add_xobj_debug_info(page)
+            self._add_form_debug_info(page, new_paragraphs)
 
         page.pdf_paragraph.extend(new_paragraphs)

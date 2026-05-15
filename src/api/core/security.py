@@ -1,17 +1,17 @@
 """Security utilities for authentication and authorization."""
 
+import logging
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-import logging
 from typing import Any
 
-from fastapi import HTTPException
+import jwt
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import status
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security import HTTPBearer
-import jwt
 from jwt import InvalidTokenError
 from pydantic import BaseModel
 
@@ -36,7 +36,7 @@ def _jwt_secret() -> str:
     if settings.JWT_SECRET_KEY:
         return settings.JWT_SECRET_KEY
     if settings.IS_LOCAL:
-        return "local-dev-insecure-jwt-secret"
+        return "local-dev-insecure-jwt-secret-that-is-at-least-32-bytes-long"
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="JWT secret is not configured",
@@ -88,7 +88,7 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-async def verify_token(
+def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> dict[str, Any]:
     """Verify bearer token and return JWT payload."""
@@ -101,18 +101,18 @@ async def verify_token(
     return decode_and_verify_token(credentials.credentials)
 
 
-async def get_current_user(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> dict[str, Any]:
     """Backward-compatible dependency returning raw token payload."""
-    return await verify_token(credentials)
+    return verify_token(credentials)
 
 
-async def get_current_user_context(
+def get_current_user_context(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    payload = await verify_token(credentials)
+    payload = verify_token(credentials)
     return AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),

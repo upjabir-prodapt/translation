@@ -28,7 +28,11 @@ def _calc_sha3_256(path: Path) -> str:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])
+    # Security: INFO level — no debug/sensitive data is emitted.
+    # Output goes only to stdout (RichHandler). This is a developer CLI tool;
+    # all logged values (file paths) come from trusted developer-controlled input,
+    # not from any external user or network request.
+    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])  # NOSONAR
     parser = argparse.ArgumentParser(description="Generate cmap metadata.")
     parser.add_argument(
         "assets_repo_path",

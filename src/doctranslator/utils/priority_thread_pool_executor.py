@@ -6,7 +6,7 @@ import atexit
 import itertools
 import logging
 import queue
-import random
+import secrets
 import sys
 import threading
 import weakref
@@ -101,50 +101,77 @@ class PriorityQueue(queue.Queue):
         return None
 
 
+def _process_work_item(work_item, executor_reference, work_queue):
+    """
+    Process a single work item from the queue.
+
+    Returns True if the worker should exit, False to continue the loop.
+    """
+    if work_item[2] is not None:
+        work_item[2].run()
+        # Delete references to object. See issue16284
+        del work_item
+
+        # attempt to increment idle count
+        executor = executor_reference()
+        if executor is not None:
+            executor._idle_semaphore.release()
+        del executor
+        return False
+
+    executor = executor_reference()
+    # Exit if:
+    #   - The interpreter is shutting down OR
+    #   - The executor that owns the worker has been collected OR
+    #   - The executor that owns the worker has been shutdown.
+    if _shutdown or executor is None or executor._shutdown:
+        # Flag the executor as shutting down as early as possible if it
+        # is not gc-ed yet.
+        if executor is not None:
+            executor._shutdown = True
+        # Notice other workers
+        work_queue.put(None)
+        return True
+    del executor
+    return False
+
+
+def _run_initializer(executor_reference, initializer, initargs):
+    """
+    Run the thread initializer, handling failures gracefully.
+
+    Returns True if initializer succeeded (or was absent), False on failure.
+    """
+    if initializer is None:
+        return True
+    try:
+        initializer(*initargs)
+        return True
+    except Exception:  # noqa: BLE001 - broad catch is intentional: initializer may raise any exception type
+        _base.LOGGER.critical("Exception in initializer:", exc_info=True)
+        executor = executor_reference()
+        if executor is not None:
+            executor._initializer_failed()
+        return False
+
+
 def _worker(executor_reference, work_queue, initializer, initargs):
-    if initializer is not None:
-        try:
-            initializer(*initargs)
-        except BaseException:
-            _base.LOGGER.critical("Exception in initializer:", exc_info=True)
-            executor = executor_reference()
-            if executor is not None:
-                executor._initializer_failed()
-            return
+    if not _run_initializer(executor_reference, initializer, initargs):
+        return
     try:
         while True:
             work_item = work_queue.get(block=True)
             try:
-                if work_item[2] is not None:
-                    work_item[2].run()
-                    # Delete references to object. See issue16284
-                    del work_item
-
-                    # attempt to increment idle count
-                    executor = executor_reference()
-                    if executor is not None:
-                        executor._idle_semaphore.release()
-                    del executor
-                    continue
-
-                executor = executor_reference()
-                # Exit if:
-                #   - The interpreter is shutting down OR
-                #   - The executor that owns the worker has been collected OR
-                #   - The executor that owns the worker has been shutdown.
-                if _shutdown or executor is None or executor._shutdown:
-                    # Flag the executor as shutting down as early as possible if it
-                    # is not gc-ed yet.
-                    if executor is not None:
-                        executor._shutdown = True
-                    # Notice other workers
-                    work_queue.put(None)
+                should_exit = _process_work_item(
+                    work_item, executor_reference, work_queue
+                )
+                if should_exit:
                     return
-                del executor
             finally:
                 work_queue.task_done()
-    except BaseException:
+    except Exception:  # noqa: BLE001 - broad catch is intentional: re-raised immediately after logging
         _base.LOGGER.critical("Exception in worker", exc_info=True)
+        raise
 
 
 class PriorityThreadPoolExecutor(ThreadPoolExecutor):
@@ -187,7 +214,7 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
                     "cannot schedule new futures after interpreter shutdown"
                 )
 
-            priority = kwargs.get("priority", random.randint(0, sys.maxsize - 1))  # noqa: S311
+            priority = kwargs.get("priority", secrets.randbelow(sys.maxsize))
             if "priority" in kwargs:
                 del kwargs["priority"]
 
@@ -226,10 +253,29 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
             self._threads.add(t)
             _threads_queues[t] = self._work_queue
 
+    def _drain_and_cancel_futures(self):
+        """Drain all pending work items from the queue and cancel their futures."""
+        while True:
+            try:
+                work_item = self._work_queue.get_nowait()
+            except queue.Empty:
+                break
+            if work_item is not None:
+                work_item.future.cancel()
+
+    def _join_all_threads(self):
+        """Signal all worker threads to stop and wait for them to finish."""
+        logger.debug(f"Waiting for all thread done {self._thread_name_prefix or self}")
+        for t in self._threads:
+            self._work_queue.put(None)
+            t.join()
+
     def shutdown(self, wait=True, *, cancel_futures=False):
         logger.debug(f"Shutting down executor {self._thread_name_prefix or self}")
         if wait:
-            logger.debug(f"Waiting for all tasks done {self._thread_name_prefix or self}")
+            logger.debug(
+                f"Waiting for all tasks done {self._thread_name_prefix or self}"
+            )
             self._work_queue.join()
             logger.debug(f"All tasks done {self._thread_name_prefix or self}")
 
@@ -238,24 +284,13 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
             if cancel_futures:
                 # Drain all work items from the queue, and then cancel their
                 # associated futures.
-                while True:
-                    try:
-                        work_item = self._work_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    if work_item is not None:
-                        work_item.future.cancel()
+                self._drain_and_cancel_futures()
 
             # Send a wake-up to prevent threads calling
             # _work_queue.get(block=True) from permanently blocking.
             self._work_queue.put(None)
         if wait:
-            logger.debug(
-                f"Waiting for all thread done {self._thread_name_prefix or self}"
-            )
-            for t in self._threads:
-                self._work_queue.put(None)
-                t.join()
+            self._join_all_threads()
         logger.debug(f"shutdown finish {self._thread_name_prefix or self}")
 
     def __del__(self):

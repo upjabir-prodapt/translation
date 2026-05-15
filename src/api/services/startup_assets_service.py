@@ -10,7 +10,7 @@ from pathlib import Path
 from src.api.services.glossary_service import GlossaryService
 from src.api.services.intent_router_service import IntentRouterService
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.loaders.services.download_service import download_async
 from src.loaders.services.warmup_service import WarmupService
 from src.loaders.utils.path_helpers import get_cache_file_path
@@ -53,7 +53,10 @@ class StartupAssetsService:
     async def _ensure_metadata_indexes(self) -> list[str]:
         ready_files: list[str] = []
         missing_files: list[str] = []
-        for filename in (settings.FONT_METADATA_FILENAME, settings.CMAP_METADATA_FILENAME):
+        for filename in (
+            settings.FONT_METADATA_FILENAME,
+            settings.CMAP_METADATA_FILENAME,
+        ):
             local_path = get_cache_file_path(filename, settings.METADATA_DIR)
             if local_path.exists():
                 json.loads(local_path.read_text(encoding="utf-8"))

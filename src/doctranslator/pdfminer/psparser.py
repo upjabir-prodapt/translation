@@ -137,7 +137,7 @@ HEX = re.compile(rb"[0-9a-fA-F]")
 END_LITERAL = re.compile(rb"[#/%\[\]()<>{}\s]")
 END_HEX_STRING = re.compile(rb"[^\s0-9a-fA-F]")
 HEX_PAIR = re.compile(rb"[0-9a-fA-F]{2}|.")
-END_NUMBER = re.compile(rb"[^0-9]")
+END_NUMBER = re.compile(rb"\D")
 END_KEYWORD = re.compile(rb"[#/%\[\]()<>{}\s]")
 END_STRING = re.compile(rb"[()\134]")
 OCT_STRING = re.compile(rb"[0-7]")
@@ -170,6 +170,7 @@ class PSBaseParser:
         return "<%s: %r, bufpos=%d>" % (self.__class__.__name__, self.fp, self.bufpos)
 
     def flush(self) -> None:
+        # Not implemented in base class
         pass
 
     def close(self) -> None:
@@ -180,7 +181,7 @@ class PSBaseParser:
 
     def poll(self, pos: int | None = None, n: int = 80) -> None:
         pos0 = self.fp.tell()
-        if not pos:
+        if pos is None:
             pos = self.bufpos + self.charpos
         self.fp.seek(pos)
         log.debug("poll(%d): %r", pos, self.fp.read(n))
@@ -264,6 +265,40 @@ class PSBaseParser:
                 s = s[:n]
                 buf = b""
 
+    def _dispatch_char_token(self, c: bytes, j: int) -> int:
+        """Dispatch a single non-whitespace character to the appropriate parse state.
+
+        Returns the new character position (j+1 in all cases handled here).
+        """
+        if c == b"%":
+            self._curtoken = b"%"
+            self._parse1 = self._parse_comment
+        elif c == b"/":
+            self._curtoken = b""
+            self._parse1 = self._parse_literal
+        elif c in b"-+" or c.isdigit():
+            self._curtoken = c
+            self._parse1 = self._parse_number
+        elif c == b".":
+            self._curtoken = c
+            self._parse1 = self._parse_float
+        elif c.isalpha():
+            self._curtoken = c
+            self._parse1 = self._parse_keyword
+        elif c == b"(":
+            self._curtoken = b""
+            self.paren = 1
+            self._parse1 = self._parse_string
+        elif c == b"<":
+            self._curtoken = b""
+            self._parse1 = self._parse_wopen
+        elif c == b">":
+            self._curtoken = b""
+            self._parse1 = self._parse_wclose
+        elif c != b"\x00":
+            self._add_token(KWD(c))
+        return j + 1
+
     def _parse_main(self, s: bytes, i: int) -> int:
         m = NONSPC.search(s, i)
         if not m:
@@ -271,44 +306,7 @@ class PSBaseParser:
         j = m.start(0)
         c = s[j : j + 1]
         self._curtokenpos = self.bufpos + j
-        if c == b"%":
-            self._curtoken = b"%"
-            self._parse1 = self._parse_comment
-            return j + 1
-        elif c == b"/":
-            self._curtoken = b""
-            self._parse1 = self._parse_literal
-            return j + 1
-        elif c in b"-+" or c.isdigit():
-            self._curtoken = c
-            self._parse1 = self._parse_number
-            return j + 1
-        elif c == b".":
-            self._curtoken = c
-            self._parse1 = self._parse_float
-            return j + 1
-        elif c.isalpha():
-            self._curtoken = c
-            self._parse1 = self._parse_keyword
-            return j + 1
-        elif c == b"(":
-            self._curtoken = b""
-            self.paren = 1
-            self._parse1 = self._parse_string
-            return j + 1
-        elif c == b"<":
-            self._curtoken = b""
-            self._parse1 = self._parse_wopen
-            return j + 1
-        elif c == b">":
-            self._curtoken = b""
-            self._parse1 = self._parse_wclose
-            return j + 1
-        elif c == b"\x00":
-            return j + 1
-        else:
-            self._add_token(KWD(c))
-            return j + 1
+        return self._dispatch_char_token(c, j)
 
     def _add_token(self, obj: PSBaseParserToken) -> None:
         self._tokens.append((self._curtokenpos, obj))
@@ -576,7 +574,49 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
         return (pos, objs)
 
     def do_keyword(self, pos: int, token: PSKeyword) -> None:
+        # Not implemented in base class
         pass
+
+    def _handle_end_collection(self, pos: int, type_char: str) -> None:
+        """Handle end of array or proc collection, pushing result onto stack."""
+        try:
+            self.push(self.end_type(type_char))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
+    def _handle_end_dict(self, pos: int) -> None:
+        """Handle end of dictionary, building and pushing a dict onto the stack."""
+        try:
+            (obj_pos, objs) = self.end_type("d")
+            if len(objs) % 2 != 0:
+                error_msg = "Invalid dictionary construct: %r" % objs
+                raise PSSyntaxError(error_msg)
+            d = {literal_name(k): v for (k, v) in choplist(2, objs) if v is not None}
+            self.push((obj_pos, d))
+        except PSTypeError:
+            if settings.STRICT:
+                raise
+
+    def _handle_keyword_token(self, pos: int, token: PSKeyword) -> None:
+        """Dispatch keyword tokens to do_keyword or log unknown tokens."""
+        if isinstance(token, PSKeyword):
+            log.debug(
+                "do_keyword: pos=%r, token=%r, stack=%r",
+                pos,
+                token,
+                self.curstack,
+            )
+            self.do_keyword(pos, token)
+        else:
+            log.error(
+                "unknown token: pos=%r, token=%r, stack=%r",
+                pos,
+                token,
+                self.curstack,
+            )
+            self.do_keyword(pos, token)
+            raise PSException
 
     def nextobject(self) -> PSStackEntry[ExtraT]:
         """Yields a list of objects.
@@ -596,57 +636,21 @@ class PSStackParser(PSBaseParser, Generic[ExtraT]):
                 self.start_type(pos, "a")
             elif token == KEYWORD_ARRAY_END:
                 # end array
-                try:
-                    self.push(self.end_type("a"))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
+                self._handle_end_collection(pos, "a")
             elif token == KEYWORD_DICT_BEGIN:
                 # begin dictionary
                 self.start_type(pos, "d")
             elif token == KEYWORD_DICT_END:
                 # end dictionary
-                try:
-                    (pos, objs) = self.end_type("d")
-                    if len(objs) % 2 != 0:
-                        error_msg = "Invalid dictionary construct: %r" % objs
-                        raise PSSyntaxError(error_msg)
-                    d = {
-                        literal_name(k): v
-                        for (k, v) in choplist(2, objs)
-                        if v is not None
-                    }
-                    self.push((pos, d))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
+                self._handle_end_dict(pos)
             elif token == KEYWORD_PROC_BEGIN:
                 # begin proc
                 self.start_type(pos, "p")
             elif token == KEYWORD_PROC_END:
                 # end proc
-                try:
-                    self.push(self.end_type("p"))
-                except PSTypeError:
-                    if settings.STRICT:
-                        raise
-            elif isinstance(token, PSKeyword):
-                log.debug(
-                    "do_keyword: pos=%r, token=%r, stack=%r",
-                    pos,
-                    token,
-                    self.curstack,
-                )
-                self.do_keyword(pos, token)
+                self._handle_end_collection(pos, "p")
             else:
-                log.error(
-                    "unknown token: pos=%r, token=%r, stack=%r",
-                    pos,
-                    token,
-                    self.curstack,
-                )
-                self.do_keyword(pos, token)
-                raise PSException
+                self._handle_keyword_token(pos, token)
             if self.context:
                 continue
             else:

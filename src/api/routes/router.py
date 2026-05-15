@@ -10,21 +10,17 @@ from .v1.translate import router as translate_router
 # Create main API router
 api_router = APIRouter()
 
-# Include all route modules
-api_router.include_router(
-    health_router, tags=["health"], responses={404: {"description": "Not found"}}
-)
+NOT_FOUND_RESPONSE = {404: {"description": "Not found"}}
 
-api_router.include_router(
-    auth_router, tags=["auth"], responses={404: {"description": "Not found"}}
-)
+# Include all route modules
+api_router.include_router(health_router, tags=["health"], responses=NOT_FOUND_RESPONSE)
+
+api_router.include_router(auth_router, tags=["auth"], responses=NOT_FOUND_RESPONSE)
 
 api_router.include_router(
     translate_router,
     tags=["translation"],
-    responses={404: {"description": "Not found"}},
+    responses=NOT_FOUND_RESPONSE,
 )
 
-api_router.include_router(
-    jobs_router, tags=["jobs"], responses={404: {"description": "Not found"}}
-)
+api_router.include_router(jobs_router, tags=["jobs"], responses=NOT_FOUND_RESPONSE)

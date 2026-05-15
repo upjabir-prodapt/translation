@@ -28,7 +28,7 @@ from src.doctranslator.pdfminer.utils import FileOrName
 from src.doctranslator.pdfminer.utils import open_filename
 
 
-def extract_text_to_fp(
+def extract_text_to_fp(  # NOSONAR - pdfminer-compatible public API intentionally keeps these keyword parameters
     inf: BinaryIO,
     outfp: AnyIO,
     output_type: str = "text",
@@ -43,8 +43,7 @@ def extract_text_to_fp(
     output_dir: str | None = None,
     strip_control: bool = False,
     debug: bool = False,
-    disable_caching: bool = False,
-    **kwargs: Any,
+    disable_caching: bool = False,  # NOSONAR - pdfminer-compatible public API; all params are required for full feature support
 ) -> None:
     """Parses text from inf-file and writes to outfp file-like object.
 

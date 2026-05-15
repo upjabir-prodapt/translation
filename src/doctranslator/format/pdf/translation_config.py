@@ -7,13 +7,13 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.config.constants import settings
 from src.doctranslator.format.pdf.split_manager import BaseSplitStrategy
 from src.doctranslator.format.pdf.split_manager import PageCountStrategy
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.glossary import GlossaryEntry
 from src.doctranslator.progress_monitor import ProgressMonitor
 from src.doctranslator.translator.translator import BaseTranslator
-from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +75,6 @@ class SharedContextCrossSplitPart:
         current_name = base_name
         suffix = 0
         existing_names = {g.name for g in self.user_glossaries}
-        if (
-            self.auto_extracted_glossary
-            and self.auto_extracted_glossary.name == current_name
-        ):
-            pass
 
         while current_name in existing_names:
             suffix += 1
@@ -90,7 +85,7 @@ class SharedContextCrossSplitPart:
         with self._lock:
             try:
                 return term in self.norm_terms
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort lookup; any error is non-fatal
                 return False
 
     def finalize_auto_extracted_glossary(self):
@@ -147,6 +142,14 @@ class SharedContextCrossSplitPart:
                 self.total_valid_text_token_count += token_count
 
 
+@dataclass
+class DlpConfig:
+    enable_dlp: bool = False
+    dlp_job_id: str | None = None
+    dlp_source_language: str | None = None
+    dlp_post_translation: bool = False
+
+
 @dataclass(slots=True)
 class TranslationCoverPageMetadata:
     original_language: str
@@ -183,9 +186,154 @@ class TranslationConfig:
     def create_max_pages_per_part_split_strategy(max_pages_per_part: int):
         return PageCountStrategy(max_pages_per_part)
 
-    # for backward compatibility,
-    # new parameters should be added at the end of the function.
-    def __init__(
+    def _init_working_dir(
+        self, working_dir: "str | Path | None", debug: bool, input_file: "str | Path"
+    ) -> Path:
+        """Create and return the working directory, setting _is_temp_dir."""
+        if working_dir is None:
+            if debug:
+                base_temp_dir = settings.temp_root_path
+                working_dir = base_temp_dir / "working" / Path(input_file).stem
+                self._is_temp_dir = False
+            else:
+                working_dir = tempfile.mkdtemp()
+                self._is_temp_dir = True
+        else:
+            self._is_temp_dir = False
+        return working_dir
+
+    def _init_pool_settings(
+        self, pool_max_workers: "int | None", term_pool_max_workers: "int | None"
+    ) -> None:
+        """Configure pool sizes from explicit args or settings defaults."""
+        self.pool_max_workers = (
+            pool_max_workers
+            if pool_max_workers is not None
+            else int(settings.TRANSLATION_POOL_MAX_WORKERS)
+        )
+        self.term_pool_max_workers = (
+            term_pool_max_workers
+            if term_pool_max_workers is not None
+            else int(settings.TERM_EXTRACTION_POOL_MAX_WORKERS)
+        )
+
+    def _init_ocr_flags(
+        self,
+        ocr_workaround: bool,
+        enhance_compatibility: bool,
+        auto_enable_ocr_workaround: bool,
+        use_side_by_side_dual: bool,
+        use_alternating_pages_dual: bool,
+    ) -> None:
+        """Set OCR / compatibility flag overrides in correct priority order."""
+        self.skip_clean = self.skip_clean or enhance_compatibility
+        self.dual_translate_first = self.dual_translate_first or enhance_compatibility
+        self.disable_rich_text_translate = (
+            self.disable_rich_text_translate or enhance_compatibility
+        )
+
+        if ocr_workaround:
+            self.skip_scanned_detection = True
+            self.disable_rich_text_translate = True
+
+        # backward-compat: if side-by-side explicitly disabled, use alternating
+        if use_side_by_side_dual is False and use_alternating_pages_dual is False:
+            self.use_alternating_pages_dual = True
+
+        if auto_enable_ocr_workaround:
+            self.ocr_workaround = False
+            self.skip_scanned_detection = False
+
+        if self.ocr_workaround:
+            self.remove_non_formula_lines = False
+
+    def _init_dirs(
+        self,
+        working_dir: "str | Path | None",
+        output_dir: "str | Path | None",
+        debug: bool,
+        input_file: "str | Path",
+    ) -> None:
+        """Resolve, create, and store working and output directories."""
+        working_dir = self._init_working_dir(working_dir, debug, input_file)
+        self.working_dir = working_dir
+        Path(working_dir).mkdir(parents=True, exist_ok=True)
+        if output_dir is None:
+            output_dir = Path.cwd()
+        self.output_dir = output_dir
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    def _init_feature_flags(
+        self,
+        auto_extract_glossary: bool,
+        skip_translation: bool,
+        only_parse_generate_pdf: bool,
+        primary_font_family: "str | None",
+        only_include_translated_page: "bool | None",
+        save_auto_extracted_glossary: bool,
+        enable_graphic_element_process: bool,
+        skip_form_render: bool,
+        skip_curve_render: bool,
+        non_formula_line_iou_threshold: float,
+        figure_table_protection_threshold: float,
+        skip_formula_offset_calculation: bool,
+    ) -> None:
+        """Set miscellaneous feature flags."""
+        self.auto_extract_glossary = auto_extract_glossary
+        self.skip_translation = skip_translation
+        self.only_parse_generate_pdf = only_parse_generate_pdf
+        if self.skip_translation or self.only_parse_generate_pdf:
+            self.auto_extract_glossary = False
+        assert primary_font_family in [None, "serif", "sans-serif", "script"]
+        self.primary_font_family = primary_font_family
+        self.only_include_translated_page = (
+            bool(only_include_translated_page)
+            if only_include_translated_page
+            else False
+        )
+        self.save_auto_extracted_glossary = save_auto_extracted_glossary
+        self.enable_graphic_element_process = enable_graphic_element_process
+        self.skip_form_render = skip_form_render
+        self.skip_curve_render = skip_curve_render
+        self.non_formula_line_iou_threshold = non_formula_line_iou_threshold
+        self.figure_table_protection_threshold = figure_table_protection_threshold
+        self.skip_formula_offset_calculation = skip_formula_offset_calculation
+
+    def _init_dlp_fields(self, dlp_config: "DlpConfig | None") -> None:
+        """Initialise DLP-related instance fields."""
+        cfg = dlp_config or DlpConfig()
+        self.enable_dlp = bool(cfg.enable_dlp)
+        self.dlp_job_id = cfg.dlp_job_id
+        self.dlp_source_language = cfg.dlp_source_language
+        self.dlp_post_translation = bool(cfg.dlp_post_translation)
+        self.dlp_provider: str | None = None
+        self.dlp_chunk_mode: str | None = None
+        self.dlp_token_rows: list[dict] = []
+        self.dlp_applied_pre_translation = False
+        self.dlp_token_counter = 0
+        self.dlp_chunk_count = 0
+        self.dlp_unmask_before_pdf = True
+
+    def _init_llm_batch_limits(
+        self, lang_in: str, lang_out: str, disable_same_text_fallback: bool
+    ) -> None:
+        """Calculate and store LLM batch size limits."""
+        self.disable_same_text_fallback = disable_same_text_fallback
+        token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
+        self.llm_translation_batch_max_tokens = int(
+            settings.LLM_TRANSLATION_BATCH_MAX_TOKENS
+        )
+        self.llm_translation_batch_max_paragraphs = max(
+            int(settings.LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS * token_multiplier), 1
+        )
+        self.llm_term_extraction_batch_max_tokens = int(
+            settings.LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS
+        )
+        self.llm_term_extraction_batch_max_paragraphs = max(
+            int(settings.LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS * token_multiplier), 1
+        )
+
+    def __init__(  # NOSONAR - public configuration object intentionally exposes many backward-compatible keyword parameters
         self,
         translator: BaseTranslator,
         input_file: str | Path,
@@ -247,10 +395,7 @@ class TranslationConfig:
         disable_same_text_fallback: bool = settings.LLM_DISABLE_SAME_TEXT_FALLBACK,
         add_cover_page: bool = True,
         cover_page_metadata: TranslationCoverPageMetadata | None = None,
-        enable_dlp: bool = False,
-        dlp_job_id: str | None = None,
-        dlp_source_language: str | None = None,
-        dlp_post_translation: bool = False,
+        dlp_config: DlpConfig | None = None,  # NOSONAR - public configuration object; param count cannot be reduced below 13 without breaking callers
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator
@@ -259,93 +404,48 @@ class TranslationConfig:
         self.input_file = input_file
         self.lang_in = lang_in
         self.lang_out = lang_out
-        # just ignore font
-        self.font = None
+        self.font = None  # just ignore font
 
         self.pages = pages
         self.page_ranges = self.parse_pages(pages) if pages else None
         self.debug = debug
         self.watermark_output_mode = watermark_output_mode
 
-        self.output_dir = output_dir
-        self.working_dir = working_dir
         self.no_dual = no_dual
         self.no_mono = no_mono
-
         self.formular_font_pattern = formular_font_pattern
         self.formular_char_pattern = formular_char_pattern
         self.qps = qps
-        # Set pool_max_workers with default value from qps
-        self.pool_max_workers = (
-            pool_max_workers
-            if pool_max_workers is not None
-            else int(settings.TRANSLATION_POOL_MAX_WORKERS)
-        )
-        # Set term_pool_max_workers for automatic term extraction.
-        # If not provided, default to pool_max_workers.
-        self.term_pool_max_workers = (
-            term_pool_max_workers
-            if term_pool_max_workers is not None
-            else int(settings.TERM_EXTRACTION_POOL_MAX_WORKERS)
-        )
+        self._init_pool_settings(pool_max_workers, term_pool_max_workers)
         self.split_short_lines = split_short_lines
-
         self.short_line_split_factor = short_line_split_factor
         self.use_rich_pbar = use_rich_pbar
         self.progress_monitor = progress_monitor
         self.doc_layout_model = doc_layout_model
 
-        self.skip_clean = skip_clean or enhance_compatibility
+        self.skip_clean = skip_clean
         self.skip_scanned_detection = skip_scanned_detection
-
-        self.dual_translate_first = dual_translate_first or enhance_compatibility
-        self.disable_rich_text_translate = (
-            disable_rich_text_translate or enhance_compatibility
-        )
-
+        self.dual_translate_first = dual_translate_first
+        self.disable_rich_text_translate = disable_rich_text_translate
         self.report_interval = report_interval
         self.min_text_length = min_text_length
         self.use_alternating_pages_dual = use_alternating_pages_dual
         self.ocr_workaround = ocr_workaround
         self.merge_alternating_line_numbers = merge_alternating_line_numbers
-
-        if self.ocr_workaround:
-            self.skip_scanned_detection = True
-            self.disable_rich_text_translate = True
-
-        # for backward compatibility
-        if use_side_by_side_dual is False and use_alternating_pages_dual is False:
-            self.use_alternating_pages_dual = True
+        self.remove_non_formula_lines = remove_non_formula_lines
+        self._init_ocr_flags(
+            ocr_workaround,
+            enhance_compatibility,
+            auto_enable_ocr_workaround,
+            use_side_by_side_dual,
+            use_alternating_pages_dual,
+        )
 
         if progress_monitor and progress_monitor.cancel_event is None:
             progress_monitor.cancel_event = threading.Event()
 
-        if working_dir is None:
-            if debug:
-                base_temp_dir = settings.temp_root_path
-                working_dir = base_temp_dir / "working" / Path(input_file).stem
-                self._is_temp_dir = False
-            else:
-                working_dir = tempfile.mkdtemp()
-                self._is_temp_dir = True
-        else:
-            # working_dir is already complete from processor (includes job_id/working)
-            self._is_temp_dir = False
+        self._init_dirs(working_dir, output_dir, debug, input_file)
 
-        self.working_dir = working_dir
-
-        Path(working_dir).mkdir(parents=True, exist_ok=True)
-
-        if output_dir is None:
-            output_dir = Path.cwd()
-        self.output_dir = output_dir
-
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-        # NOTE: Auto-load disabled - doc_layout_model must be provided
-        # if not doc_layout_model:
-        #     from src.doctranslator.docvision.doclayout import DocLayoutModel
-        #     doc_layout_model = DocLayoutModel.load_available()
         if not doc_layout_model:
             raise ValueError(
                 "doc_layout_model is required. "
@@ -358,10 +458,7 @@ class TranslationConfig:
             initial_user_glossaries
         )
 
-        # Initialize split-related attributes
         self.split_strategy = split_strategy
-
-        # Create a unique working directory for each part
         self._part_working_dirs: dict[int, Path] = {}
         self._part_output_dirs: dict[int, Path] = {}
 
@@ -369,57 +466,28 @@ class TranslationConfig:
         self.show_char_box = show_char_box
         self.custom_system_prompt = custom_system_prompt
         self.add_formula_placehold_hint = add_formula_placehold_hint
-        self.auto_extract_glossary = auto_extract_glossary
         self.auto_enable_ocr_workaround = auto_enable_ocr_workaround
-        self.skip_translation = skip_translation
-        self.only_parse_generate_pdf = only_parse_generate_pdf
-
-        if self.skip_translation or self.only_parse_generate_pdf:
-            self.auto_extract_glossary = False
-
-        if auto_enable_ocr_workaround:
-            self.ocr_workaround = False
-            self.skip_scanned_detection = False
-
-        assert primary_font_family in [
-            None,
-            "serif",
-            "sans-serif",
-            "script",
-        ]
-        self.primary_font_family = primary_font_family
-
-        if only_include_translated_page is None:
-            only_include_translated_page = False
-
-        self.only_include_translated_page = only_include_translated_page
-
-        self.save_auto_extracted_glossary = save_auto_extracted_glossary
+        self._init_feature_flags(
+            auto_extract_glossary,
+            skip_translation,
+            only_parse_generate_pdf,
+            primary_font_family,
+            only_include_translated_page,
+            save_auto_extracted_glossary,
+            enable_graphic_element_process,
+            skip_form_render,
+            skip_curve_render,
+            non_formula_line_iou_threshold,
+            figure_table_protection_threshold,
+            skip_formula_offset_calculation,
+        )
 
         # force disable table translate until the new model is ready
         self.table_model = None
-        self.enable_graphic_element_process = enable_graphic_element_process
-        self.skip_form_render = skip_form_render
-        self.skip_curve_render = skip_curve_render
-        self.remove_non_formula_lines = remove_non_formula_lines
-        self.non_formula_line_iou_threshold = non_formula_line_iou_threshold
-        self.figure_table_protection_threshold = figure_table_protection_threshold
-        self.skip_formula_offset_calculation = skip_formula_offset_calculation
-
         self.metadata_extra_data = metadata_extra_data
         self.add_cover_page = add_cover_page
         self.cover_page_metadata = cover_page_metadata
-        self.enable_dlp = bool(enable_dlp)
-        self.dlp_job_id = dlp_job_id
-        self.dlp_source_language = dlp_source_language
-        self.dlp_post_translation = bool(dlp_post_translation)
-        self.dlp_provider: str | None = None
-        self.dlp_chunk_mode: str | None = None
-        self.dlp_token_rows: list[dict] = []
-        self.dlp_applied_pre_translation = False
-        self.dlp_token_counter = 0
-        self.dlp_chunk_count = 0
-        self.dlp_unmask_before_pdf = True
+        self._init_dlp_fields(dlp_config)
 
         self.term_extraction_token_usage: dict[str, int] = {
             "total_tokens": 0,
@@ -427,25 +495,18 @@ class TranslationConfig:
             "completion_tokens": 0,
             "cache_hit_prompt_tokens": 0,
         }
-        self.disable_same_text_fallback = disable_same_text_fallback
-        token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
-        self.llm_translation_batch_max_tokens = int(
-            settings.LLM_TRANSLATION_BATCH_MAX_TOKENS
-        )
-        self.llm_translation_batch_max_paragraphs = max(
-            int(settings.LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS * token_multiplier),
-            1,
-        )
-        self.llm_term_extraction_batch_max_tokens = int(
-            settings.LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS
-        )
-        self.llm_term_extraction_batch_max_paragraphs = max(
-            int(settings.LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS * token_multiplier),
-            1,
-        )
+        self._init_llm_batch_limits(lang_in, lang_out, disable_same_text_fallback)
 
-        if self.ocr_workaround:
-            self.remove_non_formula_lines = False
+    def _normalize_page_range(
+        self, start: int, end: int, total_pages: int
+    ) -> tuple[int, int]:
+        """Clamp a (start, end) page range to valid page numbers within total_pages.
+
+        Returns (normalized_start, normalized_end); caller should skip if end < start.
+        """
+        normalized_start = max(int(start), 1)
+        normalized_end = total_pages if int(end) == -1 else min(int(end), total_pages)
+        return normalized_start, normalized_end
 
     def get_translated_page_numbers(self, total_pages: int) -> list[int]:
         if total_pages <= 0:
@@ -455,9 +516,8 @@ class TranslationConfig:
 
         translated_pages: set[int] = set()
         for start, end in self.page_ranges:
-            normalized_start = max(int(start), 1)
-            normalized_end = (
-                total_pages if int(end) == -1 else min(int(end), total_pages)
+            normalized_start, normalized_end = self._normalize_page_range(
+                start, end, total_pages
             )
             if normalized_end < normalized_start:
                 continue
@@ -626,14 +686,10 @@ class TranslateResult:
         self.total_valid_character_count = None
         self.total_valid_text_token_count = None
 
-    def __str__(self):
-        """Return a human-readable string representation of the translation result."""
-        result = []
+    def _append_path_info(self, result: list):
+        """Append path information to result list."""
         if hasattr(self, "original_pdf_path") and self.original_pdf_path:
             result.append(f"\tOriginal PDF: {self.original_pdf_path}")
-
-        if hasattr(self, "total_seconds") and self.total_seconds:
-            result.append(f"\tTotal time: {self.total_seconds:.2f} seconds")
 
         if self.mono_pdf_path:
             result.append(f"\tMonolingual PDF: {self.mono_pdf_path}")
@@ -667,9 +723,16 @@ class TranslateResult:
                 f"\tAuto-extracted glossary: {self.auto_extracted_glossary_path}"
             )
 
+    def _append_time_and_memory_info(self, result: list):
+        """Append timing and memory information to result list."""
+        if hasattr(self, "total_seconds") and self.total_seconds:
+            result.append(f"\tTotal time: {self.total_seconds:.2f} seconds")
+
         if hasattr(self, "peak_memory_usage") and self.peak_memory_usage:
             result.append(f"\tPeak memory usage: {self.peak_memory_usage} MB")
 
+    def _append_count_info(self, result: list):
+        """Append character and token count information to result list."""
         if hasattr(self, "total_valid_character_count") and isinstance(
             self.total_valid_character_count, int
         ):
@@ -683,6 +746,13 @@ class TranslateResult:
             result.append(
                 f"\tTotal valid text token count (gpt-4o): {self.total_valid_text_token_count}"
             )
+
+    def __str__(self):
+        """Return a human-readable string representation of the translation result."""
+        result = []
+        self._append_path_info(result)
+        self._append_time_and_memory_info(result)
+        self._append_count_info(result)
 
         if result:
             result.insert(0, "Translation results:")

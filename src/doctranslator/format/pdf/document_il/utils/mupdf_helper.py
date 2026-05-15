@@ -5,7 +5,6 @@ from src.doctranslator.utils.common import get_process_pool
 
 
 def get_no_rotation_img(page: pymupdf.Page, dpi: int = 72) -> pymupdf.Pixmap:
-    # return page.get_pixmap(dpi=72)
     original_rotation = page.rotation
     page.set_rotation(0)
     pix = page.get_pixmap(dpi=dpi)
@@ -16,7 +15,6 @@ def get_no_rotation_img(page: pymupdf.Page, dpi: int = 72) -> pymupdf.Pixmap:
 def get_no_rotation_img_multiprocess_internal(
     pdf_bytes: str, pagenum: int, dpi: int = 72
 ) -> np.ndarray:
-    # return page.get_pixmap(dpi=72)
     doc = pymupdf.open(pdf_bytes)
     try:
         page = doc[pagenum]

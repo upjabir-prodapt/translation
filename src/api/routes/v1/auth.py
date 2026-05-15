@@ -14,7 +14,7 @@ from src.config.constants import settings
 router = APIRouter()
 
 
-@router.post("/auth/token", response_model=AuthTokenResponse, tags=["auth"])
+@router.post("/auth/token", tags=["auth"])
 async def create_auth_token(request: AuthTokenRequest) -> AuthTokenResponse:
     """Issue JWT for users with `@colt.net` email addresses."""
     normalized_email = request.email.strip().lower()
@@ -33,8 +33,9 @@ async def create_auth_token(request: AuthTokenRequest) -> AuthTokenResponse:
         },
         expires_delta=timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
     )
+    token_type = "bearer"  # noqa: S105
     return AuthTokenResponse(
         access_token=access_token,
-        token_type="bearer",
+        token_type=token_type,
         expires_in=expires_in,
     )

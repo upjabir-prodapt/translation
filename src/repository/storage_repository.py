@@ -13,7 +13,7 @@ from google.api_core.exceptions import GoogleAPIError
 from google.cloud import storage
 
 from src.config.constants import settings
-from src.config.logging import logger
+from src.config.logging_config import logger
 from src.repository.repository_exception import StorageError
 
 
@@ -650,7 +650,7 @@ def download_from_gcs_sync(blob_path: str, local_path: Path) -> None:
     )
 
 
-async def download_from_gcs_async(blob_path: str, local_path: Path) -> None:
+async def download_from_gcs_async(blob_path: str, local_path: Path) -> Path:
     """
     Async download asset file from GCS (backward compatible).
 
@@ -658,7 +658,7 @@ async def download_from_gcs_async(blob_path: str, local_path: Path) -> None:
         blob_path: Relative blob path (without assets prefix)
         local_path: Local destination path
     """
-    await download_blob_async(
+    return await download_blob_async(
         blob_path=blob_path, local_path=local_path, prefix=settings.GCS_ASSETS_PREFIX
     )
 

@@ -1,5 +1,5 @@
-import contextlib
 import asyncio
+import contextlib
 import logging
 import threading
 import time
@@ -7,21 +7,12 @@ import unicodedata
 from abc import ABC
 from abc import abstractmethod
 
-import httpx
-import openai
-
-from pydantic import BaseModel
-from pydantic import ConfigDict
-from pydantic import Field
-
-from src.doctranslator.doctranslator_exception.DocTranslatorException import ContentFilterError
-from src.doctranslator.utils.atomic_integer import AtomicInteger
-from src.config.constants import settings
-from src.config.retry import llm_retry
-
 from google import genai
 from google.genai import types as genai_types
 
+from src.config.constants import settings
+from src.config.retry import llm_retry
+from src.doctranslator.utils.atomic_integer import AtomicInteger
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +175,6 @@ class BaseTranslator(ABC):
         return self.get_rich_text_left_placeholder(placeholder_id)
 
 
-
 class GeminiVertexAITranslator(BaseTranslator):
     """Translator backed by Google GenAI SDK (Vertex AI with service account)."""
 
@@ -274,7 +264,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         text = getattr(response, "text", "")
         if text:
             return text.strip()
-        return  ""
+        return ""
 
     def _update_token_count(self, response) -> None:
         usage = getattr(response, "usage_metadata", None)
@@ -357,7 +347,7 @@ class GeminiVertexAITranslator(BaseTranslator):
 
     def do_llm_translate(self, text, rate_limit_params: dict = None):
         if text is None:
-            logger.debug(f"do_llm_translate skipped: text is None")
+            logger.debug("do_llm_translate skipped: text is None")
             return None
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,

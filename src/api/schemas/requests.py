@@ -1,7 +1,6 @@
 """API request schemas."""
 
 import base64
-import binascii
 from typing import ClassVar
 from typing import Literal
 
@@ -25,7 +24,7 @@ class DocumentInput(BaseModel):
         """Validate that content is valid base64."""
         try:
             base64.b64decode(v, validate=True)
-        except (binascii.Error, ValueError) as e:
+        except ValueError as e:
             raise ValueError("content must be valid base64-encoded data") from e
         return v
 
@@ -81,6 +80,10 @@ class TranslationConfigInput(BaseModel):
     def validate_domain(cls, v: str) -> str:
         """Validate and normalize domain."""
         normalized = v.strip().lower()
+
+        # Handle legacy alias
+        if normalized == "oprations":
+            normalized = "operations"
 
         if normalized not in cls.VALID_DOMAINS:
             raise ValueError(

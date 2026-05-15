@@ -43,10 +43,7 @@ class AssemblyService:
         for key, local_path in output_files.items():
             if not local_path.exists():
                 continue
-            blob_filename = (
-                (preferred_filenames or {}).get(key)
-                or local_path.name
-            )
+            blob_filename = (preferred_filenames or {}).get(key) or local_path.name
             blob_path = self.storage.build_job_path(
                 job_id=job_id,
                 folder="output",
@@ -57,4 +54,3 @@ class AssemblyService:
                 blob_path=blob_path,
             )
         return uploaded
-

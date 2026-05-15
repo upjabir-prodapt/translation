@@ -30,6 +30,29 @@ The following data were extracted from the AFM files:
 from typing import Dict
 
 
+def _process_font_char_line(chars: "Dict[int, int]", f: list[str]) -> None:
+    """Handle a 'C' (character) line in an AFM file."""
+    cid = int(f[1])
+    if 0 <= cid <= 255:
+        width = int(f[4])
+        chars[cid] = width
+
+
+def _process_font_property_line(props: dict, k: str, f: list[str]) -> None:
+    """Handle a font property line (CapHeight, XHeight, etc.) in an AFM file."""
+    if k in ("CapHeight", "XHeight", "ItalicAngle", "Ascender", "Descender"):
+        k = {"Ascender": "Ascent", "Descender": "Descent"}.get(k, k)
+        props[k] = float(f[1])
+    elif k in ("FontName", "FamilyName", "Weight"):
+        k = {"FamilyName": "FontFamily", "Weight": "FontWeight"}.get(k, k)
+        props[k] = f[1]
+    elif k == "IsFixedPitch":
+        if f[1].lower() == "true":
+            props["Flags"] = 64
+    elif k == "FontBBox":
+        props[k] = tuple(map(float, f[1:5]))
+
+
 def convert_font_metrics(path: str) -> None:
     """Convert an AFM file to a mapping of font metrics.
 
@@ -48,26 +71,14 @@ def convert_font_metrics(path: str) -> None:
                 chars: Dict[int, int] = {}
                 fonts[fontname] = (props, chars)
             elif k == "C":
-                cid = int(f[1])
-                if 0 <= cid and cid <= 255:
-                    width = int(f[4])
-                    chars[cid] = width
-            elif k in ("CapHeight", "XHeight", "ItalicAngle", "Ascender", "Descender"):
-                k = {"Ascender": "Ascent", "Descender": "Descent"}.get(k, k)
-                props[k] = float(f[1])
-            elif k in ("FontName", "FamilyName", "Weight"):
-                k = {"FamilyName": "FontFamily", "Weight": "FontWeight"}.get(k, k)
-                props[k] = f[1]
-            elif k == "IsFixedPitch":
-                if f[1].lower() == "true":
-                    props["Flags"] = 64
-            elif k == "FontBBox":
-                props[k] = tuple(map(float, f[1:5]))
-        print("# -*- python -*-")
-        print("FONT_METRICS = {")
-        for fontname, (props, chars) in fonts.items():
-            print(f" {fontname!r}: {(props, chars)!r},")
-        print("}")
+                _process_font_char_line(chars, f)
+            else:
+                _process_font_property_line(props, k, f)
+    print("# -*- python -*-")
+    print("FONT_METRICS = {")
+    for fontname, (props, chars) in fonts.items():
+        print(f" {fontname!r}: {(props, chars)!r},")
+    print("}")
 
 
 FONT_METRICS = {

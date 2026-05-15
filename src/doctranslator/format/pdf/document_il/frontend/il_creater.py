@@ -30,10 +30,6 @@ from src.doctranslator.pdfminer.layout import LTChar
 from src.doctranslator.pdfminer.layout import LTFigure
 from src.doctranslator.pdfminer.pdffont import PDFCIDFont
 from src.doctranslator.pdfminer.pdffont import PDFFont
-
-# from src.doctranslator.pdfminer.pdfpage import PDFPage as PDFMinerPDFPage
-# from src.doctranslator.pdfminer.pdftypes import PDFObjRef as PDFMinerPDFObjRef
-# from src.doctranslator.pdfminer.pdftypes import resolve1 as pdftypes_resolve1
 from src.doctranslator.pdfminer.psparser import PSLiteral
 from src.doctranslator.pdfminer.utils import apply_matrix_pt
 from src.doctranslator.pdfminer.utils import get_bound
@@ -72,29 +68,6 @@ def invert_matrix(
 
 
 logger = logging.getLogger(__name__)
-
-#
-# def create_hook(func, hook):
-#     @wraps(func)
-#     def wrapper(*args, **kwargs):
-#         hook(*args, **kwargs)
-#         return func(*args, **kwargs)
-#
-#     return wrapper
-#
-#
-# def hook_pdfminer_pdf_page_init(*args):
-#     attrs = args[3]
-#     try:
-#         while isinstance(attrs["MediaBox"], PDFMinerPDFObjRef):
-#             attrs["MediaBox"] = pdftypes_resolve1(attrs["MediaBox"])
-#     except Exception:
-#         logger.exception(f"try to fix mediabox failed: {attrs}")
-#
-#
-# PDFMinerPDFPage.__init__ = create_hook(
-#     PDFMinerPDFPage.__init__, hook_pdfminer_pdf_page_init
-# )
 
 
 def indirect(obj):
@@ -405,7 +378,7 @@ class ILCreater:
             return False
 
         return re.match(
-            "^(m|l|c|v|y|re|h|S|s|f|f*|F|B|B*|b|b*|n|Do)$",
+            r"^(m|l|c|v|y|re|h|S|s|f\*?|F|B\*?|b\*?|n|Do)$",
             operator,
         )
 
@@ -444,7 +417,6 @@ class ILCreater:
                     self.passthrough_per_char_instruction.remove(value)
                     break
         self.passthrough_per_char_instruction.append((operator, " ".join(args)))
-        pass
 
     def remove_latest_passthrough_per_char_instruction(self):
         if self.passthrough_per_char_instruction:
@@ -616,44 +588,63 @@ class ILCreater:
         operation = zstd_helper.zstd_compress(operation)
         self.current_page.base_operations = il_version_1.BaseOperations(value=operation)
 
-    def on_page_resource_font(self, font: PDFFont, xref_id: int, font_id: str):
-        font_name = font.fontname
-        logger.debug(f"handle font {font_name} @ {xref_id} in {self.xobj_id}")
+    def _decode_font_name(self, font_name):
+        """Decode font name bytes to string."""
         if isinstance(font_name, bytes):
             try:
-                font_name = font_name.decode("utf-8")
+                return font_name.decode("utf-8")
             except UnicodeDecodeError:
-                font_name = "BASE64:" + base64.b64encode(font_name).decode("utf-8")
-        encoding_length = 1
-        if isinstance(font, PDFCIDFont):
-            try:
-                # pdf 32000:2008 page 273
-                # Table 118 - Predefined CJK CMap names
-                _, encoding = self.mupdf.xref_get_key(xref_id, "Encoding")
-                if encoding == "/Identity-H" or encoding == "/Identity-V":
-                    encoding_length = 2
-                elif encoding == "/WinAnsiEncoding":
-                    encoding_length = 1
-                else:
-                    _, to_unicode_id = self.mupdf.xref_get_key(xref_id, "ToUnicode")
-                    if to_unicode_id is not None:
-                        to_unicode_bytes = self.mupdf.xref_stream(
-                            int(to_unicode_id.split(" ")[0]),
-                        )
-                        code_range = re.search(
-                            b"begincodespacerange\n?.*<(\\d+?)>.*",
-                            to_unicode_bytes,
-                        ).group(1)
-                        encoding_length = len(code_range) // 2
-            except Exception:
-                if (
-                    font.unicode_map
-                    and font.unicode_map.cid2unichr
-                    and max(font.unicode_map.cid2unichr.keys()) > 255
-                ):
-                    encoding_length = 2
-                else:
-                    encoding_length = 1
+                return "BASE64:" + base64.b64encode(font_name).decode("utf-8")
+        return font_name
+
+    def _cidfont_encoding_length_from_encoding(self, xref_id: int) -> int | None:
+        """Return encoding length from the Encoding key, or None if undetermined."""
+        _, encoding = self.mupdf.xref_get_key(xref_id, "Encoding")
+        if encoding in ("/Identity-H", "/Identity-V"):
+            return 2
+        if encoding == "/WinAnsiEncoding":
+            return 1
+        return None
+
+    def _cidfont_encoding_length_from_tounicode(self, xref_id: int) -> int | None:
+        """Return encoding length from the ToUnicode stream, or None if unavailable."""
+        _, to_unicode_id = self.mupdf.xref_get_key(xref_id, "ToUnicode")
+        if to_unicode_id is None:
+            return None
+        to_unicode_bytes = self.mupdf.xref_stream(
+            int(to_unicode_id.split(" ")[0])
+        )
+        code_range = re.search(
+            b"begincodespacerange\n?.*<(\\d+?)>.*",
+            to_unicode_bytes,
+        ).group(1)
+        return len(code_range) // 2
+
+    def _cidfont_encoding_length_from_unicode_map(self, font) -> int:
+        """Return encoding length inferred from the font's unicode map."""
+        if (
+            font.unicode_map
+            and font.unicode_map.cid2unichr
+            and max(font.unicode_map.cid2unichr.keys()) > 255
+        ):
+            return 2
+        return 1
+
+    def _get_cidfont_encoding_length(self, xref_id: int, font) -> int:
+        """Determine encoding length for a CID font."""
+        try:
+            length = self._cidfont_encoding_length_from_encoding(xref_id)
+            if length is not None:
+                return length
+            length = self._cidfont_encoding_length_from_tounicode(xref_id)
+            if length is not None:
+                return length
+        except Exception:
+            pass
+        return self._cidfont_encoding_length_from_unicode_map(font)
+
+    def _get_mupdf_font_properties(self, xref_id: int):
+        """Get bold/italic/monospaced/serif properties from mupdf font."""
         try:
             if xref_id in self.mupdf_font_map:
                 mupdf_font = self.mupdf_font_map[xref_id]
@@ -669,12 +660,65 @@ class ILCreater:
             monospaced = mupdf_font.is_monospaced
             serif = mupdf_font.is_serif
             self.mupdf_font_map[xref_id] = mupdf_font
+            return bold, italic, monospaced, serif
         except Exception:
-            bold = None
-            italic = None
-            monospaced = None
-            serif = None
-        il_font_metadata = il_version_1.PdfFont(
+            return None, None, None, None
+
+    def _build_font_bbox_map(self, xref_id: int, il_font_metadata, font_name: str):
+        """Build character bounding box map and update il_font_metadata."""
+        if xref_id is None:
+            logger.warning(f"xref_id is None for font {font_name}")
+            raise ValueError("xref_id is None for font %s", font_name)
+        bbox_list, cmap = self.parse_font_xobj_id(xref_id)
+        font_char_bounding_box_map = {}
+        if not cmap:
+            cmap = {x: x for x in range(257)}
+        for char_id, char_bbox in enumerate(bbox_list):
+            font_char_bounding_box_map[char_id] = char_bbox
+        for char_id in cmap:
+            if char_id < 0 or char_id >= len(bbox_list):
+                continue
+            bbox = bbox_list[char_id]
+            x, y, x2, y2 = bbox
+            is_default_bbox = (x == 0 and y == 0 and x2 == 500 and y2 == 698) or (
+                x == 0 and y == 0 and x2 == 0 and y2 == 0
+            )
+            if is_default_bbox:
+                continue
+            il_font_metadata.pdf_font_char_bounding_box.append(
+                il_version_1.PdfFontCharBoundingBox(
+                    x=x,
+                    y=y,
+                    x2=x2,
+                    y2=y2,
+                    char_id=char_id,
+                )
+            )
+            font_char_bounding_box_map[char_id] = bbox
+        return font_char_bounding_box_map
+
+    def _store_font_bbox_map(self, xref_id: int, font_char_bounding_box_map: dict):
+        """Store the font bounding box map in the appropriate scope."""
+        if self.xobj_id in self.xobj_map:
+            if self.xobj_id not in self.current_page_font_char_bounding_box_map:
+                self.current_page_font_char_bounding_box_map[self.xobj_id] = {}
+            self.current_page_font_char_bounding_box_map[self.xobj_id][xref_id] = (
+                font_char_bounding_box_map
+            )
+        else:
+            self.current_page_font_char_bounding_box_map[xref_id] = (
+                font_char_bounding_box_map
+            )
+
+    def _build_il_font_metadata(
+        self, font: PDFFont, xref_id: int, font_id: str, font_name: str
+    ) -> "il_version_1.PdfFont":
+        """Build a PdfFont IL object from a parsed PDF font."""
+        encoding_length = 1
+        if isinstance(font, PDFCIDFont):
+            encoding_length = self._get_cidfont_encoding_length(xref_id, font)
+        bold, italic, monospaced, serif = self._get_mupdf_font_properties(xref_id)
+        return il_version_1.PdfFont(
             name=font_name,
             xref_id=xref_id,
             font_id=font_id,
@@ -687,95 +731,48 @@ class ILCreater:
             descent=font.descent,
             pdf_font_char_bounding_box=[],
         )
-        try:
-            if xref_id is None:
-                logger.warning(f"xref_id is None for font {font_name}")
-                raise ValueError("xref_id is None for font %s", font_name)
-            bbox_list, cmap = self.parse_font_xobj_id(xref_id)
-            font_char_bounding_box_map = {}
-            if not cmap:
-                cmap = {x: x for x in range(257)}
-            for char_id, char_bbox in enumerate(bbox_list):
-                font_char_bounding_box_map[char_id] = char_bbox
-            for char_id in cmap:
-                if char_id < 0 or char_id >= len(bbox_list):
-                    continue
-                bbox = bbox_list[char_id]
-                x, y, x2, y2 = bbox
-                if (
-                    x == 0
-                    and y == 0
-                    and x2 == 500
-                    and y2 == 698
-                    or x == 0
-                    and y == 0
-                    and x2 == 0
-                    and y2 == 0
-                ):
-                    # ignore default bounding box
-                    continue
-                il_font_metadata.pdf_font_char_bounding_box.append(
-                    il_version_1.PdfFontCharBoundingBox(
-                        x=x,
-                        y=y,
-                        x2=x2,
-                        y2=y2,
-                        char_id=char_id,
-                    )
-                )
-                font_char_bounding_box_map[char_id] = bbox
-            if self.xobj_id in self.xobj_map:
-                if self.xobj_id not in self.current_page_font_char_bounding_box_map:
-                    self.current_page_font_char_bounding_box_map[self.xobj_id] = {}
-                self.current_page_font_char_bounding_box_map[self.xobj_id][xref_id] = (
-                    font_char_bounding_box_map
-                )
-            else:
-                self.current_page_font_char_bounding_box_map[xref_id] = (
-                    font_char_bounding_box_map
-                )
-        except Exception as e:
-            if xref_id is None:
-                logger.error(f"failed to parse font xobj id None: {e}")
-            else:
-                logger.error(f"failed to parse font xobj id {xref_id}: {e}")
-        self.current_page_font_name_id_map[xref_id] = font_id
-        self.current_available_fonts[font_id] = il_font_metadata
 
+    def _register_font_in_page(self, font_id: str, il_font_metadata) -> None:
+        """Register il_font_metadata into the correct font list (page or xobj)."""
         fonts = self.current_page.pdf_font
         if self.xobj_id in self.xobj_map:
             fonts = self.xobj_map[self.xobj_id].pdf_font
-        should_remove = []
-        for f in fonts:
-            if f.font_id == font_id:
-                should_remove.append(f)
-        for sr in should_remove:
-            fonts.remove(sr)
+        fonts[:] = [f for f in fonts if f.font_id != font_id]
         fonts.append(il_font_metadata)
 
-    def parse_font_xobj_id(self, xobj_id: int):
-        if xobj_id is None:
-            return [], {}
+    def on_page_resource_font(self, font: PDFFont, xref_id: int, font_id: str):
+        font_name = self._decode_font_name(font.fontname)
+        logger.debug(f"handle font {font_name} @ {xref_id} in {self.xobj_id}")
+        il_font_metadata = self._build_il_font_metadata(font, xref_id, font_id, font_name)
+        try:
+            font_char_bounding_box_map = self._build_font_bbox_map(
+                xref_id, il_font_metadata, font_name
+            )
+            self._store_font_bbox_map(xref_id, font_char_bounding_box_map)
+        except Exception as e:
+            xref_label = "None" if xref_id is None else str(xref_id)
+            logger.error(f"failed to parse font xobj id {xref_label}: {e}")
+        self.current_page_font_name_id_map[xref_id] = font_id
+        self.current_available_fonts[font_id] = il_font_metadata
+        self._register_font_in_page(font_id, il_font_metadata)
 
-        bbox_list = []
-        encoding = parse_font_encoding(self.mupdf, xobj_id)
-        differences = []
-        font_differences = self.mupdf.xref_get_key(xobj_id, "Encoding/Differences")
-        if font_differences:
-            differences = parse_encoding(font_differences[1])
+    def _load_bbox_from_font_files(self, xobj_id: int, encoding, differences) -> list:
+        """Try each FontFile key and return the first non-empty bbox_list found."""
         for file_key in ["FontFile", "FontFile2", "FontFile3"]:
             font_file = self.mupdf.xref_get_key(xobj_id, f"FontDescriptor/{file_key}")
             if file_idx := indirect(font_file):
-                bbox_list = parse_font_file(
-                    self.mupdf,
-                    file_idx,
-                    encoding,
-                    differences,
-                )
-        cmap = {}
+                return parse_font_file(self.mupdf, file_idx, encoding, differences)
+        return []
+
+    def _load_cmap(self, xobj_id: int) -> dict:
+        """Load the ToUnicode CMap for a font xref, returning {} if absent."""
         to_unicode = self.mupdf.xref_get_key(xobj_id, "ToUnicode")
         if to_unicode_idx := indirect(to_unicode):
-            cmap = parse_cmap(self.mupdf.xref_stream(to_unicode_idx).decode("U8"))
+            return parse_cmap(self.mupdf.xref_stream(to_unicode_idx).decode("U8"))
+        return {}
+
+    def _resolve_bbox_fallbacks(self, xobj_id: int, bbox_list: list) -> list:
+        """Apply Base14, CID-font, and Type3 fallbacks to arrive at a final bbox_list."""
         if not bbox_list:
             obj_type, obj_val = self.mupdf.xref_get_key(xobj_id, "BaseFont")
             if obj_type == "name":
@@ -784,11 +781,53 @@ class ILCreater:
             bbox_list = cid_bbox
         if self.mupdf.xref_get_key(xobj_id, "Subtype")[1] == "/Type3":
             bbox_list = get_type3_bbox(self.mupdf, xobj_id)
+        return bbox_list
+
+    def parse_font_xobj_id(self, xobj_id: int):
+        if xobj_id is None:
+            return [], {}
+
+        encoding = parse_font_encoding(self.mupdf, xobj_id)
+        differences = []
+        font_differences = self.mupdf.xref_get_key(xobj_id, "Encoding/Differences")
+        if font_differences:
+            differences = parse_encoding(font_differences[1])
+        bbox_list = self._load_bbox_from_font_files(xobj_id, encoding, differences)
+        cmap = self._load_cmap(xobj_id)
+        bbox_list = self._resolve_bbox_fallbacks(xobj_id, bbox_list)
         return bbox_list, cmap
+
+    def _build_clip_path_instruction(self, clip_path, source_ctm, target_ctm, evenodd):
+        """Build a single clipping path instruction string."""
+        transformed_path = self.transform_clip_path(clip_path, source_ctm, target_ctm)
+        op = "W* n" if evenodd else "W n"
+        args = []
+        for p in transformed_path:
+            if len(p) == 1:
+                args.append(p[0])
+            elif len(p) > 1:
+                args.extend([f"{x:F}" for x in p[1:]])
+                args.append(p[0])
+        if args:
+            return f"{' '.join(args)} {op}"
+        return None
+
+    def _append_clipping_instructions(self, parts, clip_paths, target_ctm):
+        """Append transformed clipping path instructions to parts list."""
+        for clip_path, source_ctm, evenodd in clip_paths:
+            try:
+                instruction = self._build_clip_path_instruction(
+                    clip_path, source_ctm, target_ctm, evenodd
+                )
+                if instruction:
+                    parts.append(instruction)
+            except Exception as e:
+                logger.warning(f"Error transforming clip path: {e}")
 
     def create_graphic_state(
         self,
-        gs: src.doctranslator.pdfminer.pdfinterp.PDFGraphicState | list[tuple[str, str]],
+        gs: src.doctranslator.pdfminer.pdfinterp.PDFGraphicState
+        | list[tuple[str, str]],
         include_clipping: bool = False,
         target_ctm: tuple[float, float, float, float, float, float] = None,
         clip_paths=None,
@@ -797,137 +836,57 @@ class ILCreater:
             clip_paths = self.current_clip_paths
         passthrough_instruction = getattr(gs, "passthrough_instruction", gs)
 
-        def filter_clipping(op):
-            return op not in ("W n", "W* n")
-
-        def pass_all(_op):
-            return True
-
         if include_clipping:
-            filter_clipping = pass_all
-
-        passthrough_per_char_instruction_parts = [
-            f"{arg} {op}" for op, arg in passthrough_instruction if filter_clipping(op)
-        ]
+            instruction_parts = [f"{arg} {op}" for op, arg in passthrough_instruction]
+        else:
+            instruction_parts = [
+                f"{arg} {op}"
+                for op, arg in passthrough_instruction
+                if op not in ("W n", "W* n")
+            ]
 
         # Add transformed clipping paths if requested and target CTM is provided
         if include_clipping and target_ctm and clip_paths:
-            for clip_path, source_ctm, evenodd in clip_paths:
-                try:
-                    # Transform clip path from source CTM to target CTM
-                    transformed_path = self.transform_clip_path(
-                        clip_path, source_ctm, target_ctm
-                    )
+            self._append_clipping_instructions(
+                instruction_parts, clip_paths, target_ctm
+            )
 
-                    # Generate clipping instruction
-                    op = "W* n" if evenodd else "W n"
-                    args = []
-                    for p in transformed_path:
-                        if len(p) == 1:
-                            args.append(p[0])
-                        elif len(p) > 1:
-                            args.extend([f"{x:F}" for x in p[1:]])
-                            args.append(p[0])
+        passthrough_per_char_instruction = " ".join(instruction_parts)
 
-                    if args:
-                        clipping_instruction = f"{' '.join(args)} {op}"
-                        passthrough_per_char_instruction_parts.append(
-                            clipping_instruction
-                        )
-
-                except Exception as e:
-                    logger.warning(f"Error transforming clip path: {e}")
-
-        passthrough_per_char_instruction = " ".join(
-            passthrough_per_char_instruction_parts
-        )
-
-        # 可能会影响部分 graphic state 准确度。不过 DocTranslator 仅使用 passthrough_per_char_instruction
-        # 所以应该是没啥影响
-        # 但是池化 graphic state 后可以减少内存占用
+        # Pool graphic states to reduce memory usage
         if passthrough_per_char_instruction not in self.graphic_state_pool:
             self.graphic_state_pool[passthrough_per_char_instruction] = (
                 il_version_1.GraphicState(
                     passthrough_per_char_instruction=passthrough_per_char_instruction
                 )
             )
-        graphic_state = self.graphic_state_pool[passthrough_per_char_instruction]
 
-        return graphic_state
+        return self.graphic_state_pool[passthrough_per_char_instruction]
 
-    def on_lt_char(self, char: LTChar):
-        if char.aw_font_id is None:
-            return
-        try:
-            rotation_angle = get_rotation_angle(char.matrix)
-            if not (-0.1 <= rotation_angle <= 0.1 or 89.9 <= rotation_angle <= 90.1):
-                return
-        except Exception:
-            logger.warning(
-                "Failed to get rotation angle for char %s",
-                char.get_text(),
-            )
-        # Collect valid characters for statistics
-        try:
-            self._collect_valid_char(char.get_text())
-        except Exception as e:
-            logger.warning(f"Error collecting valid char: {e}")
-        gs = self.create_graphic_state(char.graphicstate)
-        # Get font from current page or xobject
-        font = None
-        pdf_font = None
+    def _get_char_font(self, char: LTChar):
+        """Find the PdfFont for a character from current page or xobject."""
         for pdf_font in self.xobj_map.get(char.xobj_id, self.current_page).pdf_font:
             if pdf_font.font_id == char.aw_font_id:
-                font = pdf_font
-                break
+                return pdf_font
+        return None
 
-        # Get descent from font
-        descent = 0
-        if font and hasattr(font, "descent"):
-            descent = font.descent * char.size / 1000
-
-        char_id = char.cid
-
-        char_bounding_box = None
+    def _get_char_bounding_box(self, char: LTChar, font, char_id: int):
+        """Retrieve character bounding box from font bounding box map."""
         try:
-            if (
-                font_bounding_box_map
-                := self.current_page_font_char_bounding_box_map.get(
-                    char.xobj_id, self.current_page_font_char_bounding_box_map
-                ).get(font.xref_id)
-            ):
-                char_bounding_box = font_bounding_box_map.get(char_id, None)
-            else:
-                char_bounding_box = None
+            font_bounding_box_map = self.current_page_font_char_bounding_box_map.get(
+                char.xobj_id, self.current_page_font_char_bounding_box_map
+            ).get(font.xref_id)
+            if font_bounding_box_map:
+                return font_bounding_box_map.get(char_id, None)
         except Exception:
-            # logger.debug(
-            #     "Failed to get font bounding box for char %s",
-            #     char.get_text(),
-            # )
-            char_bounding_box = None
+            pass
+        return None
 
-        char_unicode = char.get_text()
-        # if "(cid:" not in char_unicode and len(char_unicode) > 1:
-        #     return
-        if space_regex.match(char_unicode):
-            char_unicode = " "
-        advance = char.adv
-        bbox = il_version_1.Box(
-            x=char.bbox[0],
-            y=char.bbox[1],
-            x2=char.bbox[2],
-            y2=char.bbox[3],
-        )
-        if bbox.x2 < bbox.x or bbox.y2 < bbox.y:
-            logger.warning(
-                "Invalid bounding box for character %s: %s",
-                char_unicode,
-                bbox,
-            )
-
+    def _compute_visual_bbox(self, char: LTChar, descent: float):
+        """Compute vertical flag and visual bounding box for a character."""
         if char.matrix[0] == 0 and char.matrix[3] == 0:
             vertical = True
-            visual_bbox = il_version_1.Box(
+            box = il_version_1.Box(
                 x=char.bbox[0] - descent,
                 y=char.bbox[1],
                 x2=char.bbox[2] - descent,
@@ -935,28 +894,57 @@ class ILCreater:
             )
         else:
             vertical = False
-            # Add descent to y coordinates
-            visual_bbox = il_version_1.Box(
+            box = il_version_1.Box(
                 x=char.bbox[0],
                 y=char.bbox[1] + descent,
                 x2=char.bbox[2],
                 y2=char.bbox[3] + descent,
             )
-        visual_bbox = il_version_1.VisualBbox(box=visual_bbox)
+        return vertical, il_version_1.VisualBbox(box=box)
+
+    def _refine_visual_bbox(self, pdf_char, char: LTChar, char_bounding_box, font_size):
+        """Refine visual bbox using per-character bounding box data if available."""
+        if not (char_bounding_box and len(char_bounding_box) == 4):
+            return
+        x_min, y_min, x_max, y_max = char_bounding_box
+        factor = font_size / 1000
+        ll = (char.bbox[0] + x_min * factor, char.bbox[1] + y_min * factor)
+        ur = (char.bbox[0] + x_max * factor, char.bbox[1] + y_max * factor)
+        if (ur[0] - ll[0]) * (ur[1] - ll[1]) > 1:
+            pdf_char.visual_bbox = il_version_1.VisualBbox(
+                il_version_1.Box(ll[0], ll[1], ur[0], ur[1])
+            )
+
+    def _check_rotation_angle(self, char: LTChar) -> bool:
+        """Return False if the character's rotation angle is outside accepted ranges."""
+        try:
+            rotation_angle = get_rotation_angle(char.matrix)
+            return -0.1 <= rotation_angle <= 0.1 or 89.9 <= rotation_angle <= 90.1
+        except Exception:
+            logger.warning("Failed to get rotation angle for char %s", char.get_text())
+            return True  # allow through on error, consistent with original behaviour
+
+    def _build_char_bbox(self, char: LTChar, char_unicode: str) -> "il_version_1.Box":
+        """Build and validate an il_version_1.Box for the character."""
+        bbox = il_version_1.Box(
+            x=char.bbox[0],
+            y=char.bbox[1],
+            x2=char.bbox[2],
+            y2=char.bbox[3],
+        )
+        if bbox.x2 < bbox.x or bbox.y2 < bbox.y:
+            logger.warning("Invalid bounding box for character %s: %s", char_unicode, bbox)
+        return bbox
+
+    def _build_pdf_char(
+        self, char: LTChar, char_id: int, char_unicode: str, advance, bbox, vertical, visual_bbox, gs
+    ) -> "il_version_1.PdfCharacter":
+        """Construct the PdfCharacter IL object."""
         pdf_style = il_version_1.PdfStyle(
             font_id=char.aw_font_id,
             font_size=char.size,
             graphic_state=gs,
         )
-
-        if font:
-            font_xref_id = font.xref_id
-            if font_xref_id in self.mupdf_font_map:
-                mupdf_font = self.mupdf_font_map[font_xref_id]
-                # if "(cid:" not in char_unicode:
-                #     if mupdf_cid := mupdf_font.has_glyph(ord(char_unicode)):
-                #         char_id = mupdf_cid
-
         pdf_char = il_version_1.PdfCharacter(
             box=bbox,
             pdf_character_id=char_id,
@@ -972,31 +960,10 @@ class ILCreater:
         if self.translation_config.ocr_workaround:
             pdf_char.pdf_style.graphic_state = BLACK
             pdf_char.render_order = None
-        if pdf_style.font_size == 0.0:
-            logger.warning(
-                "Font size is 0.0 for character %s. Skip it.",
-                char_unicode,
-            )
-            return
+        return pdf_char
 
-        if char_bounding_box and len(char_bounding_box) == 4:
-            x_min, y_min, x_max, y_max = char_bounding_box
-            factor = 1 / 1000 * pdf_style.font_size
-            x_min = x_min * factor
-            y_min = y_min * factor
-            x_max = x_max * factor
-            y_max = y_max * factor
-            ll = (char.bbox[0] + x_min, char.bbox[1] + y_min)
-            ur = (char.bbox[0] + x_max, char.bbox[1] + y_max)
-
-            volume = (ur[0] - ll[0]) * (ur[1] - ll[1])
-            if volume > 1:
-                pdf_char.visual_bbox = il_version_1.VisualBbox(
-                    il_version_1.Box(ll[0], ll[1], ur[0], ur[1])
-                )
-
-        self.current_page.pdf_character.append(pdf_char)
-
+    def _maybe_add_char_box_rect(self, pdf_char) -> None:
+        """Append a debug rectangle for the character visual bbox if show_char_box is set."""
         if self.translation_config.show_char_box:
             self.current_page.pdf_rectangle.append(
                 il_version_1.PdfRectangle(
@@ -1006,6 +973,50 @@ class ILCreater:
                     line_width=0.2,
                 )
             )
+
+    def on_lt_char(self, char: LTChar):
+        if char.aw_font_id is None:
+            return
+        if not self._check_rotation_angle(char):
+            return
+        try:
+            self._collect_valid_char(char.get_text())
+        except Exception as e:
+            logger.warning(f"Error collecting valid char: {e}")
+
+        gs = self.create_graphic_state(char.graphicstate)
+        font = self._get_char_font(char)
+        descent = font.descent * char.size / 1000 if font and hasattr(font, "descent") else 0
+        char_id = char.cid
+        char_bounding_box = self._get_char_bounding_box(char, font, char_id) if font else None
+
+        char_unicode = char.get_text()
+        if space_regex.match(char_unicode):
+            char_unicode = " "
+        advance = char.adv
+        bbox = self._build_char_bbox(char, char_unicode)
+        vertical, visual_bbox = self._compute_visual_bbox(char, descent)
+        pdf_char = self._build_pdf_char(
+            char, char_id, char_unicode, advance, bbox, vertical, visual_bbox, gs
+        )
+        if pdf_char.pdf_style.font_size == 0.0:
+            logger.warning("Font size is 0.0 for character %s. Skip it.", char_unicode)
+            return
+
+        self._refine_visual_bbox(pdf_char, char, char_bounding_box, pdf_char.pdf_style.font_size)
+        self.current_page.pdf_character.append(pdf_char)
+        self._maybe_add_char_box_rect(pdf_char)
+
+    def _is_valid_char(self, ch: str) -> bool:
+        """Return True if ch is a valid translatable character."""
+        if not ch or "(cid:" in ch:
+            return False
+        try:
+            if self.font_mapper.has_char(ch):
+                return True
+            return len(ch) > 1 and all(self.font_mapper.has_char(x) for x in ch)
+        except Exception:
+            return False
 
     def _collect_valid_char(self, ch: str):
         """Append a valid character into the current page buffer according to rules.
@@ -1027,22 +1038,61 @@ class ILCreater:
             cat = None
         if cat in {"Cc", "Cs", "Co", "Cn"}:
             return
-        is_invalid = False
-        if not ch:
-            is_invalid = True
-        elif "(cid:" in ch:
-            is_invalid = True
-        else:
-            try:
-                if not self.font_mapper.has_char(ch):
-                    if len(ch) > 1 and all(self.font_mapper.has_char(x) for x in ch):
-                        is_invalid = False
-                    else:
-                        is_invalid = True
-            except Exception:
-                is_invalid = True
-        if not is_invalid:
+        if self._is_valid_char(ch):
             self._page_valid_chars_buffer.append(ch)
+
+    def _build_transformed_paths(self, original_path) -> list:
+        """Build transformed PdfPath list from original path points."""
+        paths = []
+        for point in original_path:
+            op = point[0]
+            if len(point) == 1:
+                paths.append(il_version_1.PdfPath(op=op, x=None, y=None, has_xy=False))
+                continue
+            for p in point[1:-1]:
+                paths.append(il_version_1.PdfPath(op="", x=p[0], y=p[1], has_xy=True))
+            paths.append(
+                il_version_1.PdfPath(op=op, x=point[-1][0], y=point[-1][1], has_xy=True)
+            )
+        return paths
+
+    def _build_raw_pdf_paths(self, raw_path) -> list | None:
+        """Build PdfOriginalPath list from raw path data."""
+        if raw_path is None:
+            return None
+        raw_pdf_paths = []
+        for path in raw_path:
+            if path[0] == "h":
+                raw_pdf_paths.append(
+                    il_version_1.PdfOriginalPath(
+                        pdf_path=il_version_1.PdfPath(
+                            x=0.0, y=0.0, op="h", has_xy=False
+                        )
+                    )
+                )
+            else:
+                for p in batched(path[1:-2], 2, strict=True):
+                    raw_pdf_paths.append(
+                        il_version_1.PdfOriginalPath(
+                            pdf_path=il_version_1.PdfPath(
+                                x=float(p[0]),
+                                y=float(p[1]),
+                                op="",
+                                has_xy=True,
+                            )
+                        )
+                    )
+                raw_pdf_paths.append(
+                    il_version_1.PdfOriginalPath(
+                        pdf_path=il_version_1.PdfPath(
+                            x=float(path[-2]),
+                            y=float(path[-1]),
+                            op=path[0],
+                            has_xy=True,
+                        )
+                    )
+                )
+        return raw_pdf_paths
 
     def on_lt_curve(self, curve: src.doctranslator.pdfminer.layout.LTCurve):
         if not self.enable_graphic_element_process:
@@ -1053,99 +1103,23 @@ class ILCreater:
             x2=curve.bbox[2],
             y2=curve.bbox[3],
         )
-        # Extract CTM from curve object if it exists
-        curve_ctm = getattr(curve, "ctm", None)
+        ctm = getattr(curve, "ctm", None)
         gs = self.create_graphic_state(
             curve.passthrough_instruction,
             include_clipping=True,
-            target_ctm=curve_ctm,
+            target_ctm=ctm,
             clip_paths=curve.clip_paths,
         )
-        paths = []
-        for point in curve.original_path:
-            op = point[0]
-            if len(point) == 1:
-                paths.append(
-                    il_version_1.PdfPath(
-                        op=op,
-                        x=None,
-                        y=None,
-                        has_xy=False,
-                    )
-                )
-                continue
-            for p in point[1:-1]:
-                paths.append(
-                    il_version_1.PdfPath(
-                        op="",
-                        x=p[0],
-                        y=p[1],
-                        has_xy=True,
-                    )
-                )
-            paths.append(
-                il_version_1.PdfPath(
-                    op=point[0],
-                    x=point[-1][0],
-                    y=point[-1][1],
-                    has_xy=True,
-                )
-            )
-
-        fill_background = curve.fill
-        stroke_path = curve.stroke
-        evenodd = curve.evenodd
-        # Extract CTM from curve object if it exists
-        ctm = getattr(curve, "ctm", None)
-
-        # Extract raw path from curve object if it exists
-        raw_path = getattr(curve, "raw_path", None)
-        raw_pdf_paths = None
-        if raw_path is not None:
-            raw_pdf_paths = []
-            for path in raw_path:
-                if path[0] == "h":  # h command (close path)
-                    raw_pdf_paths.append(
-                        il_version_1.PdfOriginalPath(
-                            pdf_path=il_version_1.PdfPath(
-                                x=0.0,
-                                y=0.0,
-                                op=path[0],
-                                has_xy=False,
-                            )
-                        )
-                    )
-                else:  # commands with coordinates (m, l, c, v, y, etc.)
-                    for p in batched(path[1:-2], 2, strict=True):
-                        raw_pdf_paths.append(
-                            il_version_1.PdfOriginalPath(
-                                pdf_path=il_version_1.PdfPath(
-                                    x=float(p[0]),
-                                    y=float(p[1]),
-                                    op="",
-                                    has_xy=True,
-                                )
-                            )
-                        )
-                    # Last point in the path
-                    raw_pdf_paths.append(
-                        il_version_1.PdfOriginalPath(
-                            pdf_path=il_version_1.PdfPath(
-                                x=float(path[-2]),
-                                y=float(path[-1]),
-                                op=path[0],
-                                has_xy=True,
-                            )
-                        )
-                    )
+        paths = self._build_transformed_paths(curve.original_path)
+        raw_pdf_paths = self._build_raw_pdf_paths(getattr(curve, "raw_path", None))
 
         curve_obj = il_version_1.PdfCurve(
             box=bbox,
             graphic_state=gs,
             pdf_path=paths,
-            fill_background=fill_background,
-            stroke_path=stroke_path,
-            evenodd=evenodd,
+            fill_background=curve.fill,
+            stroke_path=curve.stroke,
+            evenodd=curve.evenodd,
             debug_info="a",
             xobj_id=curve.xobj_id,
             render_order=curve.render_order,
@@ -1153,7 +1127,6 @@ class ILCreater:
             pdf_original_path=raw_pdf_paths,
         )
         self.current_page.pdf_curve.append(curve_obj)
-        pass
 
     def on_xobj_form(
         self,
@@ -1261,62 +1234,52 @@ class ILCreater:
             "parameters": {},
         }
 
-    def on_inline_image_end(self, stream_obj, ctm):
-        """End processing inline image and create PdfForm"""
+    def _extract_inline_image_data(self, stream_obj) -> str:
+        """Return base64-encoded image data from an inline image stream object."""
         import base64
-        import json
+        if hasattr(stream_obj, "data") and stream_obj.data is not None:
+            return base64.b64encode(stream_obj.data).decode("ascii")
+        if hasattr(stream_obj, "rawdata") and stream_obj.rawdata is not None:
+            return base64.b64encode(stream_obj.rawdata).decode("ascii")
+        return ""
 
+    def _build_inline_image_parameters(self, stream_obj) -> dict:
+        """Build a plain dict of image parameters from a stream object's attrs."""
+        image_dict = stream_obj.attrs if hasattr(stream_obj, "attrs") else {}
+        parameters = {}
+        for key, value in image_dict.items():
+            parameters[key] = value.name if hasattr(value, "name") else str(value)
+        return parameters
+
+    def _compute_inline_image_bbox(self, ctm):
+        """Compute the final bounding box of an inline image given its CTM."""
         from src.doctranslator.format.pdf.babelpdf.utils import guarded_bbox
-        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
         from src.doctranslator.pdfminer.utils import apply_matrix_pt
         from src.doctranslator.pdfminer.utils import get_bound
 
-        # Extract image parameters from stream dictionary
-        image_dict = stream_obj.attrs if hasattr(stream_obj, "attrs") else {}
+        (x, y, w, h) = guarded_bbox((0, 0, 1, 1))
+        bounds = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
+        return get_bound(apply_matrix_pt(ctm, (p, q)) for (p, q) in bounds)
 
-        # Build parameters dictionary
-        parameters = {}
-        for key, value in image_dict.items():
-            if hasattr(value, "name"):
-                parameters[key] = value.name
-            else:
-                parameters[key] = str(value)
+    def on_inline_image_end(self, stream_obj, ctm):
+        """End processing inline image and create PdfForm"""
+        import json
+        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
 
-        # Get image data (encoded as base64)
-        image_data = ""
-        if hasattr(stream_obj, "data") and stream_obj.data is not None:
-            image_data = base64.b64encode(stream_obj.data).decode("ascii")
-        elif hasattr(stream_obj, "rawdata") and stream_obj.rawdata is not None:
-            image_data = base64.b64encode(stream_obj.rawdata).decode("ascii")
-
-        # Create inline form with parameters as JSON string
+        parameters = self._build_inline_image_parameters(stream_obj)
+        image_data = self._extract_inline_image_data(stream_obj)
         inline_form = il_version_1.PdfInlineForm(
             form_data=image_data, image_parameters=json.dumps(parameters)
         )
-
-        # Calculate bounding box - inline images are typically 1x1 unit square in user space
-        bbox = (0, 0, 1, 1)
-        (x, y, w, h) = guarded_bbox(bbox)
-        bounds = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
-        final_bbox = get_bound(apply_matrix_pt(ctm, (p, q)) for (p, q) in bounds)
-
-        # Create graphics state
+        final_bbox = self._compute_inline_image_bbox(ctm)
         gs = self.create_graphic_state(
             self.passthrough_per_char_instruction, include_clipping=True, target_ctm=ctm
         )
-
-        # Create PdfMatrix from CTM
         pdf_matrix = il_version_1.PdfMatrix(
             a=ctm[0], b=ctm[1], c=ctm[2], d=ctm[3], e=ctm[4], f=ctm[5]
         )
-
-        # Create affine transform
         affine_transform = decompose_ctm(ctm)
-
-        # Create PdfFormSubtype with inline form
         pdf_form_subtype = il_version_1.PdfFormSubtype(pdf_inline_form=inline_form)
-
-        # Create PdfForm for the inline image
         pdf_form = il_version_1.PdfForm(
             box=il_version_1.Box(
                 x=final_bbox[0],
@@ -1333,6 +1296,4 @@ class ILCreater:
             render_order=self.get_render_order_and_increase(),
             form_type="image",
         )
-
-        # Add to current page
         self.current_page.pdf_form.append(pdf_form)

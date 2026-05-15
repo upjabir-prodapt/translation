@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.doctranslator.format.pdf.document_il import il_version_1
 from src.api.services.dlp_service import DlpService
+from src.doctranslator.format.pdf.document_il import il_version_1
 
 
 @dataclass(slots=True)
@@ -25,8 +25,7 @@ def _iter_paragraphs(docs: il_version_1.Document):
     page 0 paragraph 0..N, page 1 paragraph 0..N, etc.
     """
     for page in docs.page:
-        for paragraph in page.pdf_paragraph:
-            yield paragraph
+        yield from page.pdf_paragraph
 
 
 def apply_dlp_to_document(
@@ -63,7 +62,9 @@ def apply_dlp_to_document(
         source_language=source_language,
         token_counter_start=token_counter_start,
     )
-    for paragraph, masked in zip(paragraph_refs, dlp_result.masked_chunks, strict=False):
+    for paragraph, masked in zip(
+        paragraph_refs, dlp_result.masked_chunks, strict=False
+    ):
         paragraph.unicode = masked
 
     return ILDlpApplyResult(
@@ -102,4 +103,3 @@ def unmask_document_with_tokens(
                 restored = restored.replace(token, original)
         paragraph.unicode = restored
     return replacements
-

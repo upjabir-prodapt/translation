@@ -33,7 +33,6 @@ def is_formulas_start_char(
     if char != " " and (
         unicodedata.category(char[0])
         in [
-            # "Lm",
             "Mn",
             "Sk",
             "Sm",
@@ -41,7 +40,6 @@ def is_formulas_start_char(
             "Zp",
             "Zs",
             "Co",  # private use character
-            # "So",  # symbol
         ]  # 文字修饰符、数学符号、分隔符号
         or ord(char[0]) in range(0x370, 0x400)  # 希腊字母
     ):
@@ -65,6 +63,36 @@ def is_formulas_middle_char(
     return False
 
 
+def _collect_page_level_formula_font_ids(
+    page: Page, formular_font_pattern: str | None
+) -> set:
+    """Return the set of font IDs that are formula fonts at the page level."""
+    page_formula_font_ids = set()
+    if page.pdf_font:
+        for font in page.pdf_font:
+            if is_formulas_font(font.name, formular_font_pattern):
+                page_formula_font_ids.add(font.font_id)
+    return page_formula_font_ids
+
+
+def _collect_xobj_formula_font_ids(
+    xobj,
+    page_formula_font_ids: set,
+    formular_font_pattern: str | None,
+) -> set:
+    """Return formula font IDs for a single XObject, starting from *page_formula_font_ids*."""
+    current_xobj_fonts = page_formula_font_ids.copy()
+    if xobj.pdf_font:
+        for font in xobj.pdf_font:
+            if is_formulas_font(font.name, formular_font_pattern):
+                current_xobj_fonts.add(font.font_id)
+            else:
+                # If a font within an XObject is explicitly not a formula font,
+                # remove it from this XObject's set.
+                current_xobj_fonts.discard(font.font_id)
+    return current_xobj_fonts
+
+
 def collect_page_formula_font_ids(
     page: Page, formular_font_pattern: str | None
 ) -> tuple[set[int], dict[str, set[int]]]:
@@ -81,28 +109,16 @@ def collect_page_formula_font_ids(
             - A dictionary mapping xobj_id to a set of font_ids considered
               formula fonts for that specific XObject.
     """
-    # Page-level formula font IDs
-    page_formula_font_ids = set()
-    if page.pdf_font:
-        for font in page.pdf_font:
-            if is_formulas_font(font.name, formular_font_pattern):
-                page_formula_font_ids.add(font.font_id)
+    page_formula_font_ids = _collect_page_level_formula_font_ids(
+        page, formular_font_pattern
+    )
 
-    # XObject-level formula font IDs
     xobj_formula_font_ids_map = {}
     if page.pdf_xobject:
         for xobj in page.pdf_xobject:
-            # Start with a copy of page-level formula fonts for this XObject
-            current_xobj_fonts = page_formula_font_ids.copy()
-            if xobj.pdf_font:
-                for font in xobj.pdf_font:
-                    if is_formulas_font(font.name, formular_font_pattern):
-                        current_xobj_fonts.add(font.font_id)
-                    else:
-                        # If a font within an XObject is explicitly not a formula font,
-                        # remove it from this XObject's set.
-                        current_xobj_fonts.discard(font.font_id)
-            xobj_formula_font_ids_map[xobj.xobj_id] = current_xobj_fonts
+            xobj_formula_font_ids_map[xobj.xobj_id] = _collect_xobj_formula_font_ids(
+                xobj, page_formula_font_ids, formular_font_pattern
+            )
 
     return page_formula_font_ids, xobj_formula_font_ids_map
 
@@ -198,8 +214,6 @@ def is_formulas_font(font_name: str, formular_font_pattern: str | None) -> bool:
     )
     precise_formula_font_pattern = (
         r"^("
-        # r"|.*CambriaMath.*"
-        # r"|.*Cambria Math.*"
         r"|.*Asana.*"
         r"|.*MiriamMonoCLM-BookOblique.*"
         r"|.*Miriam Mono CLM.*"
@@ -231,7 +245,6 @@ def is_formulas_font(font_name: str, formular_font_pattern: str | None) -> bool:
         r"|.*KpMath.*"
         r"|.*Lete Sans Math.*"
         r"|.*LeteSansMath.*"
-        # r"|.*LinLibertineO.*"
         r"|.*Linux Libertine O.*"
         r"|.*LibertinusMath-Regular.*"
         r"|.*Libertinus Math.*"
@@ -279,7 +292,6 @@ def is_formulas_font(font_name: str, formular_font_pattern: str | None) -> bool:
             r"|stmary"
             r"|.*Mono"
             r"|.*Code"
-            # r"|.*Ital"
             r"|.*Sym"
             r"|.*Math"
             r"|AdvP4C4E74"

@@ -87,5 +87,7 @@ def test_unmask_document_with_tokens_restores_original_values():
         ],
     )
     assert restored == 1
-    assert docs.page[0].pdf_paragraph[0].unicode == "Please contact alice@example.com immediately."
-
+    assert (
+        docs.page[0].pdf_paragraph[0].unicode
+        == "Please contact alice@example.com immediately."
+    )

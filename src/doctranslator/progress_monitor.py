@@ -117,9 +117,6 @@ class ProgressMonitor:
             if part_index is not None:
                 self.part_results[part_index] = kwargs["translate_result"]
 
-        # if self.finish_callback and not self.disable:
-        #     self.finish_callback(**kwargs)
-
     def stage_start(self, stage_name: str, total: int):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             logger.debug(
@@ -155,7 +152,7 @@ class ProgressMonitor:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        logger.debug(f"ProgressMonitor __exit__")
+        logger.debug("ProgressMonitor __exit__")
 
     def on_finish(self):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
@@ -232,7 +229,7 @@ class ProgressMonitor:
         # Otherwise return the standard progress
         return progress
 
-    def stage_update(self, stage, n: int):
+    def stage_update(self, stage, _n: int):
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             return
         report_time_delta = time.time() - self.last_report_time
@@ -282,7 +279,7 @@ class ProgressMonitor:
         if self.disable or self.parent_monitor and self.parent_monitor.disable:
             return
         if self.cancel_event:
-            logger.info(f"Translation canceled")
+            logger.info("Translation canceled")
             self.cancel_event.set()
 
 
@@ -331,9 +328,14 @@ class TranslationStage:
             )
         elif short_completion:
             logger.warning(
-                f"Pipeline stage finished: stage={self.display_name} part={part_i}/{part_n} "
-                f"outcome=short_advance duration_s={elapsed_s:.3f} units={self.total} "
-                f"(progress backfilled to 100% for monitor)",
+                "Pipeline stage finished: stage=%s part=%s/%s "
+                "outcome=short_advance duration_s=%.3f units=%s "
+                "(progress backfilled to 100%% for monitor)",
+                self.display_name,
+                part_i,
+                part_n,
+                elapsed_s,
+                self.total,
             )
         else:
             logger.info(
@@ -359,7 +361,9 @@ class DummyTranslationStage:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # No-op: DummyTranslationStage does not track exit events
         pass
 
     def advance(self, n: int = 1):
+        # No-op: DummyTranslationStage does not track progress
         pass

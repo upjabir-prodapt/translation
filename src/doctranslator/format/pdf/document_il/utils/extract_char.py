@@ -2,6 +2,7 @@ import logging
 import shutil
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -56,7 +57,9 @@ def parse_pdf(pdf_path, page_ranges=None) -> il_version_1.Document:
     # Late-import: high_level pulls layout_parser → this module; avoid circular import at load time.
     import src.doctranslator.format.pdf.high_level as pdf_high_level
 
-    translation_config = TranslationConfig(*[None for _ in range(4)], doc_layout_model=None)
+    translation_config = TranslationConfig(
+        *[None for _ in range(4)], doc_layout_model=None
+    )
     if page_ranges:
         translation_config.page_ranges = [page_ranges]
     translation_config.progress_monitor = pdf_high_level.ProgressMonitor(
@@ -82,7 +85,6 @@ def parse_pdf(pdf_path, page_ranges=None) -> il_version_1.Document:
         return il
     finally:
         translation_config.cleanup_temp_files()
-    return None
 
 
 class Line:
@@ -143,7 +145,7 @@ def _recalculate_line_text_with_spacing(line, orientation):
 # vertical: True if the char is vertical, False if the char is horizontal
 def extract_paragraph_line(
     pdf_path,
-) -> dict[int, list[tuple[il_version_1.Box, str, bool]]]:
+) -> Optional[dict[int, list[tuple[il_version_1.Box, str, bool]]]]:
     il = parse_pdf(pdf_path)
     if il is None:
         return None
@@ -162,192 +164,402 @@ def convert_page_to_char_boxes(
     ]
 
 
+def _make_axis_accessors(orientation: str):
+    """Return (get_secondary_start, get_secondary_end, get_main_start, get_main_end, get_main_size)
+    accessor callables for the given *orientation* ('horizontal' or 'vertical').
+    """
+    if orientation == "horizontal":
+        return (
+            lambda c: c[0].y,
+            lambda c: c[0].y2,
+            lambda c: c[0].x,
+            lambda c: c[0].x2,
+            lambda c: c[0].x2 - c[0].x,
+        )
+    # vertical
+    return (
+        lambda c: c[0].x,
+        lambda c: c[0].x2,
+        lambda c: c[0].y,
+        lambda c: c[0].y2,
+        lambda c: c[0].y2 - c[0].y,
+    )
+
+
+def _assign_char_to_band(
+    char,
+    bands_data: list,
+    get_secondary_start,
+    get_secondary_end,
+) -> None:
+    """Insert *char* into the best-matching band in *bands_data*, or create a new band."""
+    char_ss = get_secondary_start(char)
+    char_se = get_secondary_end(char)
+    char_size = char_se - char_ss
+
+    best_idx = -1
+    max_ratio = BAND_CREATION_OVERLAP_THRESHOLD
+
+    for i in range(len(bands_data) - 1, -1, -1):
+        _, band_ss, band_se = bands_data[i]
+        if band_se < char_ss:
+            break
+        overlap = max(0, min(char_se, band_se) - max(char_ss, band_ss))
+        if char_size > 0:
+            ratio = overlap / char_size
+            if ratio > max_ratio:
+                max_ratio = ratio
+                best_idx = i
+
+    if best_idx != -1:
+        band_chars, band_ss, band_se = bands_data[best_idx]
+        band_chars.append(char)
+        bands_data[best_idx] = (
+            band_chars,
+            min(band_ss, char_ss),
+            max(band_se, char_se),
+        )
+        bands_data.append(bands_data.pop(best_idx))
+    else:
+        bands_data.append(([char], char_ss, char_se))
+
+
+def _cluster_band_into_lines(band: list, get_main_start, get_main_size) -> list:
+    """Cluster *band* characters along the main axis using DBSCAN and return Line objects."""
+    main_axis_sizes = [get_main_size(c) for c in band if get_main_size(c) > 0]
+    avg_main_size = np.mean(main_axis_sizes) if main_axis_sizes else 10
+    eps = avg_main_size * LINE_CLUSTERING_EPS_MULTIPLIER
+
+    centroids = np.array(
+        [((c[0].x + c[0].x2) / 2, (c[0].y + c[0].y2) / 2) for c in band]
+    )
+    lines = []
+    if centroids.size > 0:
+        db = DBSCAN(eps=eps, min_samples=1, metric="manhattan").fit(centroids)
+        groups: dict = defaultdict(list)
+        for i, label in enumerate(db.labels_):
+            if label != -1:
+                groups[label].append(band[i])
+        for chars in groups.values():
+            chars.sort(key=get_main_start)
+            lines.append(Line(chars))
+    return lines
+
+
+def _split_tall_line(
+    line: "Line", get_secondary_start, get_secondary_end, get_main_start
+) -> list:
+    """Split *line* into sub-lines along the secondary axis when it spans multiple rows/columns."""
+    char_secondary_sizes = [
+        get_secondary_end(c) - get_secondary_start(c)
+        for c in line.chars
+        if get_secondary_end(c) - get_secondary_start(c) > 0
+    ]
+    if not char_secondary_sizes:
+        return [line]
+
+    max_char_size = np.max(char_secondary_sizes)
+    line_ss = min(get_secondary_start(c) for c in line.chars)
+    line_se = max(get_secondary_end(c) for c in line.chars)
+
+    if (
+        line_se - line_ss > max_char_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD
+        and len(line.chars) > 1
+    ):
+        centers = np.array(
+            [[(get_secondary_start(c) + get_secondary_end(c)) / 2] for c in line.chars]
+        )
+        db = DBSCAN(
+            eps=max_char_size * LINE_SPLIT_DBSCAN_EPS_MULTIPLIER, min_samples=1
+        ).fit(centers)
+        sub_groups: dict = defaultdict(list)
+        for i, label in enumerate(db.labels_):
+            sub_groups[label].append(line.chars[i])
+        result = []
+        for chars in sub_groups.values():
+            chars.sort(key=get_main_start)
+            result.append(Line(chars))
+        return result
+    return [line]
+
+
 def _cluster_by_axis(chars: list[tuple[il_version_1.Box, str, bool]], orientation: str):
     """
-    A generalized function to cluster characters into lines based on main and secondary axes.
+    Cluster characters into lines based on main and secondary axes.
     """
     if not chars:
         return []
 
-    # Define main and secondary axes based on orientation
-    if orientation == "horizontal":
+    get_ss, get_se, get_ms, get_me, get_msz = _make_axis_accessors(orientation)
 
-        def get_secondary_start(c):
-            return c[0].y
-
-        def get_secondary_end(c):
-            return c[0].y2
-
-        def get_main_start(c):
-            return c[0].x
-
-        def get_main_end(c):
-            return c[0].x2
-
-        def get_main_size(c):
-            return c[0].x2 - c[0].x
-
-    else:  # vertical
-
-        def get_secondary_start(c):
-            return c[0].x
-
-        def get_secondary_end(c):
-            return c[0].x2
-
-        def get_main_start(c):
-            return c[0].y
-
-        def get_main_end(c):
-            return c[0].y2
-
-        def get_main_size(c):
-            return c[0].y2 - c[0].y
-
-    # Step 1: Group chars into bands along the secondary axis based on overlap.
-    # This is an optimized version of the band clustering algorithm.
-    # It avoids the O(N^2) complexity of the naive approach by making
-    # assumptions based on the sorted order of characters.
-    chars.sort(key=get_secondary_start)
-
-    # Each band is a tuple: (list_of_chars, min_secondary_coord, max_secondary_coord)
+    # Step 1: Group chars into bands along the secondary axis.
+    chars.sort(key=get_ss)
     bands_data: list[tuple[list, float, float]] = []
-
     for char in chars:
-        char_secondary_start = get_secondary_start(char)
-        char_secondary_end = get_secondary_end(char)
-        char_secondary_size = char_secondary_end - char_secondary_start
-
-        best_band_index = -1
-        max_overlap_ratio = (
-            BAND_CREATION_OVERLAP_THRESHOLD  # Minimum overlap ratio to be considered
-        )
-
-        # Iterate backwards over bands, as recent bands are more likely to overlap.
-        for i in range(len(bands_data) - 1, -1, -1):
-            band_chars, band_secondary_start, band_secondary_end = bands_data[i]
-
-            # Optimization: If the band is already far above the current char,
-            # and since chars are sorted by start, no further bands will match.
-            if band_secondary_end < char_secondary_start:
-                break
-
-            overlap = max(
-                0,
-                min(char_secondary_end, band_secondary_end)
-                - max(char_secondary_start, band_secondary_start),
-            )
-
-            if char_secondary_size > 0:
-                overlap_ratio = overlap / char_secondary_size
-                if overlap_ratio > max_overlap_ratio:
-                    max_overlap_ratio = overlap_ratio
-                    best_band_index = i
-
-        if best_band_index != -1:
-            # Add char to the best matching band and update its boundaries
-            band_chars, band_start, band_end = bands_data[best_band_index]
-            band_chars.append(char)
-            updated_band = (
-                band_chars,
-                min(band_start, char_secondary_start),
-                max(band_end, char_secondary_end),
-            )
-            bands_data[best_band_index] = updated_band
-            # Move the updated band to the end to maintain rough locality
-            bands_data.append(bands_data.pop(best_band_index))
-        else:
-            # No suitable band found, create a new one
-            bands_data.append(([char], char_secondary_start, char_secondary_end))
-
-    # Extract final bands from the data structure
+        _assign_char_to_band(char, bands_data, get_ss, get_se)
     bands = [b[0] for b in bands_data]
 
-    # Step 2: For each band, cluster along the main axis using DBSCAN
-    final_lines = []
+    # Step 2: Cluster each band along the main axis using DBSCAN.
+    final_lines: list[Line] = []
     for band in bands:
-        if len(band) < 1:
-            continue
+        if band:
+            final_lines.extend(_cluster_band_into_lines(band, get_ms, get_msz))
 
-        main_axis_sizes = [get_main_size(c) for c in band if get_main_size(c) > 0]
-        avg_main_size = np.mean(main_axis_sizes) if main_axis_sizes else 10
-
-        # Epsilon for main-axis clustering is twice the average character size in that dimension
-        eps = avg_main_size * LINE_CLUSTERING_EPS_MULTIPLIER
-
-        centroids = np.array(
-            [((c[0].x + c[0].x2) / 2, (c[0].y + c[0].y2) / 2) for c in band]
-        )
-
-        if centroids.size > 0:
-            db = DBSCAN(eps=eps, min_samples=1, metric="manhattan").fit(centroids)
-
-            line_groups = defaultdict(list)
-            for i, label in enumerate(db.labels_):
-                if label != -1:
-                    line_groups[label].append(band[i])
-
-            for _, line in line_groups.items():
-                line.sort(key=get_main_start)
-                final_lines.append(Line(line))
-
-    # Step 3: Split lines that are too tall/wide, which likely contain multiple distinct lines from different columns
-    processed_lines = []
+    # Step 3: Split lines that are too tall/wide (spanning multiple rows/columns).
+    processed_lines: list[Line] = []
     for line in final_lines:
-        if not line.chars:
-            continue
-
-        line_secondary_start = min(get_secondary_start(c) for c in line.chars)
-        line_secondary_end = max(get_secondary_end(c) for c in line.chars)
-        line_secondary_size = line_secondary_end - line_secondary_start
-
-        char_secondary_sizes = [
-            get_secondary_end(c) - get_secondary_start(c)
-            for c in line.chars
-            if get_secondary_end(c) - get_secondary_start(c) > 0
-        ]
-        if not char_secondary_sizes:
-            processed_lines.append(line)
-            continue
-
-        max_char_secondary_size = np.max(char_secondary_sizes)
-
-        if (
-            line_secondary_size
-            > max_char_secondary_size * LINE_SPLIT_SIZE_RATIO_THRESHOLD
-            and len(line.chars) > 1
-        ):
-            # logger.debug(
-            #     f"Splitting line '{line.text}' which seems to contain multiple lines."
-            # )
-
-            # Use DBSCAN on the secondary axis centers to split the line
-            centers = np.array(
-                [
-                    [(get_secondary_start(c) + get_secondary_end(c)) / 2]
-                    for c in line.chars
-                ]
-            )
-            db = DBSCAN(
-                eps=max_char_secondary_size * LINE_SPLIT_DBSCAN_EPS_MULTIPLIER,
-                min_samples=1,
-            ).fit(centers)
-
-            sub_lines = defaultdict(list)
-            for i, label in enumerate(db.labels_):
-                sub_lines[label].append(line.chars[i])
-
-            for _, sub_line_chars in sub_lines.items():
-                sub_line_chars.sort(key=get_main_start)
-                processed_lines.append(Line(sub_line_chars))
-        else:
-            processed_lines.append(line)
+        if line.chars:
+            processed_lines.extend(_split_tall_line(line, get_ss, get_se, get_ms))
     final_lines = processed_lines
 
     for line in final_lines:
         _recalculate_line_text_with_spacing(line, orientation)
 
     return final_lines
+
+
+Bbox = tuple[float, float, float, float]
+
+
+def _compute_bbox(chars: list) -> Bbox:
+    """Return (x0, y0, x1, y1) bounding box for a list of character tuples."""
+    return (
+        min(c[0].x for c in chars),
+        min(c[0].y for c in chars),
+        max(c[0].x2 for c in chars),
+        max(c[0].y2 for c in chars),
+    )
+
+
+def _check_containment_merge(
+    line1: Line,
+    line2: Line,
+    bbox1: Bbox,
+    bbox2: Bbox,
+    inter_area: float,
+    area1: float,
+    area2: float,
+    page_lines: list,
+    i: int,
+    j: int,
+    lines_to_skip: set,
+) -> tuple[bool, Line, Bbox]:
+    """Try to merge line1 and line2 by containment. Returns (merged, new_line1, new_bbox1)."""
+    if (
+        area2 > 0
+        and area1 >= area2
+        and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD
+    ):
+        # line2 (smaller) absorbed into line1
+        line1.chars.extend(line2.chars)
+        lines_to_skip.add(j)
+        new_bbox = (
+            min(bbox1[0], bbox2[0]),
+            min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]),
+            max(bbox1[3], bbox2[3]),
+        )
+        return True, line1, new_bbox
+    if (
+        area1 > 0
+        and area2 > area1
+        and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD
+    ):
+        # line1 (smaller) absorbed into line2
+        line2.chars.extend(line1.chars)
+        page_lines[i], page_lines[j] = page_lines[j], page_lines[i]
+        line1 = page_lines[i]
+        lines_to_skip.add(j)
+        new_bbox = (
+            min(bbox1[0], bbox2[0]),
+            min(bbox1[1], bbox2[1]),
+            max(bbox1[2], bbox2[2]),
+            max(bbox1[3], bbox2[3]),
+        )
+        return True, line1, new_bbox
+    return False, line1, bbox1
+
+
+def _merge_bbox(bbox1: Bbox, bbox2: Bbox) -> Bbox:
+    """Return the union bounding box of *bbox1* and *bbox2*."""
+    return (
+        min(bbox1[0], bbox2[0]),
+        min(bbox1[1], bbox2[1]),
+        max(bbox1[2], bbox2[2]),
+        max(bbox1[3], bbox2[3]),
+    )
+
+
+def _check_horizontal_adjacency_merge(
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
+) -> tuple[bool, Bbox]:
+    """Attempt a horizontal adjacency merge; return (merged, updated_bbox1)."""
+    height1 = bbox1[3] - bbox1[1]
+    height2 = bbox2[3] - bbox2[1]
+    if height1 <= 0 or height2 <= 0:
+        return False, bbox1
+    v_overlap = max(0, min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]))
+    if (
+        v_overlap / height1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+        and v_overlap / height2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+    ):
+        h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
+        if h_gap >= 0:
+            avg_char_width = np.mean(
+                [
+                    c[0].x2 - c[0].x
+                    for c in (line1.chars + line2.chars)
+                    if c[0].x2 > c[0].x
+                ]
+                or [0]
+            )
+            if (
+                avg_char_width > 0
+                and h_gap < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
+            ):
+                line1.chars.extend(line2.chars)
+                lines_to_skip.add(j)
+                return True, _merge_bbox(bbox1, bbox2)
+    return False, bbox1
+
+
+def _check_vertical_adjacency_merge(
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
+) -> tuple[bool, Bbox]:
+    """Attempt a vertical adjacency merge; return (merged, updated_bbox1)."""
+    width1 = bbox1[2] - bbox1[0]
+    width2 = bbox2[2] - bbox2[0]
+    if width1 <= 0 or width2 <= 0:
+        return False, bbox1
+    h_overlap = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]))
+    if (
+        h_overlap / width1 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+        and h_overlap / width2 > MERGE_ADJACENCY_OVERLAP_THRESHOLD
+    ):
+        v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
+        if v_gap >= 0:
+            avg_char_height = np.mean(
+                [
+                    c[0].y2 - c[0].y
+                    for c in (line1.chars + line2.chars)
+                    if c[0].y2 > c[0].y
+                ]
+                or [0]
+            )
+            if (
+                avg_char_height > 0
+                and v_gap < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
+            ):
+                line1.chars.extend(line2.chars)
+                lines_to_skip.add(j)
+                return True, _merge_bbox(bbox1, bbox2)
+    return False, bbox1
+
+
+def _check_adjacency_merge(
+    line1: Line, line2: Line, bbox1: Bbox, bbox2: Bbox, lines_to_skip: set, j: int
+) -> tuple[bool, Bbox]:
+    """Try to merge line1 and line2 by adjacency. Returns (merged, new_bbox1)."""
+    if not line1.chars[0][2]:  # horizontal
+        return _check_horizontal_adjacency_merge(
+            line1, line2, bbox1, bbox2, lines_to_skip, j
+        )
+    return _check_vertical_adjacency_merge(line1, line2, bbox1, bbox2, lines_to_skip, j)
+
+
+def _compute_bbox_area(bbox: Bbox) -> float:
+    """Return area of *bbox*, or 0 if degenerate."""
+    if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+        return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    return 0
+
+
+def _compute_intersection_area(bbox1: Bbox, bbox2: Bbox) -> float:
+    """Return the intersection area of two bounding boxes."""
+    inter_x0 = max(bbox1[0], bbox2[0])
+    inter_y0 = max(bbox1[1], bbox2[1])
+    inter_x1 = min(bbox1[2], bbox2[2])
+    inter_y1 = min(bbox1[3], bbox2[3])
+    return max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
+
+
+def _try_merge_line_pair(
+    line1: "Line",
+    line2: "Line",
+    bbox1: Bbox,
+    bbox2: Bbox,
+    page_lines: list,
+    i: int,
+    j: int,
+    lines_to_skip: set,
+) -> tuple[bool, "Line", Bbox]:
+    """Attempt containment then adjacency merge of line1 with line2."""
+    inter_area = _compute_intersection_area(bbox1, bbox2)
+    area1 = _compute_bbox_area(bbox1)
+    area2 = _compute_bbox_area(bbox2)
+
+    did_merge, line1, bbox1 = _check_containment_merge(
+        line1,
+        line2,
+        bbox1,
+        bbox2,
+        inter_area,
+        area1,
+        area2,
+        page_lines,
+        i,
+        j,
+        lines_to_skip,
+    )
+    if did_merge:
+        return True, line1, bbox1
+
+    did_adj, bbox1 = _check_adjacency_merge(
+        line1, line2, bbox1, bbox2, lines_to_skip, j
+    )
+    return did_adj, line1, bbox1
+
+
+def _sort_and_recalculate_merged_line(line1: "Line") -> None:
+    """Sort chars and recalculate text after a merge."""
+    orientation = "horizontal" if not line1.chars[0][2] else "vertical"
+    if orientation == "horizontal":
+        line1.chars.sort(key=lambda c: c[0].x)
+    else:
+        line1.chars.sort(key=lambda c: c[0].y)
+    _recalculate_line_text_with_spacing(line1, orientation)
+
+
+def _merge_line_with_candidates(
+    line1: "Line",
+    bbox1: Bbox,
+    i: int,
+    page_lines: list,
+    lines_to_skip: set,
+) -> tuple[bool, "Line", Bbox]:
+    """Scan subsequent lines and merge any that overlap or are adjacent to line1."""
+    line1_avg_char_height = np.mean(
+        [c[0].y2 - c[0].y for c in line1.chars if c[0].y2 > c[0].y] or [0]
+    )
+    max_v_gap = line1_avg_char_height * MERGE_VERTICAL_GAP_MULTIPLIER
+    merged = False
+
+    for j in range(i + 1, len(page_lines)):
+        if j in lines_to_skip:
+            continue
+        line2 = page_lines[j]
+        if not line2.chars:
+            continue
+        bbox2 = _compute_bbox(line2.chars)
+        if bbox1[1] - bbox2[3] > max_v_gap:
+            break
+        did, line1, bbox1 = _try_merge_line_pair(
+            line1, line2, bbox1, bbox2, page_lines, i, j, lines_to_skip
+        )
+        if did:
+            merged = True
+
+    return merged, line1, bbox1
 
 
 def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
@@ -359,7 +571,7 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
         return []
 
     merged_lines = []
-    lines_to_skip = set()
+    lines_to_skip: set[int] = set()
 
     for i in range(len(page_lines)):
         if i in lines_to_skip:
@@ -370,198 +582,13 @@ def _merge_lines_on_page(page_lines: list[Line]) -> list[Line]:
             merged_lines.append(line1)
             continue
 
-        bbox1 = (
-            min(c[0].x for c in line1.chars),
-            min(c[0].y for c in line1.chars),
-            max(c[0].x2 for c in line1.chars),
-            max(c[0].y2 for c in line1.chars),
+        bbox1 = _compute_bbox(line1.chars)
+        merged, line1, bbox1 = _merge_line_with_candidates(
+            line1, bbox1, i, page_lines, lines_to_skip
         )
-
-        # Optimization: Calculate a vertical gap threshold to prune the search space.
-        # Based on the vertical adjacency merge condition.
-        line1_avg_char_height = np.mean(
-            [c[0].y2 - c[0].y for c in line1.chars if c[0].y2 > c[0].y] or [0]
-        )
-        max_v_gap = line1_avg_char_height * MERGE_VERTICAL_GAP_MULTIPLIER
-
-        merged = False
-        for j in range(i + 1, len(page_lines)):
-            if j in lines_to_skip:
-                continue
-
-            line2 = page_lines[j]
-            if not line2.chars:
-                continue
-
-            bbox2 = (
-                min(c[0].x for c in line2.chars),
-                min(c[0].y for c in line2.chars),
-                max(c[0].x2 for c in line2.chars),
-                max(c[0].y2 for c in line2.chars),
-            )
-
-            # Optimization: if line2 is too far below line1, no more merges with line1 are possible.
-            # The list is sorted top-to-bottom, so we can break early.
-            v_gap = bbox1[1] - bbox2[3]  # y_min_1 - y_max_2
-            if v_gap > max_v_gap:
-                break
-
-            # Check for "mostly contained" by checking intersection over area
-            inter_x0 = max(bbox1[0], bbox2[0])
-            inter_y0 = max(bbox1[1], bbox2[1])
-            inter_x1 = min(bbox1[2], bbox2[2])
-            inter_y1 = min(bbox1[3], bbox2[3])
-
-            inter_area = max(0, inter_x1 - inter_x0) * max(0, inter_y1 - inter_y0)
-
-            area1 = (
-                (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-                if (bbox1[2] > bbox1[0] and bbox1[3] > bbox1[1])
-                else 0
-            )
-            area2 = (
-                (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-                if (bbox2[2] > bbox2[0] and bbox2[3] > bbox2[1])
-                else 0
-            )
-
-            # Heuristic for merging:
-            # 1. By containment: if one line is mostly inside another.
-            # 2. By adjacency: if two lines are close and aligned.
-            if (
-                area2 > 0
-                and area1 >= area2
-                and (inter_area / area2) > MERGE_CONTAINMENT_IOU_THRESHOLD
-            ):
-                # Case 1: Merge line2 (smaller) into line1 (larger) by containment
-                # logger.debug(
-                #     f"Merging line '{line2.text}' into '{line1.text}' (mostly contained)"
-                # )
-                line1.chars.extend(line2.chars)
-                lines_to_skip.add(j)
-                merged = True
-                bbox1 = (
-                    min(bbox1[0], bbox2[0]),
-                    min(bbox1[1], bbox2[1]),
-                    max(bbox1[2], bbox2[2]),
-                    max(bbox1[3], bbox2[3]),
-                )
-
-            elif (
-                area1 > 0
-                and area2 > area1
-                and (inter_area / area1) > MERGE_CONTAINMENT_IOU_THRESHOLD
-            ):
-                # Case 2: Merge line1 (smaller) into line2 (larger) by containment
-                # logger.debug(
-                #     f"Merging line '{line1.text}' into '{line2.text}' (mostly contained)"
-                # )
-                line2.chars.extend(line1.chars)
-                page_lines[i], page_lines[j] = page_lines[j], page_lines[i]
-                line1 = page_lines[i]
-                lines_to_skip.add(j)
-                merged = True
-                bbox1 = (
-                    min(bbox1[0], bbox2[0]),
-                    min(bbox1[1], bbox2[1]),
-                    max(bbox1[2], bbox2[2]),
-                    max(bbox1[3], bbox2[3]),
-                )
-
-            else:
-                # Case 3: Merge by adjacency for lines that are close to each other
-                orientation = "horizontal" if not line1.chars[0][2] else "vertical"
-                if orientation == "horizontal":
-                    height1 = bbox1[3] - bbox1[1]
-                    height2 = bbox2[3] - bbox2[1]
-                    if height1 > 0 and height2 > 0:
-                        v_overlap = max(
-                            0,
-                            min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]),
-                        )
-                        if (
-                            v_overlap / height1
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD and (
-                            v_overlap / height2
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD:
-                            h_gap = max(bbox1[0], bbox2[0]) - min(bbox1[2], bbox2[2])
-                            if h_gap >= 0:
-                                avg_char_width = np.mean(
-                                    [
-                                        c[0].x2 - c[0].x
-                                        for c in (line1.chars + line2.chars)
-                                        if c[0].x2 > c[0].x
-                                    ]
-                                    or [0]
-                                )
-                                if (
-                                    avg_char_width > 0
-                                    and h_gap
-                                    < avg_char_width * MERGE_ADJACENCY_GAP_MULTIPLIER
-                                ):
-                                    # logger.debug(
-                                    #     f"Merging adjacent lines '{line1.text}' and '{line2.text}'"
-                                    # )
-                                    line1.chars.extend(line2.chars)
-                                    lines_to_skip.add(j)
-                                    merged = True
-                                    bbox1 = (
-                                        min(bbox1[0], bbox2[0]),
-                                        min(bbox1[1], bbox2[1]),
-                                        max(bbox1[2], bbox2[2]),
-                                        max(bbox1[3], bbox2[3]),
-                                    )
-                else:  # Vertical
-                    width1 = bbox1[2] - bbox1[0]
-                    width2 = bbox2[2] - bbox2[0]
-                    if width1 > 0 and width2 > 0:
-                        h_overlap = max(
-                            0,
-                            min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]),
-                        )
-                        if (
-                            h_overlap / width1
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD and (
-                            h_overlap / width2
-                        ) > MERGE_ADJACENCY_OVERLAP_THRESHOLD:
-                            v_gap = max(bbox1[1], bbox2[1]) - min(bbox1[3], bbox2[3])
-                            if v_gap >= 0:
-                                avg_char_height = np.mean(
-                                    [
-                                        c[0].y2 - c[0].y
-                                        for c in (line1.chars + line2.chars)
-                                        if c[0].y2 > c[0].y
-                                    ]
-                                    or [0]
-                                )
-                                if (
-                                    avg_char_height > 0
-                                    and v_gap
-                                    < avg_char_height * MERGE_ADJACENCY_GAP_MULTIPLIER
-                                ):
-                                    # logger.debug(
-                                    #     f"Merging adjacent vertical lines '{line1.text}' and '{line2.text}'"
-                                    # )
-                                    line1.chars.extend(line2.chars)
-                                    lines_to_skip.add(j)
-                                    merged = True
-                                    bbox1 = (
-                                        min(bbox1[0], bbox2[0]),
-                                        min(bbox1[1], bbox2[1]),
-                                        max(bbox1[2], bbox2[2]),
-                                        max(bbox1[3], bbox2[3]),
-                                    )
 
         if merged:
-            # Re-sort and recalculate text for the merged line
-            orientation = (
-                "horizontal" if not line1.chars[0][2] else "vertical"
-            )  # Guess orientation from first char
-            if orientation == "horizontal":
-                line1.chars.sort(key=lambda c: c[0].x)
-            else:  # vertical
-                line1.chars.sort(key=lambda c: c[0].y)
-            _recalculate_line_text_with_spacing(line1, orientation)
+            _sort_and_recalculate_merged_line(line1)
 
         merged_lines.append(line1)
 
@@ -652,8 +679,6 @@ def draw_clustered_lines_to_image(pdf_path, clustered_lines: dict[int, list[Line
         if pixmap.n in [3, 4]:
             image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
 
-        # cv2.imwrite(str(debug_dir / f"{page_number}.png"), image_array)
-
         annotated_image = image_array.copy()
 
         page_rect = page.rect
@@ -725,7 +750,7 @@ def draw_clustered_lines_to_image(pdf_path, clustered_lines: dict[int, list[Line
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])
+    logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])  # NOSONAR
     for pdf_path in (
         "2404.16109v1.pdf",
         "2022 - Bortoli_Valentin De, Mathieu_Emile - Riemannian Score-Based Generative Modelling.pdf",
@@ -745,13 +770,6 @@ def main():
 
         total_lines = sum(len(l) for l in lines.values())
         logger.info(f"Clustered into {total_lines} lines. Drawing boxes...")
-
-        # logger.info("--- Clustered Lines Text ---")
-        # for page_num, page_lines in lines.items():
-        #     logger.info(f"Page {page_num}:")
-        #     for i, line in enumerate(page_lines):
-        #         logger.info(f"  Line {i}: {line.text}")
-        # logger.info("----------------------------")
 
         draw_clustered_lines_to_image(pdf_path, lines)
         logger.info("Annotated images saved in 'ocr-box-image-clustered' directory.")

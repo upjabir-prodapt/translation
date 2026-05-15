@@ -26,4 +26,3 @@ class JobsHandler:
 
     async def download_output(self, job_id: str) -> DownloadResponse:
         return await self.job_service.get_download_url(job_id, "mono")
-

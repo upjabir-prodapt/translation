@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 
 from src.config.constants import settings
@@ -30,13 +31,9 @@ class WarmupResult:
     success: bool
     downloaded_count: int = 0
     verified_count: int = 0
-    failed_assets: list[str] = None  # type: ignore[assignment]
+    failed_assets: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
     message: str = ""
-
-    def __post_init__(self):
-        if self.failed_assets is None:
-            self.failed_assets = []
 
 
 class WarmupService:
@@ -359,7 +356,7 @@ class WarmupService:
 
         try:
             # Ensure directory exists
-            tiktoken_dir = get_subdir_path(settings.TIKTOKEN_DIR)
+            get_subdir_path(settings.TIKTOKEN_DIR)
 
             # Pre-load common encodings
             await asyncio.to_thread(self._init_tiktoken)
@@ -393,7 +390,9 @@ async def async_warmup(
     return await service.warmup_all()
 
 
-def warmup(storage_repo: TranslationStorageRepository | None = None) -> WarmupResult:
+def warmup(
+    storage_repo: TranslationStorageRepository | None = None,
+) -> WarmupResult | Any:
     """Run complete asset warmup synchronously.
 
     Args:

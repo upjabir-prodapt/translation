@@ -56,6 +56,25 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _apply_width_list(widths: dict[int, float], char1: float, v: list[object]) -> None:
+    """Apply a list of widths starting from char1 into the widths dict."""
+    for idx, w in enumerate(v):
+        widths[cast(int, char1) + idx] = w  # type: ignore[assignment]
+
+
+def _apply_width_range(
+    widths: dict[int, float], char1: float, char2: float, w: float
+) -> None:
+    """Apply a single width w to all chars in the range [char1, char2]."""
+    if isinstance(char1, int) and isinstance(char2, int):
+        for code in range(cast(int, char1), cast(int, char2) + 1):
+            widths[code] = w
+    else:
+        log.warning(
+            f"Skipping invalid font width specification for {char1} to {char2} because either of them is not an int"
+        )
+
+
 def get_widths(seq: Iterable[object]) -> dict[str | int, float]:
     """Build a mapping of character widths for horizontal writing."""
     widths: dict[int, float] = {}
@@ -65,26 +84,40 @@ def get_widths(seq: Iterable[object]) -> dict[str | int, float]:
         if isinstance(v, list):
             if r:
                 char1 = r[-1]
-                for i, w in enumerate(v):
-                    widths[cast(int, char1) + i] = w
+                _apply_width_list(widths, char1, v)
                 r = []
         elif isinstance(v, (int, float)):  # == utils.isnumber(v)
             r.append(v)
             if len(r) == 3:
                 (char1, char2, w) = r
-                if isinstance(char1, int) and isinstance(char2, int):
-                    for i in range(cast(int, char1), cast(int, char2) + 1):
-                        widths[i] = w
-                else:
-                    log.warning(
-                        f"Skipping invalid font width specification for {char1} to {char2} because either of them is not an int"
-                    )
+                _apply_width_range(widths, char1, char2, w)
                 r = []
         else:
             log.warning(
                 f"Skipping invalid font width specification for {v} because it is not a number or a list"
             )
     return cast(dict[str | int, float], widths)
+
+
+def _apply_width2_list(
+    widths: dict[int, tuple[float, Point]], char1: float, v: list[object]
+) -> None:
+    """Apply a list of (w, vx, vy) triplets starting from char1 into widths dict."""
+    for idx, (w, vx, vy) in enumerate(choplist(3, v)):
+        widths[cast(int, char1) + idx] = (w, (vx, vy))
+
+
+def _apply_width2_range(
+    widths: dict[int, tuple[float, Point]],
+    char1: float,
+    char2: float,
+    w: float,
+    vx: float,
+    vy: float,
+) -> None:
+    """Apply a single vertical width entry to all chars in [char1, char2]."""
+    for code in range(cast(int, char1), cast(int, char2) + 1):
+        widths[code] = (w, (vx, vy))
 
 
 def get_widths2(seq: Iterable[object]) -> dict[int, tuple[float, Point]]:
@@ -95,15 +128,13 @@ def get_widths2(seq: Iterable[object]) -> dict[int, tuple[float, Point]]:
         if isinstance(v, list):
             if r:
                 char1 = r[-1]
-                for i, (w, vx, vy) in enumerate(choplist(3, v)):
-                    widths[cast(int, char1) + i] = (w, (vx, vy))
+                _apply_width2_list(widths, char1, v)
                 r = []
         elif isinstance(v, (int, float)):  # == utils.isnumber(v)
             r.append(v)
             if len(r) == 5:
                 (char1, char2, w, vx, vy) = r
-                for i in range(cast(int, char1), cast(int, char2) + 1):
-                    widths[i] = (w, (vx, vy))
+                _apply_width2_range(widths, char1, char2, w, vx, vy)
                 r = []
     return widths
 
@@ -171,6 +202,38 @@ IDENTITY_ENCODER = {
 }
 
 
+def _parse_real_number(fp: BytesIO) -> float:
+    """Parse a real number (b0==30) from the CFF font stream."""
+    s = ""
+    loop = True
+    while loop:
+        b = ord(fp.read(1))
+        for n in (b >> 4, b & 15):
+            if n == 15:
+                loop = False
+            else:
+                nibble = NIBBLES[n]
+                assert nibble is not None
+                s += nibble
+    return float(s)
+
+
+def _parse_multi_byte_number(fp: BytesIO, b0: int) -> int | float:
+    """Parse a multi-byte integer from the CFF font stream."""
+    b1 = ord(fp.read(1))
+    if b0 >= 247 and b0 <= 250:
+        return ((b0 - 247) << 8) + b1 + 108
+    if b0 >= 251 and b0 <= 254:
+        return -((b0 - 251) << 8) - b1 - 108
+    # b0 == 28 or b0 == 29
+    b2 = ord(fp.read(1))
+    if b1 >= 128:
+        b1 -= 256
+    if b0 == 28:
+        return b1 << 8 | b2
+    return b1 << 24 | b2 << 16 | struct.unpack(">H", fp.read(2))[0]
+
+
 def getdict(data: bytes) -> dict[int, list[float | int]]:
     d: dict[int, list[float | int]] = {}
     fp = BytesIO(data)
@@ -185,34 +248,11 @@ def getdict(data: bytes) -> dict[int, list[float | int]]:
             stack = []
             continue
         if b0 == 30:
-            s = ""
-            loop = True
-            while loop:
-                b = ord(fp.read(1))
-                for n in (b >> 4, b & 15):
-                    if n == 15:
-                        loop = False
-                    else:
-                        nibble = NIBBLES[n]
-                        assert nibble is not None
-                        s += nibble
-            value = float(s)
+            value: float | int = _parse_real_number(fp)
         elif b0 >= 32 and b0 <= 246:
             value = b0 - 139
         else:
-            b1 = ord(fp.read(1))
-            if b0 >= 247 and b0 <= 250:
-                value = ((b0 - 247) << 8) + b1 + 108
-            elif b0 >= 251 and b0 <= 254:
-                value = -((b0 - 251) << 8) - b1 - 108
-            else:
-                b2 = ord(fp.read(1))
-                if b1 >= 128:
-                    b1 -= 256
-                if b0 == 28:
-                    value = b1 << 8 | b2
-                else:
-                    value = b1 << 24 | b2 << 16 | struct.unpack(">H", fp.read(2))[0]
+            value = _parse_multi_byte_number(fp, b0)
         stack.append(value)
     return d
 
@@ -617,7 +657,7 @@ class CFFFont:
             self.fp = fp
             self.offsets: list[int] = []
             (count, offsize) = struct.unpack(">HB", self.fp.read(3))
-            for i in range(count + 1):
+            for _ in range(count + 1):
                 self.offsets.append(nunpack(self.fp.read(offsize)))
             self.base = self.fp.tell() - 1
             self.fp.seek(self.base + self.offsets[-1])
@@ -662,31 +702,39 @@ class CFFFont:
         self.code2gid = {}
         self.gid2code = {}
         self.fp.seek(cast(int, encoding_pos))
-        format = self.fp.read(1)
-        if format == b"\x00":
+        self._parse_encodings()
+        # Charsets
+        self.name2gid = {}
+        self.gid2name = {}
+        self.fp.seek(cast(int, charset_pos))
+        self._parse_charsets()
+
+    def _parse_encodings(self) -> None:
+        """Parse CFF encoding table and populate code2gid/gid2code maps."""
+        encoding_format = self.fp.read(1)
+        if encoding_format == b"\x00":
             # Format 0
             (n,) = struct.unpack("B", self.fp.read(1))
             for code, gid in enumerate(struct.unpack("B" * n, self.fp.read(n))):
                 self.code2gid[code] = gid
                 self.gid2code[gid] = code
-        elif format == b"\x01":
+        elif encoding_format == b"\x01":
             # Format 1
             (n,) = struct.unpack("B", self.fp.read(1))
             code = 0
-            for i in range(n):
+            for _ in range(n):
                 (first, nleft) = struct.unpack("BB", self.fp.read(2))
                 for gid in range(first, first + nleft + 1):
                     self.code2gid[code] = gid
                     self.gid2code[gid] = code
                     code += 1
         else:
-            raise PDFValueError("unsupported encoding format: %r" % format)
-        # Charsets
-        self.name2gid = {}
-        self.gid2name = {}
-        self.fp.seek(cast(int, charset_pos))
-        format = self.fp.read(1)
-        if format == b"\x00":
+            raise PDFValueError("unsupported encoding format: %r" % encoding_format)
+
+    def _parse_charsets(self) -> None:
+        """Parse CFF charset table and populate name2gid/gid2name maps."""
+        charset_format = self.fp.read(1)
+        if charset_format == b"\x00":
             # Format 0
             n = self.nglyphs - 1
             for gid, sid in enumerate(
@@ -698,22 +746,22 @@ class CFFFont:
                 sidname = self.getstr(sid)
                 self.name2gid[sidname] = gid
                 self.gid2name[gid] = sidname
-        elif format == b"\x01":
+        elif charset_format == b"\x01":
             # Format 1
             (n,) = struct.unpack("B", self.fp.read(1))
             sid = 0
-            for i in range(n):
+            for _ in range(n):
                 (first, nleft) = struct.unpack("BB", self.fp.read(2))
                 for gid in range(first, first + nleft + 1):
                     sidname = self.getstr(sid)
                     self.name2gid[sidname] = gid
                     self.gid2name[gid] = sidname
                     sid += 1
-        elif format == b"\x02":
+        elif charset_format == b"\x02":
             # Format 2
-            assert False, str(("Unhandled", format))
+            assert False, str(("Unhandled", charset_format))
         else:
-            raise PDFValueError("unsupported charset format: %r" % format)
+            raise PDFValueError("unsupported charset format: %r" % charset_format)
 
     def getstr(self, sid: int) -> str | bytes:
         # This returns str for one of the STANDARD_STRINGS but bytes otherwise,
@@ -864,7 +912,7 @@ class PDFFont:
 
         return self.default_width * self.hscale
 
-    def char_disp(self, cid: int) -> float | tuple[float | None, float]:
+    def char_disp(self, _cid: int) -> float | tuple[float | None, float]:
         """Returns an integer for horizontal fonts, a tuple for vertical fonts."""
         return 0
 
@@ -942,7 +990,6 @@ class PDFType1Font(PDFSimpleFont):
         except KeyError:
             descriptor = dict_value(spec.get("FontDescriptor", {}))
             firstchar = int_value(spec.get("FirstChar", 0))
-            # lastchar = int_value(spec.get('LastChar', 255))
             width_list = list_value(spec.get("Widths", [0] * 256))
             widths = {i + firstchar: resolve1(w) for (i, w) in enumerate(width_list)}
         PDFSimpleFont.__init__(self, descriptor, widths, spec)
@@ -970,7 +1017,6 @@ class PDFTrueTypeFont(PDFType1Font):
 class PDFType3Font(PDFSimpleFont):
     def __init__(self, rsrcmgr: "PDFResourceManager", spec: Mapping[str, Any]) -> None:
         firstchar = int_value(spec.get("FirstChar", 0))
-        # lastchar = int_value(spec.get('LastChar', 0))
         width_list = list_value(spec.get("Widths", [0] * 256))
         widths: dict[str | int, float] = {
             i + firstchar: w for (i, w) in enumerate(width_list)
@@ -990,6 +1036,66 @@ class PDFType3Font(PDFSimpleFont):
 
 class PDFCIDFont(PDFFont):
     default_disp: float | tuple[float | None, float]
+
+    def _load_cid_encoding(self, spec: Mapping[str, Any]) -> None:
+        """Load optional CID encoding from font spec."""
+        self.has_encoding = False
+        self.cid_encoding = None
+        try:
+            if "Encoding" in spec:
+                encoding_part = resolve1(spec["Encoding"])
+                if isinstance(encoding_part, PDFStream):
+                    self.has_encoding = True
+                    self.cid_encoding = CharacterMap(
+                        encoding_part.get_data().decode("U8")
+                    )
+        except Exception as e:
+            log.error(f"Error get cid_encoding from spec: {e}")
+            self.has_encoding = False
+            self.cid_encoding = None
+
+    def _resolve_unicode_map(
+        self,
+        spec: Mapping[str, Any],
+        cid_ordering: str,
+        ttf: "TrueTypeFont | None",
+    ) -> None:
+        """Resolve and assign self.unicode_map from spec or TTF."""
+        self.unicode_map: UnicodeMap | None = None
+        if "ToUnicode" in spec:
+            self._resolve_unicode_map_from_to_unicode(spec, cid_ordering)
+        elif self.cidcoding in ("Adobe-Identity", "Adobe-UCS"):
+            if ttf:
+                try:
+                    self.unicode_map = ttf.create_unicode_map()
+                except TrueTypeFont.CMapNotFound:
+                    pass
+        else:
+            try:
+                self.unicode_map = CMapDB.get_unicode_map(
+                    self.cidcoding,
+                    self.cmap.is_vertical(),
+                )
+            except CMapDB.CMapNotFound:
+                pass
+
+    def _resolve_unicode_map_from_to_unicode(
+        self, spec: Mapping[str, Any], cid_ordering: str
+    ) -> None:
+        """Resolve unicode map from the ToUnicode entry in the font spec."""
+        if isinstance(spec["ToUnicode"], PDFStream):
+            strm = stream_value(spec["ToUnicode"])
+            self.unicode_map = FileUnicodeMap()
+            CMapParser(self.unicode_map, BytesIO(strm.get_data())).run()
+        else:
+            cmap_name = literal_name(spec["ToUnicode"])
+            encoding = literal_name(spec["Encoding"])
+            if (
+                "Identity" in cid_ordering
+                or "Identity" in cmap_name
+                or "Identity" in encoding
+            ):
+                self.unicode_map = IdentityUnicodeMap()
 
     def __init__(
         self,
@@ -1020,52 +1126,11 @@ class PDFCIDFont(PDFFont):
                 raise PDFFontError("FontDescriptor is missing")
             descriptor = {}
         ttf = None
-        self.has_encoding = False
-        self.cid_encoding = None
-        try:
-            if "Encoding" in spec:
-                encoding_part = resolve1(spec["Encoding"])
-                if isinstance(encoding_part, PDFStream):
-                    self.has_encoding = True
-                    self.cid_encoding = CharacterMap(
-                        encoding_part.get_data().decode("U8")
-                    )
-        except Exception as e:
-            log.error(f"Error get cid_encoding from spec: {e}")
-            self.has_encoding = False
-            self.cid_encoding = None
+        self._load_cid_encoding(spec)
         if "FontFile2" in descriptor:
             self.fontfile = stream_value(descriptor.get("FontFile2"))
             ttf = TrueTypeFont(self.basefont, BytesIO(self.fontfile.get_data()))
-        self.unicode_map: UnicodeMap | None = None
-        if "ToUnicode" in spec:
-            if isinstance(spec["ToUnicode"], PDFStream):
-                strm = stream_value(spec["ToUnicode"])
-                self.unicode_map = FileUnicodeMap()
-                CMapParser(self.unicode_map, BytesIO(strm.get_data())).run()
-            else:
-                cmap_name = literal_name(spec["ToUnicode"])
-                encoding = literal_name(spec["Encoding"])
-                if (
-                    "Identity" in cid_ordering
-                    or "Identity" in cmap_name
-                    or "Identity" in encoding
-                ):
-                    self.unicode_map = IdentityUnicodeMap()
-        elif self.cidcoding in ("Adobe-Identity", "Adobe-UCS"):
-            if ttf:
-                try:
-                    self.unicode_map = ttf.create_unicode_map()
-                except TrueTypeFont.CMapNotFound:
-                    pass
-        else:
-            try:
-                self.unicode_map = CMapDB.get_unicode_map(
-                    self.cidcoding,
-                    self.cmap.is_vertical(),
-                )
-            except CMapDB.CMapNotFound:
-                pass
+        self._resolve_unicode_map(spec, cid_ordering, ttf)
 
         self.vertical = self.cmap.is_vertical()
         if self.vertical:
