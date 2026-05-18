@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any
 from typing import Protocol
 
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 
 
 class JobUpdater(Protocol):

@@ -14,10 +14,19 @@ from src.api.services.intent_router_service import IntentRouterService
 from src.api.services.language_detection_service import LanguageDetectionService
 from src.api.services.processor_service import JobProcessor
 from src.api.services.temp_workspace_service import TempWorkspaceService
+import logging
+
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind
+from opentelemetry.trace import Status
+from opentelemetry.trace import StatusCode
+
 from src.config.constants import settings
-from src.config.logging_config import logger
+from src.config.tracing import tracer_pipeline
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
+
+logger = logging.getLogger(__name__)
 
 _OMIT = object()
 
@@ -90,7 +99,31 @@ class PipelineOrchestrator:
             fields["error_message"] = error_message
         await self.bigquery.patch_translation_job(job_id, fields)
 
-    async def run(self, job_id: str, job_data: dict[str, Any]) -> None:
+    async def run(self, job_id: str, job_data: dict[str, Any], parent_ctx=None) -> None:
+        token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
+        try:
+            await self._run_pipeline(job_id, job_data)
+        finally:
+            if token is not None:
+                otel_context.detach(token)
+
+    async def _run_pipeline(self, job_id: str, job_data: dict[str, Any]) -> None:
+        source_doc = job_data["source_document"]
+        translation_config = job_data["translation_config"]
+
+        with tracer_pipeline.start_as_current_span(
+            "pipeline.run",
+            kind=SpanKind.INTERNAL,
+            attributes={
+                "translation.job_id": job_id,
+                "translation.source_lang": str(translation_config.get("source_language", "auto")),
+                "translation.target_lang": str(translation_config.get("target_language", "")),
+                "translation.domain": str(translation_config.get("domain", "")),
+            },
+        ) as pipeline_span:
+            await self._execute_pipeline(job_id, job_data, pipeline_span)
+
+    async def _execute_pipeline(self, job_id: str, job_data: dict[str, Any], pipeline_span) -> None:
         workspace = self.temp_workspace_service.create(job_id)
         try:
             source_doc = job_data["source_document"]
@@ -220,6 +253,8 @@ class PipelineOrchestrator:
             logger.info(f"Translation pipeline finished for job {job_id}")
         except Exception as exc:
             logger.error(f"Pipeline failed for job {job_id}. Exception: {exc}")
+            pipeline_span.set_status(Status(StatusCode.ERROR, str(exc)))
+            pipeline_span.record_exception(exc)
             await self._update_status(
                 job_id,
                 status="failed",

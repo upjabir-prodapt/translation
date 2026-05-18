@@ -257,6 +257,15 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "DEBUG"
 
     # -----------------------------
+    # Telemetry / Tracing
+    # -----------------------------
+
+    TRACE_ENABLED: bool = True
+    TRACE_SAMPLE_RATE: float = 1.0
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "telemetry.googleapis.com:443"
+    APP_VERSION: str = "0.5.23"
+
+    # -----------------------------
     # Retry / Detection
     # -----------------------------
 

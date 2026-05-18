@@ -9,9 +9,12 @@ from pathlib import Path
 
 from src.api.services.glossary_service import GlossaryService
 from src.api.services.intent_router_service import IntentRouterService
+import logging
+
 from src.config.constants import settings
-from src.config.logging_config import logger
 from src.loaders.services.download_service import download_async
+
+logger = logging.getLogger(__name__)
 from src.loaders.services.warmup_service import WarmupService
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.loaders.utils.path_helpers import get_cache_root
@@ -93,7 +96,7 @@ class StartupAssetsService:
             critical_files_ready=critical_files_ready,
         )
         logger.info(
-            f"Startup preflight status: assets_root={status.assets_root} critical_files_ready={status.critical_files_ready}",
+            "Startup preflight status: assets_root=%s critical_files_ready=%s",
             status.assets_root,
             status.critical_files_ready,
         )
@@ -105,7 +108,7 @@ class StartupAssetsService:
         try:
             result = await WarmupService().warmup_all()
             logger.info(
-                f"Background warmup finished (success={result.success} downloaded={result.downloaded_count} verified={result.verified_count} failed={len(result.failed_assets)})",
+                "Background warmup finished (success=%s downloaded=%s verified=%s failed=%s)",
                 result.success,
                 result.downloaded_count,
                 result.verified_count,

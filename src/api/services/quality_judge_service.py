@@ -16,9 +16,15 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+import logging
+
+from opentelemetry.trace import SpanKind
+
 from src.config.constants import settings
-from src.config.logging_config import logger
 from src.config.retry import llm_retry
+from src.config.tracing import tracer_llm
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -199,26 +205,38 @@ class GoogleADKJudgeAgent:
                 )
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
-        llm_scores = self._judge_with_llm(source_text, translated_text)
-        if not isinstance(llm_scores, dict):
-            llm_scores = (
-                llm_scores.model_dump()
-                if isinstance(llm_scores, QualityJudgeLLMScores)
-                else dict(llm_scores)
+        with tracer_llm.start_as_current_span(
+            "llm.judge",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "llm.model": self.model,
+                "llm.provider": "google_vertexai",
+            },
+        ) as span:
+            llm_scores = self._judge_with_llm(source_text, translated_text)
+            if not isinstance(llm_scores, dict):
+                llm_scores = (
+                    llm_scores.model_dump()
+                    if isinstance(llm_scores, QualityJudgeLLMScores)
+                    else dict(llm_scores)
+                )
+            alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
+            omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
+            hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
+            final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
+            span.set_attribute("judge.alignment_score", alignment)
+            span.set_attribute("judge.omission_score", omission)
+            span.set_attribute("judge.hallucination_score", hallucination)
+            span.set_attribute("judge.passed", final >= settings.QUALITY_THRESHOLD)
+            return QualityJudgeResult(
+                alignment_score=alignment,
+                omission_score=omission,
+                hallucination_score=hallucination,
+                final_score=final,
+                pass_fail=final >= settings.QUALITY_THRESHOLD,
+                reasons=list(llm_scores.get("reasons", [])),
+                model=self.model,
             )
-        alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
-        omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
-        hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
-        final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
-        return QualityJudgeResult(
-            alignment_score=alignment,
-            omission_score=omission,
-            hallucination_score=hallucination,
-            final_score=final,
-            pass_fail=final >= settings.QUALITY_THRESHOLD,
-            reasons=list(llm_scores.get("reasons", [])),
-            model=self.model,
-        )
 
     async def evaluate_async(
         self, *, source_text: str, translated_text: str

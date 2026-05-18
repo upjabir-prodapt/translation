@@ -9,6 +9,9 @@ from datetime import UTC
 from datetime import datetime
 from typing import Any
 
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind
+
 from src.api.exceptions import ValidationError
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.responses import TranslateResponse
@@ -17,6 +20,7 @@ from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
 from src.config.translation_routing import normalize_domain
 from src.config.translation_routing import normalize_language
+from src.config.tracing import tracer_pipeline
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -44,6 +48,14 @@ class TranslationService:
         """Submit a document for translation."""
         job_id = str(uuid.uuid4())
 
+        with tracer_pipeline.start_as_current_span(
+            "translation_service.submit",
+            kind=SpanKind.INTERNAL,
+            attributes={"translation.job_id": job_id},
+        ):
+            return await self._do_submit(request, job_id)
+
+    async def _do_submit(self, request: TranslateRequest, job_id: str) -> TranslateResponse:
         try:
             # Decode base64 content
             try:
@@ -119,7 +131,11 @@ class TranslationService:
             }
 
             await self.bigquery.upsert_translation_job(job_data)
-            self._schedule_background_pipeline(job_id, job_data)
+
+            # Capture trace context before leaving HTTP scope — asyncio.create_task
+            # does not propagate OTel context automatically.
+            parent_ctx = otel_context.get_current()
+            self._schedule_background_pipeline(job_id, job_data, parent_ctx)
 
             logger.info(f"Submitted translation job {job_id}")
 
@@ -169,11 +185,12 @@ class TranslationService:
         self,
         job_id: str,
         job_data: dict[str, Any],
+        parent_ctx=None,
     ) -> None:
         """Schedule API-local background translation pipeline."""
         if settings.API_USE_BACKGROUND_PIPELINE:
             task = asyncio.create_task(
-                self.orchestrator.run(job_id=job_id, job_data=job_data)
+                self.orchestrator.run(job_id=job_id, job_data=job_data, parent_ctx=parent_ctx)
             )
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)

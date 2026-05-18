@@ -20,7 +20,8 @@ from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
 from src.api.schemas.responses import TranslationResult
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 

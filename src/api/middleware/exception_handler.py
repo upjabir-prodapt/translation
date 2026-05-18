@@ -16,7 +16,8 @@ from src.api.exceptions import JobNotFoundError
 from src.api.exceptions import StorageError
 from src.api.exceptions import TranslationError
 from src.api.exceptions import ValidationError
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 
 
 async def exception_handler_middleware(request: Request, call_next):
@@ -58,7 +59,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
             {"field": ".".join(str(loc) for loc in err["loc"]), "message": err["msg"]}
             for err in exc.errors()
         ]
-        logger.warning("Request validation error: {}", errors)
+        logger.warning("Request validation error: %s", errors)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -80,7 +81,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
 
     # Input validation errors
     if isinstance(exc, ValidationError):
-        logger.warning("Validation error: {}", exc.message)
+        logger.warning("Validation error: %s", exc.message)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"error": {"message": exc.message, "code": "VALIDATION_ERROR"}},
@@ -132,7 +133,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
 
     # ValueError from language/domain normalization surfaced outside service layer
     if isinstance(exc, ValueError):
-        logger.warning("Value error: {}", exc_str)
+        logger.warning("Value error: %s", exc_str)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"error": {"message": exc_str, "code": "VALIDATION_ERROR"}},
@@ -147,7 +148,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
         )
 
     # Unknown exceptions
-    logger.error("Unhandled exception: {}", exc_str, exc_info=True)
+    logger.error("Unhandled exception: %s", exc_str, exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
