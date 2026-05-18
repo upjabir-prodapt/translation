@@ -1,6 +1,5 @@
 import math
 import re
-from typing import Optional
 
 from src.doctranslator.format.pdf.document_il.il_version_1 import Box
 from src.doctranslator.format.pdf.document_il.il_version_1 import Document
@@ -749,7 +748,7 @@ class StylesAndFormulas:
         if base_style.font_size is None:
             base_style.font_size = self._get_mode_value([s.font_size for s in styles])
 
-    def _calculate_base_style(self, paragraph) -> Optional[PdfStyle]:
+    def _calculate_base_style(self, paragraph) -> PdfStyle | None:
         """è®¡ç®—æ®µè½çš„åŸºå‡†æ ·å¼ï¼ˆé™¤å…¬å¼å¤–æ‰€æœ‰æ–‡å­—æ ·å¼çš„äº¤é›†ï¼‰"""
         styles = self._collect_line_char_styles(paragraph)
         if not styles:
@@ -814,7 +813,7 @@ class StylesAndFormulas:
         self,
         chars: list[PdfCharacter],
         style,
-    ) -> Optional[PdfParagraphComposition]:
+    ) -> PdfParagraphComposition | None:
         """åˆ›å»ºå…·æœ‰ç›¸åŒæ ·å¼çš„æ–‡æœ¬ç»„åˆ"""
         if not chars:
             return None

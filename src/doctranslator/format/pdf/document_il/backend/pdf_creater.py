@@ -911,7 +911,9 @@ class PDFCreater:
         chars = list(page.pdf_character) if page.pdf_character else []
         for paragraph in page.pdf_paragraph:
             chars.extend(self.render_paragraph_to_char(paragraph))
-        self._render_debug_chars(chars, page_op, available_font_list, page_encoding_length_map)
+        self._render_debug_chars(
+            chars, page_op, available_font_list, page_encoding_length_map
+        )
         for rect in page.pdf_rectangle:
             if rect.debug_info:
                 self._render_rectangle(page_op, rect)
@@ -1076,10 +1078,13 @@ class PDFCreater:
             logger.error(f"Error terminating PDF save process: {e}")
 
     @staticmethod
-    def _copy_saved_pdf(temp_input: str, temp_output: str, output_path: str, pdf) -> bool:
+    def _copy_saved_pdf(
+        temp_input: str, temp_output: str, output_path: str, pdf
+    ) -> bool:
         """Copy temp_output to output_path, falling back to pdf.save on error."""
         try:
             import shutil
+
             shutil.copy2(temp_output, output_path)
             return True
         except Exception as e:
@@ -1128,7 +1133,15 @@ class PDFCreater:
         pdf.save(temp_input)
         process = Process(
             target=_save_pdf_clean_process,
-            args=(temp_input, temp_output, garbage, deflate, clean, deflate_fonts, linear),
+            args=(
+                temp_input,
+                temp_output,
+                garbage,
+                deflate,
+                clean,
+                deflate_fonts,
+                linear,
+            ),
         )
         process.start()
 
@@ -1293,7 +1306,14 @@ class PDFCreater:
         return should_removed_page
 
     def _save_output_pdfs(
-        self, pdf, mono_out_path, translation_config, basename, debug_suffix, gc_level, should_removed_page
+        self,
+        pdf,
+        mono_out_path,
+        translation_config,
+        basename,
+        debug_suffix,
+        gc_level,
+        should_removed_page,
     ):
         """Save mono and dual output PDFs under progress monitor tracking."""
         dual_out_path = None
@@ -1332,10 +1352,17 @@ class PDFCreater:
             translation_config.raise_if_cancelled()
             gc_level = 4 if self.translation_config.ocr_workaround else 1
             pdf = self._subset_and_restore(pdf, translation_config)
-            should_removed_page = self._remove_untranslated_pages(pdf, translation_config)
+            should_removed_page = self._remove_untranslated_pages(
+                pdf, translation_config
+            )
             dual_out_path = self._save_output_pdfs(
-                pdf, mono_out_path, translation_config,
-                basename, debug_suffix, gc_level, should_removed_page
+                pdf,
+                mono_out_path,
+                translation_config,
+                basename,
+                debug_suffix,
+                gc_level,
+                should_removed_page,
             )
             if self.translation_config.no_mono:
                 mono_out_path = None
@@ -1353,7 +1380,9 @@ class PDFCreater:
                 return self.write(translation_config, True)
             raise
 
-    def _build_xobj_maps(self, page, pdf, available_font_list, page_encoding_length_map):
+    def _build_xobj_maps(
+        self, page, pdf, available_font_list, page_encoding_length_map
+    ):
         """Build xobj font/encoding/draw-op maps for all xobjects on the page."""
         xobj_available_fonts = {}
         xobj_draw_ops = {}
@@ -1376,7 +1405,12 @@ class PDFCreater:
             base_op = zstd_decompress(xobj.base_operations.value)
             xobj_op.append(base_op.encode())
             xobj_draw_ops[xobj.xobj_id] = xobj_op
-        return xobj_available_fonts, xobj_encoding_length_map, all_encoding_length_map, xobj_draw_ops
+        return (
+            xobj_available_fonts,
+            xobj_encoding_length_map,
+            all_encoding_length_map,
+            xobj_draw_ops,
+        )
 
     def _flush_xobj_streams(self, page, pdf, xobj_draw_ops):
         """Write each xobject's draw BitStream back into the PDF."""
@@ -1404,7 +1438,9 @@ class PDFCreater:
             xobj_encoding_length_map,
             all_encoding_length_map,
             xobj_draw_ops,
-        ) = self._build_xobj_maps(page, pdf, available_font_list, page_encoding_length_map)
+        ) = self._build_xobj_maps(
+            page, pdf, available_font_list, page_encoding_length_map
+        )
         page_op = BitStream()
         page_op.append(ctm_for_ops)
         page_op.append(b" \n")

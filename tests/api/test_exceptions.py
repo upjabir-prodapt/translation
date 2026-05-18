@@ -43,22 +43,26 @@ class TestExceptions:
 
     def test_file_processing_error_with_file_id(self):
         from src.api.exceptions import FileProcessingError
+
         exc = FileProcessingError("processing failed", file_id="abc123")
         assert exc.message == "processing failed"
         assert exc.details == {"file_id": "abc123"}
 
     def test_file_processing_error_without_file_id(self):
         from src.api.exceptions import FileProcessingError
+
         exc = FileProcessingError("processing failed")
         assert exc.details == {}
 
     def test_translation_error_with_details(self):
         from src.api.exceptions import TranslationError
+
         exc = TranslationError("failed", job_id="j1", stage="tokenize")
         assert exc.details == {"job_id": "j1", "stage": "tokenize"}
 
     def test_translation_error_partial_details(self):
         from src.api.exceptions import TranslationError
+
         exc = TranslationError("failed", job_id="j1")
         assert exc.details == {"job_id": "j1"}
         assert "stage" not in exc.details

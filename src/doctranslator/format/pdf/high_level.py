@@ -670,7 +670,9 @@ def _fix_single_xref_entry(doc: Document, i: int) -> None:
     obj = doc.xref_object(i)
     if obj == "null":
         doc.update_object(i, "[]")
-    elif obj and ("/ASCII85Decode" in obj or "/LZWDecode" in obj):  # make pdfminer happy
+    elif obj and (
+        "/ASCII85Decode" in obj or "/LZWDecode" in obj
+    ):  # make pdfminer happy
         data = doc.xref_stream(i)
         doc.update_stream(i, data)
     elif obj and "/Annots" in obj:
@@ -929,14 +931,14 @@ def _check_input_metadata(original_pdf_path) -> None:
         logger.warning(f"Error in check metadata, continue: {e}")
 
 
-def _try_migrate_toc(translation_config: TranslationConfig, result: TranslateResult) -> None:
+def _try_migrate_toc(
+    translation_config: TranslationConfig, result: TranslateResult
+) -> None:
     """Attempt TOC migration; log errors without raising."""
     try:
         migrate_toc(translation_config, result)
     except Exception as e:
-        logger.error(
-            f"Failed to migrate TOC from {translation_config.input_file}: {e}"
-        )
+        logger.error(f"Failed to migrate TOC from {translation_config.input_file}: {e}")
 
 
 def _finalize_translate_result(

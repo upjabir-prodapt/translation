@@ -76,13 +76,18 @@ class TestPDFValidator:
 
     def test_validate_pdf_bytes_fitz_file_data_error(self):
         import fitz
-        with patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata") as mock_extract:
+
+        with patch(
+            "src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata"
+        ) as mock_extract:
             mock_extract.side_effect = fitz.FileDataError("corrupt")
             with pytest.raises(ValidationError, match="Invalid or corrupted PDF file"):
                 PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
 
     def test_validate_pdf_bytes_generic_exception(self):
-        with patch("src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata") as mock_extract:
+        with patch(
+            "src.api.utils.pdf_validator.PDFValidator.extract_pdf_metadata"
+        ) as mock_extract:
             mock_extract.side_effect = OSError("unexpected")
             with pytest.raises(ValidationError, match="Failed to validate PDF"):
                 PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
@@ -90,6 +95,7 @@ class TestPDFValidator:
     @pytest.mark.asyncio
     async def test_validate_pdf_file_too_large(self):
         from unittest.mock import AsyncMock
+
         with patch("src.api.utils.pdf_validator.settings") as mock_settings:
             mock_settings.MAX_FILE_SIZE = 10
             # UploadFile.read(n) returns exactly n bytes when file is >= MAX_FILE_SIZE
@@ -114,6 +120,7 @@ class TestPDFValidator:
     @pytest.mark.asyncio
     async def test_validate_pdf_file_fitz_error(self):
         import fitz
+
         file_content = b"%PDF-1.4\n%%EOF"
         file = UploadFile(filename="bad.pdf", file=io.BytesIO(file_content))
         with patch.object(

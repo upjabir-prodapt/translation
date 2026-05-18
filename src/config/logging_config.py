@@ -56,7 +56,9 @@ def setup_logging():
     # to loguru. Loguru then applies the real level filter (settings.LOG_LEVEL).
     # force=True removes any previously installed handlers so nothing bypasses
     # the interceptor and logs sensitive data through an uncontrolled channel.
-    logging.basicConfig(handlers=[InterceptHandler()], level=logging.NOTSET, force=True)  # NOSONAR
+    logging.basicConfig(
+        handlers=[InterceptHandler()], level=logging.NOTSET, force=True
+    )  # NOSONAR
 
     # Set specific loggers
     logging.getLogger("uvicorn").handlers = [InterceptHandler()]

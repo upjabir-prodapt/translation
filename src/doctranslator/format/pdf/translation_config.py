@@ -395,7 +395,8 @@ class TranslationConfig:
         disable_same_text_fallback: bool = settings.LLM_DISABLE_SAME_TEXT_FALLBACK,
         add_cover_page: bool = True,
         cover_page_metadata: TranslationCoverPageMetadata | None = None,
-        dlp_config: DlpConfig | None = None,  # NOSONAR - public configuration object; param count cannot be reduced below 13 without breaking callers
+        dlp_config: DlpConfig
+        | None = None,  # NOSONAR - public configuration object; param count cannot be reduced below 13 without breaking callers
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator

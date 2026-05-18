@@ -611,9 +611,7 @@ class ILCreater:
         _, to_unicode_id = self.mupdf.xref_get_key(xref_id, "ToUnicode")
         if to_unicode_id is None:
             return None
-        to_unicode_bytes = self.mupdf.xref_stream(
-            int(to_unicode_id.split(" ")[0])
-        )
+        to_unicode_bytes = self.mupdf.xref_stream(int(to_unicode_id.split(" ")[0]))
         code_range = re.search(
             b"begincodespacerange\n?.*<(\\d+?)>.*",
             to_unicode_bytes,
@@ -743,7 +741,9 @@ class ILCreater:
     def on_page_resource_font(self, font: PDFFont, xref_id: int, font_id: str):
         font_name = self._decode_font_name(font.fontname)
         logger.debug(f"handle font {font_name} @ {xref_id} in {self.xobj_id}")
-        il_font_metadata = self._build_il_font_metadata(font, xref_id, font_id, font_name)
+        il_font_metadata = self._build_il_font_metadata(
+            font, xref_id, font_id, font_name
+        )
         try:
             font_char_bounding_box_map = self._build_font_bbox_map(
                 xref_id, il_font_metadata, font_name
@@ -933,11 +933,21 @@ class ILCreater:
             y2=char.bbox[3],
         )
         if bbox.x2 < bbox.x or bbox.y2 < bbox.y:
-            logger.warning("Invalid bounding box for character %s: %s", char_unicode, bbox)
+            logger.warning(
+                "Invalid bounding box for character %s: %s", char_unicode, bbox
+            )
         return bbox
 
     def _build_pdf_char(
-        self, char: LTChar, char_id: int, char_unicode: str, advance, bbox, vertical, visual_bbox, gs
+        self,
+        char: LTChar,
+        char_id: int,
+        char_unicode: str,
+        advance,
+        bbox,
+        vertical,
+        visual_bbox,
+        gs,
     ) -> "il_version_1.PdfCharacter":
         """Construct the PdfCharacter IL object."""
         pdf_style = il_version_1.PdfStyle(
@@ -986,9 +996,13 @@ class ILCreater:
 
         gs = self.create_graphic_state(char.graphicstate)
         font = self._get_char_font(char)
-        descent = font.descent * char.size / 1000 if font and hasattr(font, "descent") else 0
+        descent = (
+            font.descent * char.size / 1000 if font and hasattr(font, "descent") else 0
+        )
         char_id = char.cid
-        char_bounding_box = self._get_char_bounding_box(char, font, char_id) if font else None
+        char_bounding_box = (
+            self._get_char_bounding_box(char, font, char_id) if font else None
+        )
 
         char_unicode = char.get_text()
         if space_regex.match(char_unicode):
@@ -1003,7 +1017,9 @@ class ILCreater:
             logger.warning("Font size is 0.0 for character %s. Skip it.", char_unicode)
             return
 
-        self._refine_visual_bbox(pdf_char, char, char_bounding_box, pdf_char.pdf_style.font_size)
+        self._refine_visual_bbox(
+            pdf_char, char, char_bounding_box, pdf_char.pdf_style.font_size
+        )
         self.current_page.pdf_character.append(pdf_char)
         self._maybe_add_char_box_rect(pdf_char)
 
@@ -1237,6 +1253,7 @@ class ILCreater:
     def _extract_inline_image_data(self, stream_obj) -> str:
         """Return base64-encoded image data from an inline image stream object."""
         import base64
+
         if hasattr(stream_obj, "data") and stream_obj.data is not None:
             return base64.b64encode(stream_obj.data).decode("ascii")
         if hasattr(stream_obj, "rawdata") and stream_obj.rawdata is not None:
@@ -1264,7 +1281,10 @@ class ILCreater:
     def on_inline_image_end(self, stream_obj, ctm):
         """End processing inline image and create PdfForm"""
         import json
-        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
+
+        from src.doctranslator.format.pdf.document_il.utils.matrix_helper import (
+            decompose_ctm,
+        )
 
         parameters = self._build_inline_image_parameters(stream_obj)
         image_data = self._extract_inline_image_data(stream_obj)

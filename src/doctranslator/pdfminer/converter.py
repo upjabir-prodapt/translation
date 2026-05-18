@@ -728,7 +728,9 @@ class HTMLConverter(PDFConverter[AnyIO]):
     def put_text(self, text: str, fontname: str, fontsize: float) -> None:
         font = (fontname, fontsize)
         if font != self._font:
-            if self._font is not None:  # NOSONAR - inner if is not the only statement in the outer block
+            if (
+                self._font is not None
+            ):  # NOSONAR - inner if is not the only statement in the outer block
                 self.write("</span>")
             # Remove subset tag from fontname, see PDF Reference 5.5.3
             fontname_without_subset_tag = fontname.split("+")[-1]

@@ -215,7 +215,9 @@ class ResultMerger:
 
         results = {k: v for k, v in results.items() if v is not None}
         sorted_results = dict(sorted(results.items()))
-        overlap_pages_list = self._build_overlap_pages_list(sorted_results, split_points)
+        overlap_pages_list = self._build_overlap_pages_list(
+            sorted_results, split_points
+        )
 
         merged_mono_path = self._try_merge_mono(
             results, sorted_results, mono_file_name, overlap_pages_list

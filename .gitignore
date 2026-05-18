@@ -129,4 +129,14 @@ deployment/terraform/*.tfstate.backup
 deployment/terraform/.terraform/
 deployment/terraform/terraform.tfvars
 service_account.json
-.scannerwork
+.scannerwork/
+
+# Coverage
+coverage.xml
+
+# SonarQube
+sonar-project.properties
+sonar-proper
+sonar_issues.json
+sonar_measures.json
+sonarqube-report.md

@@ -365,9 +365,7 @@ class CMapParser(PSStackParser[PSKeyword]):
             x = prefix + struct.pack(">L", base + i)[-vlen:]
             self.cmap.add_cid2unichr(start + i, x)
 
-    def _validate_bfrange_entry(
-        self, start_byte: object, end_byte: object
-    ) -> bool:
+    def _validate_bfrange_entry(self, start_byte: object, end_byte: object) -> bool:
         """Validate a single bfrange triplet; warn and return False if invalid."""
         if not isinstance(start_byte, bytes):
             self._warn_once("The start object is not a byte.")
@@ -476,7 +474,6 @@ class CMapParser(PSStackParser[PSKeyword]):
             return
 
         self._dispatch_cmap_keyword(pos, token)
-
 
     def _warn_once(self, msg: str) -> None:
         """Warn once for each unique message"""

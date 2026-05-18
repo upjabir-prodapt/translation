@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from src.api.exceptions import BabelDocError
@@ -95,15 +94,18 @@ class TestExceptionHandler:
         assert b"JOB_ALREADY_COMPLETED" in resp.body
 
     def test_handle_http_exception_with_dict_detail(self):
-        exc = HTTPException(status_code=400, detail={"error": {"message": "bad", "code": "BAD"}})
+        exc = HTTPException(
+            status_code=400, detail={"error": {"message": "bad", "code": "BAD"}}
+        )
         resp = handle_exception(exc)
         assert resp.status_code == 400
 
     def test_handle_str_repr_fallback(self):
-        class BadStr(Exception):
+        class BadStrError(Exception):
             def __str__(self):
                 raise RuntimeError("str failed")
-        exc = BadStr()
+
+        exc = BadStrError()
         resp = handle_exception(exc)
         assert resp.status_code == 500
 
@@ -113,7 +115,7 @@ class TestExceptionHandlerMiddleware:
         request = MagicMock()
         expected_response = MagicMock()
 
-        async def call_next(req):
+        async def call_next(_req):
             return expected_response
 
         result = await exception_handler_middleware(request, call_next)
@@ -122,7 +124,7 @@ class TestExceptionHandlerMiddleware:
     async def test_middleware_catches_validation_error(self):
         request = MagicMock()
 
-        async def call_next(req):
+        async def call_next(_req):
             raise ValidationError("bad input")
 
         result = await exception_handler_middleware(request, call_next)
@@ -132,7 +134,7 @@ class TestExceptionHandlerMiddleware:
     async def test_middleware_catches_generic_exception(self):
         request = MagicMock()
 
-        async def call_next(req):
+        async def call_next(_req):
             raise RuntimeError("unexpected failure")
 
         result = await exception_handler_middleware(request, call_next)
@@ -141,7 +143,7 @@ class TestExceptionHandlerMiddleware:
     async def test_middleware_catches_http_exception(self):
         request = MagicMock()
 
-        async def call_next(req):
+        async def call_next(_req):
             raise HTTPException(status_code=403, detail="Forbidden")
 
         result = await exception_handler_middleware(request, call_next)
@@ -151,7 +153,7 @@ class TestExceptionHandlerMiddleware:
         """Covers the asyncio.iscoroutine(exc) branch via patching."""
         request = MagicMock()
 
-        async def call_next(req):
+        async def call_next(_req):
             raise Exception("placeholder")
 
         with patch(

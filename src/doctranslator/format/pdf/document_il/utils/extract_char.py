@@ -2,7 +2,6 @@ import logging
 import shutil
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -145,7 +144,7 @@ def _recalculate_line_text_with_spacing(line, orientation):
 # vertical: True if the char is vertical, False if the char is horizontal
 def extract_paragraph_line(
     pdf_path,
-) -> Optional[dict[int, list[tuple[il_version_1.Box, str, bool]]]]:
+) -> dict[int, list[tuple[il_version_1.Box, str, bool]]] | None:
     il = parse_pdf(pdf_path)
     if il is None:
         return None

@@ -96,7 +96,7 @@ class BigQueryRepository:
         }
 
         jobs_table = self._validate_table_name(self.jobs_table)
-        query = f"""  # noqa: S608
+        query = f"""
         MERGE `{jobs_table}` T
         USING (
             SELECT
@@ -125,7 +125,7 @@ class BigQueryRepository:
         WHEN NOT MATCHED THEN
             INSERT (job_id, status, source_document, translation_config, cost_attribution, result, error_message, source_hash, submitted_at, completed_at)
             VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.result, S.error_message, S.source_hash, S.submitted_at, S.completed_at)
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("job_id", "STRING", row["job_id"]),
@@ -170,12 +170,12 @@ class BigQueryRepository:
 
     async def get_translation_job(self, job_id: str) -> dict[str, Any] | None:
         jobs_table = self._validate_table_name(self.jobs_table)
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT *
         FROM `{jobs_table}`
         WHERE job_id = @job_id
         LIMIT 1
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("job_id", "STRING", job_id)]
         )
@@ -203,13 +203,13 @@ class BigQueryRepository:
     ) -> list[dict[str, Any]]:
         jobs_table = self._validate_table_name(self.jobs_table)
         where_clause = "WHERE status = @status" if status else ""
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT *
         FROM `{jobs_table}`
         {where_clause}
         ORDER BY submitted_at DESC
         LIMIT @limit OFFSET @offset
-        """
+        """  # noqa: S608
         params: list[bigquery.ScalarQueryParameter] = [
             bigquery.ScalarQueryParameter("limit", "INT64", limit),
             bigquery.ScalarQueryParameter("offset", "INT64", offset),
@@ -285,12 +285,12 @@ class BigQueryRepository:
 
     async def read_dlp_tokens(self, job_id: str) -> list[dict[str, Any]]:
         dlp_tokens_table = self._validate_table_name(self.dlp_tokens_table)
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT job_id, chunk_index, token, original_value, info_type, masked_at
         FROM `{dlp_tokens_table}`
         WHERE job_id = @job_id
         ORDER BY chunk_index ASC
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("job_id", "STRING", job_id)]
         )

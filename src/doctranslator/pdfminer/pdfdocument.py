@@ -7,10 +7,13 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import KeysView
 from collections.abc import Sequence
-from hashlib import md5  # usedforsecurity=False applied at every call site — see note below
+from hashlib import (
+    md5,
+)  # usedforsecurity=False applied at every call site — see note below
 from hashlib import sha256
 from hashlib import sha384
 from hashlib import sha512
+
 # Note on MD5 usage: all md5() calls in this module implement Algorithms 3.2–3.7
 # from the PDF Reference (ISO 32000-1 §7.6.3). MD5 is mandated by the PDF
 # specification for revision 2–4 security handlers and cannot be substituted.
@@ -562,7 +565,9 @@ class PDFStandardSecurityHandlerV4(PDFStandardSecurityHandler):
         # PDF spec section 7.6.5 (AESV2) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(key),
-            modes.CBC(initialization_vector),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
+            modes.CBC(
+                initialization_vector
+            ),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
             backend=default_backend(),
         )  # type: ignore
         return cipher.decryptor().update(ciphertext)  # type: ignore
@@ -690,7 +695,9 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
         # PDF spec section 7.6.5 (AESV3) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(self.key),
-            modes.CBC(initialization_vector),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
+            modes.CBC(
+                initialization_vector
+            ),  # NOSONAR - PDF spec mandates AES-CBC; no alternative
             backend=default_backend(),
         )  # type: ignore
         return cipher.decryptor().update(ciphertext)  # type: ignore
