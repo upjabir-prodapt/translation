@@ -9,14 +9,23 @@ from abc import abstractmethod
 
 from google import genai
 from google.genai import types as genai_types
+from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
 from src.config.retry import llm_retry
+from src.config.tracing import tracer_llm
 from src.doctranslator.utils.atomic_integer import AtomicInteger
 
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS_LOG_PREVIEW = 120
+
+# OTel span attribute key constants (avoids S1192 duplicate-literal warnings)
+_ATTR_LLM_MODEL = "llm.model"
+_ATTR_LLM_PROVIDER = "llm.provider"
+_ATTR_LLM_TEMPERATURE = "llm.temperature"
+_ATTR_LLM_OUTPUT_TOKENS = "llm.output_tokens"
+_ATTR_LLM_TOTAL_TOKENS = "llm.total_tokens"
 
 
 def _usage_metadata_summary(response) -> str:
@@ -293,17 +302,32 @@ class GeminiVertexAITranslator(BaseTranslator):
             f"temperature={getattr(config, 'temperature', None)}",
         )
         t0 = time.monotonic()
-        try:
-            response = self.client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config,
-            )
-        finally:
-            elapsed = time.monotonic() - t0
-            logger.debug(
-                f"Gemini generate_content finished: model={model} latency_s={elapsed:.3f}",
-            )
+        with tracer_llm.start_as_current_span(
+            "gemini.generate_content",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_MODEL: model,
+                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_TEMPERATURE: float(getattr(config, "temperature", 0.0) or 0.0),
+                "llm.max_output_tokens": int(getattr(config, "max_output_tokens", 0) or 0),
+            },
+        ) as span:
+            try:
+                response = self.client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                usage = getattr(response, "usage_metadata", None)
+                if usage:
+                    span.set_attribute("llm.input_tokens", int(getattr(usage, "prompt_token_count", 0) or 0))
+                    span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(usage, "candidates_token_count", 0) or 0))
+                    span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(usage, "total_token_count", 0) or 0))
+            finally:
+                elapsed = time.monotonic() - t0
+                logger.debug(
+                    f"Gemini generate_content finished: model={model} latency_s={elapsed:.3f}",
+                )
         return response
 
     def do_translate(self, text, rate_limit_params: dict = None):
@@ -318,13 +342,27 @@ class GeminiVertexAITranslator(BaseTranslator):
             f"prompt_chars={c_len}",
         )
         t0 = time.monotonic()
-        response = self._generate_content_with_retry(
-            model=self.model,
-            contents=contents,
-            config=translate_config,
-        )
-        self._update_token_count(response)
-        out = self._extract_text(response)
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._generate_content_with_retry(
+                model=self.model,
+                contents=contents,
+                config=translate_config,
+            )
+            self._update_token_count(response)
+            out = self._extract_text(response)
+            _usage = getattr(response, "usage_metadata", None)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(_usage, "candidates_token_count", 0) or 0))
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(_usage, "total_token_count", 0) or 0))
         elapsed = time.monotonic() - t0
         o_len = len(out)
         if not out.strip() and c_len > 0:
@@ -361,13 +399,27 @@ class GeminiVertexAITranslator(BaseTranslator):
             f"prompt_chars={c_len} rate_limit_param_keys={rl_keys}",
         )
         t0 = time.monotonic()
-        response = self._generate_content_with_retry(
-            model=self.model,
-            contents=contents,
-            config=translate_config,
-        )
-        self._update_token_count(response)
-        out = self._extract_text(response)
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._generate_content_with_retry(
+                model=self.model,
+                contents=contents,
+                config=translate_config,
+            )
+            self._update_token_count(response)
+            out = self._extract_text(response)
+            _usage = getattr(response, "usage_metadata", None)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(_usage, "candidates_token_count", 0) or 0))
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(_usage, "total_token_count", 0) or 0))
         elapsed = time.monotonic() - t0
         o_len = len(out)
         if not out.strip() and c_len > 0:

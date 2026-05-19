@@ -1,69 +1,90 @@
-"""Logging configuration for the API service."""
+"""Logging configuration — stdlib logging with GcpJsonFormatter writing to stdout."""
 
+import json
 import logging
 import sys
-
-from loguru import logger
+from datetime import UTC
+from datetime import datetime
 
 from src.config.constants import settings
 
 
-class InterceptHandler(logging.Handler):  # NOSONAR
-    """Intercept standard logging and redirect to loguru.
+class GcpJsonFormatter(logging.Formatter):
+    """Formats log records as structured JSON for Cloud Logging.
 
-    Security: newlines and carriage returns are stripped from every message
-    before forwarding to prevent log-injection attacks (CWE-117).
-    Actual log-level filtering is applied by loguru (settings.LOG_LEVEL),
-    not by this handler, so the handler's own level is set to NOTSET.
+    Reads otelTraceID, otelSpanID, otelTraceSampled injected by
+    LoggingInstrumentor and maps them to the Cloud Logging correlation fields:
+      logging.googleapis.com/trace
+      logging.googleapis.com/spanId
+      logging.googleapis.com/trace_sampled
     """
 
-    def emit(self, record):
-        """Emit log record through loguru."""
-        # Get corresponding Loguru level if it exists
-        try:
-            level = logger.level(record.levelname).name
-        except ValueError:
-            level = record.levelno
+    _SEVERITY = {
+        "DEBUG": "DEBUG",
+        "INFO": "INFO",
+        "WARNING": "WARNING",
+        "ERROR": "ERROR",
+        "CRITICAL": "CRITICAL",
+    }
 
-        # Find caller from where originated the logged message
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
-            depth += 1
+    def __init__(self, project_id: str) -> None:
+        super().__init__()
+        self._project_id = project_id
 
-        # Sanitize message to prevent log injection (strips \n and \r)
+    def format(self, record: logging.LogRecord) -> str:
+        # Sanitize message — prevent log injection (CWE-117)
         message = record.getMessage().replace("\n", " ").replace("\r", " ")
-        logger.opt(depth=depth, exception=record.exc_info).log(level, message)
+
+        payload: dict = {
+            "severity": self._SEVERITY.get(record.levelname, record.levelname),
+            "message": message,
+            "time": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "logger": record.name,
+            "logging.googleapis.com/sourceLocation": {
+                "file": record.filename,
+                "line": str(record.lineno),
+                "function": record.funcName,
+            },
+        }
+
+        trace_id: str = getattr(record, "otelTraceID", "")
+        span_id: str = getattr(record, "otelSpanID", "")
+        sampled: bool = getattr(record, "otelTraceSampled", False)
+
+        if trace_id:
+            payload["logging.googleapis.com/trace"] = (
+                f"projects/{self._project_id}/traces/{trace_id}"
+            )
+        if span_id:
+            payload["logging.googleapis.com/spanId"] = span_id
+        if trace_id or span_id:
+            payload["logging.googleapis.com/trace_sampled"] = sampled
+
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        elif record.exc_text:
+            payload["exception"] = record.exc_text
+
+        return json.dumps(payload, ensure_ascii=False)
 
 
-def setup_logging():
-    """Configure logging for the application."""
-    # Remove default handlers
-    logger.remove()
+def setup_logging() -> None:
+    """Configure root logger with GcpJsonFormatter writing to stdout."""
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(GcpJsonFormatter(project_id=settings.GOOGLE_CLOUD_PROJECT_ID))
 
-    # Add console handler (terminal only)
-    logger.add(
-        sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-        "<level>{level: <8}</level> | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-        "<level>{message}</level>",
-        level=settings.LOG_LEVEL,
-    )
+    root = logging.getLogger()
+    root.setLevel(settings.LOG_LEVEL)
+    root.handlers.clear()
+    root.addHandler(handler)
 
-    # Intercept standard logging.
-    # level=NOTSET lets every record reach InterceptHandler, which forwards them
-    # to loguru. Loguru then applies the real level filter (settings.LOG_LEVEL).
-    # force=True removes any previously installed handlers so nothing bypasses
-    # the interceptor and logs sensitive data through an uncontrolled channel.
-    logging.basicConfig(handlers=[InterceptHandler()], level=logging.NOTSET, force=True)  # NOSONAR
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        log = logging.getLogger(name)
+        log.handlers.clear()
+        log.propagate = True
 
-    # Set specific loggers
-    logging.getLogger("uvicorn").handlers = [InterceptHandler()]
-    logging.getLogger("uvicorn.access").handlers = [InterceptHandler()]
-
-    logger.info("Logging configured")
+    logging.getLogger(__name__).info("Logging configured")
 
 
-# Auto-setup logging on import
+# Auto-setup on import — same behaviour as previous Loguru-based config
 setup_logging()

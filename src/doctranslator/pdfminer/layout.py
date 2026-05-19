@@ -857,9 +857,7 @@ class LTLayoutContainer(LTContainer[LTComponent]):
         x1 = max(obj1.x1, obj2.x1)
         y1 = max(obj1.y1, obj2.y1)
         return (
-            (x1 - x0) * (y1 - y0)
-            - obj1.width * obj1.height
-            - obj2.width * obj2.height
+            (x1 - x0) * (y1 - y0) - obj1.width * obj1.height - obj2.width * obj2.height
         )
 
     @staticmethod

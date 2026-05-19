@@ -19,9 +19,15 @@ from src.api.services.quality_judge_service import GoogleADKJudgeAgent
 from src.api.services.quality_judge_service import QualityJudgeResult
 from src.api.services.quality_judge_service import extract_attempt_text
 from src.api.services.task_models import DocTranslatorTranslationConfig
+import logging
+
+from opentelemetry.trace import SpanKind
+
 from src.config.constants import settings
-from src.config.logging_config import logger
+from src.config.tracing import tracer_pipeline
 from src.doctranslator import async_translate
+
+logger = logging.getLogger(__name__)
 from src.doctranslator.docvision.doclayout import OnnxModel
 from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
 from src.doctranslator.format.pdf.translation_config import DlpConfig
@@ -222,9 +228,17 @@ class JobProcessor:
             f"Attempt {attempt_index}/{max_attempts}: model={selected_model}",
         )
         try:
-            attempt_result = await self._run_single_attempt(
-                translation_config, attempt_config
-            )
+            with tracer_pipeline.start_as_current_span(
+                "pipeline.translation",
+                kind=SpanKind.INTERNAL,
+                attributes={
+                    "translation.attempt": attempt_index,
+                    "translation.model": selected_model,
+                },
+            ):
+                attempt_result = await self._run_single_attempt(
+                    translation_config, attempt_config
+                )
         except Exception as exc:
             logger.exception(
                 f"Attempt {attempt_index} failed with model {selected_model} with exception: {exc}"
@@ -236,11 +250,16 @@ class JobProcessor:
         source_text, translated_text = extract_attempt_text(
             Path(str(translation_config.working_dir))
         )
-        quality_result = await self._evaluate_attempt_quality(
-            judge=judge,
-            source_text=source_text,
-            translated_text=translated_text,
-        )
+        with tracer_pipeline.start_as_current_span(
+            "pipeline.quality_judge",
+            kind=SpanKind.INTERNAL,
+            attributes={"translation.attempt": attempt_index},
+        ):
+            quality_result = await self._evaluate_attempt_quality(
+                judge=judge,
+                source_text=source_text,
+                translated_text=translated_text,
+            )
         token_usage = self._collect_token_usage(translation_config, selected_model)
         attempt_report = {
             "attempt_index": attempt_index,
@@ -393,8 +412,13 @@ class JobProcessor:
             )
             if path
         }
-        for output_path in output_paths:
-            self._prepend_cover_page(output_path, metadata)
+        with tracer_pipeline.start_as_current_span(
+            "pipeline.pdf_typeset",
+            kind=SpanKind.INTERNAL,
+            attributes={"pdf.output_count": len(output_paths)},
+        ):
+            for output_path in output_paths:
+                self._prepend_cover_page(output_path, metadata)
 
     def _prepend_cover_page(
         self, pdf_path: Path, metadata: TranslationCoverPageMetadata

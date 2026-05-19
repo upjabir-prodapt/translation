@@ -9,12 +9,20 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import logging
+
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import storage
+from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
-from src.config.logging_config import logger
+from src.config.tracing import tracer_repository
 from src.repository.repository_exception import StorageError
+
+logger = logging.getLogger(__name__)
+
+_ATTR_RPC_SYSTEM = "rpc.system"
+_ATTR_GCS_BUCKET = "gcs.bucket"
 
 
 class FileType(Enum):
@@ -93,42 +101,53 @@ class StorageRepository:
         Raises:
             StorageError: If upload fails
         """
-        try:
-            blob = self.bucket.blob(blob_path)
+        size_bytes = len(source) if isinstance(source, bytes) else 0
+        with tracer_repository.start_as_current_span(
+            "gcs.upload",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_RPC_SYSTEM: "gcs",
+                _ATTR_GCS_BUCKET: self.bucket_name,
+                "gcs.object": blob_path,
+                "gcs.size_bytes": size_bytes,
+            },
+        ):
+            try:
+                blob = self.bucket.blob(blob_path)
 
-            if metadata:
-                blob.metadata = metadata
+                if metadata:
+                    blob.metadata = metadata
 
-            if isinstance(source, bytes):
-                if file_type:
-                    await asyncio.to_thread(
-                        blob.upload_from_string, source, content_type=file_type.value
-                    )
+                if isinstance(source, bytes):
+                    if file_type:
+                        await asyncio.to_thread(
+                            blob.upload_from_string, source, content_type=file_type.value
+                        )
+                    else:
+                        await asyncio.to_thread(blob.upload_from_string, source)
+                elif isinstance(source, Path):
+                    if not source.exists():
+                        raise FileNotFoundError(f"Source file not found: {source}")
+                    if file_type:
+                        await asyncio.to_thread(
+                            blob.upload_from_filename,
+                            str(source),
+                            content_type=file_type.value,
+                        )
+                    else:
+                        await asyncio.to_thread(blob.upload_from_filename, str(source))
                 else:
-                    await asyncio.to_thread(blob.upload_from_string, source)
-            elif isinstance(source, Path):
-                if not source.exists():
-                    raise FileNotFoundError(f"Source file not found: {source}")
-                if file_type:
-                    await asyncio.to_thread(
-                        blob.upload_from_filename,
-                        str(source),
-                        content_type=file_type.value,
-                    )
-                else:
-                    await asyncio.to_thread(blob.upload_from_filename, str(source))
-            else:
-                raise ValueError("Source must be Path or bytes")
+                    raise ValueError("Source must be Path or bytes")
 
-            gcs_uri = f"gs://{self.bucket_name}/{blob_path}"
-            logger.info(f"Uploaded file to {gcs_uri}")
-            return gcs_uri
+                gcs_uri = f"gs://{self.bucket_name}/{blob_path}"
+                logger.info(f"Uploaded file to {gcs_uri}")
+                return gcs_uri
 
-        except GoogleAPIError as e:
-            logger.error(f"Failed to upload file: {e}")
-            raise StorageError(
-                f"Failed to upload file: {e}", operation="upload", path=blob_path
-            ) from e
+            except GoogleAPIError as e:
+                logger.error(f"Failed to upload file: {e}")
+                raise StorageError(
+                    f"Failed to upload file: {e}", operation="upload", path=blob_path
+                ) from e
 
     async def download_file(
         self, blob_path: str, local_path: Path, create_dirs: bool = True
@@ -147,24 +166,35 @@ class StorageRepository:
         Raises:
             StorageError: If download fails
         """
-        try:
-            blob = self.bucket.blob(blob_path)
+        with tracer_repository.start_as_current_span(
+            "gcs.download",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_RPC_SYSTEM: "gcs",
+                _ATTR_GCS_BUCKET: self.bucket_name,
+                "gcs.object": blob_path,
+            },
+        ) as span:
+            try:
+                blob = self.bucket.blob(blob_path)
 
-            if create_dirs:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
+                if create_dirs:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
 
-            await asyncio.to_thread(blob.download_to_filename, str(local_path))
+                await asyncio.to_thread(blob.download_to_filename, str(local_path))
 
-            logger.info(
-                f"Downloaded file from gs://{self.bucket_name}/{blob_path} to {local_path}"
-            )
-            return local_path
+                if local_path.exists():
+                    span.set_attribute("gcs.size_bytes", local_path.stat().st_size)
+                logger.info(
+                    f"Downloaded file from gs://{self.bucket_name}/{blob_path} to {local_path}"
+                )
+                return local_path
 
-        except GoogleAPIError as e:
-            logger.error(f"Failed to download file: {e}")
-            raise StorageError(
-                f"Failed to download file: {e}", operation="download", path=blob_path
-            ) from e
+            except GoogleAPIError as e:
+                logger.error(f"Failed to download file: {e}")
+                raise StorageError(
+                    f"Failed to download file: {e}", operation="download", path=blob_path
+                ) from e
 
     async def list_files(
         self,
@@ -186,22 +216,32 @@ class StorageRepository:
         Raises:
             StorageError: If listing fails
         """
-        try:
-            blobs = await asyncio.to_thread(
-                lambda: list(
-                    self.bucket.list_blobs(
-                        prefix=prefix, delimiter=delimiter, max_results=max_results
+        with tracer_repository.start_as_current_span(
+            "gcs.list",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_RPC_SYSTEM: "gcs",
+                _ATTR_GCS_BUCKET: self.bucket_name,
+                "gcs.prefix": prefix or "",
+            },
+        ) as span:
+            try:
+                blobs = await asyncio.to_thread(
+                    lambda: list(
+                        self.bucket.list_blobs(
+                            prefix=prefix, delimiter=delimiter, max_results=max_results
+                        )
                     )
                 )
-            )
-            logger.debug(f"Listed {len(blobs)} files with prefix '{prefix}'")
-            return blobs
+                span.set_attribute("gcs.result_count", len(blobs))
+                logger.debug(f"Listed {len(blobs)} files with prefix '{prefix}'")
+                return blobs
 
-        except GoogleAPIError as e:
-            logger.error(f"Failed to list files: {e}")
-            raise StorageError(
-                f"Failed to list files: {e}", operation="list", path=prefix or ""
-            ) from e
+            except GoogleAPIError as e:
+                logger.error(f"Failed to list files: {e}")
+                raise StorageError(
+                    f"Failed to list files: {e}", operation="list", path=prefix or ""
+                ) from e
 
     async def delete_file(self, blob_path: str) -> None:
         """

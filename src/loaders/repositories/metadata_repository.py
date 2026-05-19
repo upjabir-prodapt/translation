@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 from src.loaders.exceptions import MetadataNotFoundError
 from src.loaders.models import CMapMetadata
 from src.loaders.models import FontMetadata

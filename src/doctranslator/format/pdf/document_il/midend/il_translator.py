@@ -475,8 +475,8 @@ class ILTranslator:
         """Update title context and submit a paragraph for translation."""
         paragraph_token_count = self.calc_token_count(paragraph.unicode)
         if paragraph.layout_label == "title":
-            self.shared_context_cross_split_part.recent_title_paragraph = (
-                copy.deepcopy(paragraph)
+            self.shared_context_cross_split_part.recent_title_paragraph = copy.deepcopy(
+                paragraph
             )
         executor.submit(
             self.translate_paragraph,
@@ -503,7 +503,13 @@ class ILTranslator:
         page_font_map, page_xobj_font_map = self._build_page_font_maps(page)
         for paragraph in page.pdf_paragraph:
             self._submit_paragraph_translation(
-                paragraph, page, pbar, tracker, page_font_map, page_xobj_font_map, executor
+                paragraph,
+                page,
+                pbar,
+                tracker,
+                page_font_map,
+                page_xobj_font_map,
+                executor,
             )
 
     class TranslateInput:
@@ -1009,15 +1015,21 @@ class ILTranslator:
             if match.start() > last_end:
                 text = output[last_end : match.start()]
                 if text:
-                    result.append(self._make_plain_text_comp(text, base_style, remove_placeholder))
+                    result.append(
+                        self._make_plain_text_comp(text, base_style, remove_placeholder)
+                    )
             result.append(
-                self._resolve_matched_placeholder(match.group(0), placeholders, remove_placeholder)
+                self._resolve_matched_placeholder(
+                    match.group(0), placeholders, remove_placeholder
+                )
             )
             last_end = match.end()
         if last_end < len(output):
             text = output[last_end:]
             if text:
-                result.append(self._make_plain_text_comp(text, base_style, remove_placeholder))
+                result.append(
+                    self._make_plain_text_comp(text, base_style, remove_placeholder)
+                )
         return result
 
     def parse_translate_output(
@@ -1050,8 +1062,11 @@ class ILTranslator:
         )
 
         return self._collect_output_segments(
-            output, combined_pattern, input_text.placeholders,
-            input_text.base_style, remove_placeholder
+            output,
+            combined_pattern,
+            input_text.placeholders,
+            input_text.base_style,
+            remove_placeholder,
         )
 
     def pre_translate_paragraph(

@@ -206,7 +206,9 @@ def find_fonts_by_debug_id(json_path: Path, debug_id_regex: str) -> dict[str, st
 
     for page in doc_data.get("page", []):
         page_font_map = _build_page_font_map(page)
-        found_fonts.update(_collect_matching_fonts_from_page(page, pattern, page_font_map))
+        found_fonts.update(
+            _collect_matching_fonts_from_page(page, pattern, page_font_map)
+        )
 
     return dict(found_fonts)
 

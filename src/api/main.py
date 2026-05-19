@@ -11,12 +11,18 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import logging
+
 from src.api.middleware.exception_handler import exception_handler_middleware
+from src.api.middleware.trace_middleware import TraceEnrichmentMiddleware
 from src.api.routes.router import api_router
 from src.api.services.startup_assets_service import StartupAssetsService
 from src.api.services.startup_assets_service import create_background_task
 from src.config.constants import settings
-from src.config.logging_config import logger
+from src.config.logging_config import setup_logging
+from src.config.telemetry import setup_telemetry
+
+logger = logging.getLogger(__name__)
 
 # Track startup time
 app_start_time = datetime.now(UTC)
@@ -25,7 +31,11 @@ app_start_time = datetime.now(UTC)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Application lifespan handler."""
-    # Startup
+    # Startup — ordering is critical: telemetry first, then logging.
+    # LoggingInstrumentor (called inside setup_telemetry) must register its
+    # record factory before GcpJsonFormatter starts reading otelTraceID/otelSpanID.
+    setup_telemetry(_app, settings)
+    setup_logging()
     logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
     startup_assets = StartupAssetsService()
     _app.state.startup_preflight_status = None
@@ -38,7 +48,7 @@ async def lifespan(_app: FastAPI):
             )
             _app.state.startup_preflight_status = preflight_status
             logger.info(
-                f"Startup assets preflight complete (critical_sync_ok={preflight_status.critical_sync_ok} ready={preflight_status.critical_files_ready})",
+                "Startup assets preflight complete (critical_sync_ok=%s ready=%s)",
                 preflight_status.critical_sync_ok,
                 preflight_status.critical_files_ready,
             )
@@ -85,6 +95,9 @@ app = FastAPI(
 
 # Add global exception handling middleware
 app.add_middleware(BaseHTTPMiddleware, dispatch=exception_handler_middleware)
+
+# Enrich OTel HTTP spans with user/org/job_id business attributes
+app.add_middleware(TraceEnrichmentMiddleware)
 
 # Add CORS middleware
 app.add_middleware(

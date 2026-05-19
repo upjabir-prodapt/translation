@@ -9,8 +9,10 @@ from typing import Any
 
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import bigquery
+from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
+from src.config.tracing import tracer_repository
 from src.repository.repository_exception import StorageError
 
 
@@ -65,7 +67,7 @@ class BigQueryRepository:
             ) from exc
 
     async def upsert_translation_job(self, job_data: dict[str, Any]) -> None:
-        """Insert or update a translation job row."""
+        """Insert or update a translation job row via MERGE."""
         if "job_id" not in job_data:
             raise StorageError(
                 f"job_id is required for {settings.BIGQUERY_TABLE} upsert",
@@ -96,7 +98,7 @@ class BigQueryRepository:
         }
 
         jobs_table = self._validate_table_name(self.jobs_table)
-        query = f"""  # noqa: S608
+        query = f"""
         MERGE `{jobs_table}` T
         USING (
             SELECT
@@ -125,7 +127,7 @@ class BigQueryRepository:
         WHEN NOT MATCHED THEN
             INSERT (job_id, status, source_document, translation_config, cost_attribution, result, error_message, source_hash, submitted_at, completed_at)
             VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.result, S.error_message, S.source_hash, S.submitted_at, S.completed_at)
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("job_id", "STRING", row["job_id"]),
@@ -154,46 +156,69 @@ class BigQueryRepository:
                 ),
             ]
         )
-        try:
-            query_job = await asyncio.to_thread(
-                self.client.query,
-                query,
-                job_config=job_config,
-            )
-            await asyncio.to_thread(query_job.result)
-        except GoogleAPIError as exc:
-            raise StorageError(
-                f"Failed to upsert translation job: {exc}",
-                operation="upsert",
-                path=self.jobs_table,
-            ) from exc
+        with tracer_repository.start_as_current_span(
+            "bigquery.merge",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "db.system": "bigquery",
+                "db.name": self.dataset,
+                "db.sql.table": settings.BIGQUERY_TABLE,
+                "db.operation": "MERGE",
+                "translation.job_id": str(job_data.get("job_id", "")),
+            },
+        ):
+            try:
+                query_job = await asyncio.to_thread(
+                    self.client.query,
+                    query,
+                    job_config=job_config,
+                )
+                await asyncio.to_thread(query_job.result)
+            except GoogleAPIError as exc:
+                raise StorageError(
+                    f"Failed to upsert translation job: {exc}",
+                    operation="upsert",
+                    path=self.jobs_table,
+                ) from exc
 
     async def get_translation_job(self, job_id: str) -> dict[str, Any] | None:
         jobs_table = self._validate_table_name(self.jobs_table)
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT *
         FROM `{jobs_table}`
         WHERE job_id = @job_id
         LIMIT 1
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("job_id", "STRING", job_id)]
         )
-        try:
-            query_job = await asyncio.to_thread(
-                self.client.query, query, job_config=job_config
-            )
-            rows = list(await asyncio.to_thread(query_job.result))
-            if not rows:
-                return None
-            row = rows[0]
-            return self._deserialize_job_row(row)
-        except GoogleAPIError as exc:
-            raise StorageError(
-                f"Failed to query translation job: {exc}",
-                operation="select",
-                path=self.jobs_table,
-            ) from exc
+        with tracer_repository.start_as_current_span(
+            "bigquery.get",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "db.system": "bigquery",
+                "db.name": self.dataset,
+                "db.sql.table": settings.BIGQUERY_TABLE,
+                "db.operation": "SELECT",
+                "translation.job_id": job_id,
+            },
+        ) as span:
+            try:
+                query_job = await asyncio.to_thread(
+                    self.client.query, query, job_config=job_config
+                )
+                rows = list(await asyncio.to_thread(query_job.result))
+                span.set_attribute("row_found", len(rows) > 0)
+                if not rows:
+                    return None
+                row = rows[0]
+                return self._deserialize_job_row(row)
+            except GoogleAPIError as exc:
+                raise StorageError(
+                    f"Failed to query translation job: {exc}",
+                    operation="select",
+                    path=self.jobs_table,
+                ) from exc
 
     async def list_translation_jobs(
         self,
@@ -203,13 +228,13 @@ class BigQueryRepository:
     ) -> list[dict[str, Any]]:
         jobs_table = self._validate_table_name(self.jobs_table)
         where_clause = "WHERE status = @status" if status else ""
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT *
         FROM `{jobs_table}`
         {where_clause}
         ORDER BY submitted_at DESC
         LIMIT @limit OFFSET @offset
-        """
+        """  # noqa: S608
         params: list[bigquery.ScalarQueryParameter] = [
             bigquery.ScalarQueryParameter("limit", "INT64", limit),
             bigquery.ScalarQueryParameter("offset", "INT64", offset),
@@ -232,12 +257,24 @@ class BigQueryRepository:
             ) from exc
 
     async def patch_translation_job(self, job_id: str, updates: dict[str, Any]) -> None:
-        current = await self.get_translation_job(job_id)
-        merged = {**(current or {"job_id": job_id}), **updates}
-        merged["job_id"] = job_id
-        if not merged.get("submitted_at"):
-            merged["submitted_at"] = datetime.now(UTC)
-        await self.upsert_translation_job(merged)
+        with tracer_repository.start_as_current_span(
+            "bigquery.patch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "db.system": "bigquery",
+                "db.name": self.dataset,
+                "db.sql.table": settings.BIGQUERY_TABLE,
+                "db.operation": "MERGE",
+                "translation.job_id": job_id,
+                "fields_updated": ",".join(updates.keys()),
+            },
+        ):
+            current = await self.get_translation_job(job_id)
+            merged = {**(current or {"job_id": job_id}), **updates}
+            merged["job_id"] = job_id
+            if not merged.get("submitted_at"):
+                merged["submitted_at"] = datetime.now(UTC)
+            await self.upsert_translation_job(merged)
 
     def _deserialize_json(self, value: Any) -> Any:
         if value is None:
@@ -285,12 +322,12 @@ class BigQueryRepository:
 
     async def read_dlp_tokens(self, job_id: str) -> list[dict[str, Any]]:
         dlp_tokens_table = self._validate_table_name(self.dlp_tokens_table)
-        query = f"""  # noqa: S608
+        query = f"""
         SELECT job_id, chunk_index, token, original_value, info_type, masked_at
         FROM `{dlp_tokens_table}`
         WHERE job_id = @job_id
         ORDER BY chunk_index ASC
-        """
+        """  # noqa: S608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("job_id", "STRING", job_id)]
         )

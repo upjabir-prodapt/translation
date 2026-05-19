@@ -298,7 +298,9 @@ class AutomaticTermExtractor:
     def _is_batch_full(self, total_token_count: int, paragraphs: list) -> bool:
         """Return True when the current batch exceeds token or paragraph limits."""
         max_tokens = self.translation_config.llm_term_extraction_batch_max_tokens
-        max_paragraphs = self.translation_config.llm_term_extraction_batch_max_paragraphs
+        max_paragraphs = (
+            self.translation_config.llm_term_extraction_batch_max_paragraphs
+        )
         return total_token_count > max_tokens or len(paragraphs) > max_paragraphs
 
     def process_page(
@@ -317,7 +319,9 @@ class AutomaticTermExtractor:
             total_token_count += self.calc_token_count(paragraph.unicode)
             paragraphs.append(paragraph)
             if self._is_batch_full(total_token_count, paragraphs):
-                self._submit_batch(paragraphs, tracker, executor, pbar, total_token_count)
+                self._submit_batch(
+                    paragraphs, tracker, executor, pbar, total_token_count
+                )
                 paragraphs = []
                 total_token_count = 0
 

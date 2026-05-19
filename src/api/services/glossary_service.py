@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.glossary import GlossaryEntry
 from src.loaders.utils.path_helpers import get_cache_file_path

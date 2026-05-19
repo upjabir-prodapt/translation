@@ -5,7 +5,8 @@ from pathlib import Path
 from google.cloud import storage
 
 from src.config.constants import settings
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 from src.repository.storage_repository import FileType
 from src.repository.storage_repository import StorageError
 from src.repository.storage_repository import StorageRepository

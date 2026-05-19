@@ -123,7 +123,9 @@ class TestQualityJudgeService:
         assert result.alignment_score == 0.9
 
     @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
-    def test_judge_with_llm_parse_exception_fallback(self, mock_generate, mock_settings):
+    def test_judge_with_llm_parse_exception_fallback(
+        self, mock_generate, mock_settings
+    ):
         mock_response = MagicMock()
         mock_response.parsed = None
         mock_response.text = '{"alignment_score": 0.7, "omission_score": 0.7, "hallucination_score": 0.8, "reasons": ["ok"]}'
@@ -131,7 +133,9 @@ class TestQualityJudgeService:
         agent = GoogleADKJudgeAgent(model="gemini-pro")
         agent._client = MagicMock()
         # Make response.parsed raise when accessed
-        type(mock_response).parsed = property(lambda self: (_ for _ in ()).throw(Exception("parse error")))
+        type(mock_response).parsed = property(
+            lambda _: (_ for _ in ()).throw(Exception("parse error"))
+        )
         result = agent._judge_with_llm("Hello", "Bonjour")
         assert isinstance(result, QualityJudgeLLMScores)
 
@@ -142,7 +146,9 @@ class TestQualityJudgeService:
         agent = GoogleADKJudgeAgent(model="gemini-pro")
         agent._client = MagicMock()
         # Make parsed raise and text return unparseable JSON
-        type(mock_response).parsed = property(lambda self: (_ for _ in ()).throw(Exception("parse error")))
+        type(mock_response).parsed = property(
+            lambda _: (_ for _ in ()).throw(Exception("parse error"))
+        )
         mock_response.text = "not json at all !!!"
         result = agent._judge_with_llm("Hello", "Bonjour")
         assert isinstance(result, QualityJudgeLLMScores)
@@ -155,12 +161,15 @@ class TestQualityJudgeService:
             # Must be iterable of 2-tuples for dict() to work
             class FakeScores:
                 def __iter__(self):
-                    return iter([
-                        ("alignment_score", 0.8),
-                        ("omission_score", 0.9),
-                        ("hallucination_score", 0.85),
-                        ("reasons", ["r1"]),
-                    ])
+                    return iter(
+                        [
+                            ("alignment_score", 0.8),
+                            ("omission_score", 0.9),
+                            ("hallucination_score", 0.85),
+                            ("reasons", ["r1"]),
+                        ]
+                    )
+
             mock_judge.return_value = FakeScores()
             result = agent.evaluate(source_text="s", translated_text="t")
             assert isinstance(result, QualityJudgeResult)

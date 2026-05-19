@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-from src.config.logging_config import logger
+import logging
+logger = logging.getLogger(__name__)
 from src.config.translation_routing import select_model_list
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.repository import get_storage_client

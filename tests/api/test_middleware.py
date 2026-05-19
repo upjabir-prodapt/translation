@@ -31,7 +31,9 @@ def _load_middleware_file():
     """Load src/api/middleware.py directly (bypasses the package which shadows it)."""
     src_root = Path(__file__).parent.parent.parent
     middleware_path = src_root / "src" / "api" / "middleware.py"
-    spec = importlib.util.spec_from_file_location("_standalone_middleware", str(middleware_path))
+    spec = importlib.util.spec_from_file_location(
+        "_standalone_middleware", str(middleware_path)
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import copy
 import concurrent.futures
+import copy
 import logging
 import re
 import statistics
@@ -13,6 +13,7 @@ import pymupdf
 import regex
 from rtree import index
 
+from src.config.constants import settings
 from src.doctranslator.format.pdf.document_il import Box
 from src.doctranslator.format.pdf.document_il import PdfCharacter
 from src.doctranslator.format.pdf.document_il import PdfCurve
@@ -22,11 +23,12 @@ from src.doctranslator.format.pdf.document_il import PdfParagraphComposition
 from src.doctranslator.format.pdf.document_il import PdfStyle
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.doctranslator.format.pdf.document_il.utils.formular_helper import update_formula_data
+from src.doctranslator.format.pdf.document_il.utils.formular_helper import (
+    update_formula_data,
+)
 from src.doctranslator.format.pdf.document_il.utils.layout_helper import box_to_tuple
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.format.pdf.translation_config import WatermarkOutputMode
-from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
@@ -849,7 +851,9 @@ class Typesetting:
         scale_lock = threading.Lock()
         pbar_lock = threading.Lock()
 
-        def process_page(page: il_version_1.Page) -> tuple[list[float], list[il_version_1.PdfParagraph]]:
+        def process_page(
+            page: il_version_1.Page,
+        ) -> tuple[list[float], list[il_version_1.PdfParagraph]]:
             page_scales: list[float] = []
             page_paragraphs: list[il_version_1.PdfParagraph] = []
             fonts: dict[
@@ -1117,7 +1121,10 @@ class Typesetting:
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers
                 ) as executor:
-                    futures = [executor.submit(self.render_page, page) for page in document.page]
+                    futures = [
+                        executor.submit(self.render_page, page)
+                        for page in document.page
+                    ]
                     for future in concurrent.futures.as_completed(futures):
                         self.translation_config.raise_if_cancelled()
                         future.result()
@@ -1125,8 +1132,12 @@ class Typesetting:
                             pbar.advance()
         else:
             max_workers = max(1, int(settings.TYPESETTING_MAX_WORKERS))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(self.render_page, page) for page in document.page]
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                futures = [
+                    executor.submit(self.render_page, page) for page in document.page
+                ]
                 for future in concurrent.futures.as_completed(futures):
                     self.translation_config.raise_if_cancelled()
                     future.result()
