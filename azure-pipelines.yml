@@ -1,123 +1,80 @@
-# DocTranslator — test gate, container build/push (Artifact Registry), Cloud Run deploy
-# Uses Azure → GCP Workload Identity Federation via AzureCLI + external_account ADC JSON.
 trigger:
   branches:
     include:
-      - sandbox0.1
-
-pr:
-  branches:
-    include:
       - sandbox
+      - dev
+      - prod
 
 pool:
   vmImage: ubuntu-latest
 
 variables:
-  - name: Azure.WorkloadIdentity.Connection
-    value: 'sc-ado-gcp-aicoe'
-
-  - name: PROJECT_ID
-    value: 'aicoesandox'
-  - name: REGION
-    value: 'europe-west1'
-  - name: GoogleCloud.WorkloadIdentity.ProjectNumber
-    value: '297743845367'
-  - name: GoogleCloud.WorkloadIdentity.Pool
-    value: 'aicoesandox-ado-wip'
-  - name: GoogleCloud.WorkloadIdentity.Provider
-    value: 'aicoesandox-ado-wip-provider'
-  - name: GoogleCloud.WorkloadIdentity.ServiceAccount
-    value: 'aicoe-sbx-wif-sa-tf@aicoesandox.iam.gserviceaccount.com'
+  - ${{ if eq(variables['Build.SourceBranchName'], 'sandbox')}}:
+      - group: translation-sandbox
+  - ${{ if eq(variables['Build.SourceBranchName'], 'dev')}}:
+      - group: translation-dev
+  - ${{ if eq(variables['Build.SourceBranchName'], 'prod')}}:
+      - group: translation-prod
   - name: GOOGLE_APPLICATION_CREDENTIALS
     value: '$(Pipeline.Workspace)/.workload_identity.wlconfig'
-
-  - name: IMAGE_NAME
-    value: 'translation'
-  - name: REPO_NAME
-    value: 'aicoesandox-docker-repo'
-  - name: SERVICE_NAME
-    value: 'translation-api-service'
-  - name: ENV
-    value: 'sandox'
   - name: ROOT
-    value: '$(Build.SourcesDirectory)'
-  - name: APP_CONFIG_SECRET_NAME
-    value: 'translation-service-env'
-  - name: NETWORK
-    value: 'aicoesandox-vpc'
-  - name: SUBNET
-    value: 'aicoesandox-subnet'
-  - name: APP_CONFIG_SECRET_VERSION
-    value: '7'
-  - name: GCS_BUCKET_NAME
-    value: 'aicoesandox-vxai-translation-app-001'
-  - name: GCS_ASSETS_DIR
-    value: 'assets'
-  - name: ASSETS_MOUNT_PATH
-    value: '/mnt/assets-cache'
-
-  - name: PYTHON_VERSION
-    value: '3.12'
-  - name: COVERAGE_FAIL_UNDER
-    value: '80'
+    value: '$(Build.SourcesDirectory)'  
 
 stages:
-  # ==========================================================================
-  # STAGE 0 — TESTS & COVERAGE GATE (blocks build if coverage < COVERAGE_FAIL_UNDER)
-  # ==========================================================================
-  # - stage: Test
-  #   displayName: Tests and coverage gate
-  #   jobs:
-  #     - job: TestJob
-  #       displayName: Lint and test
-  #       steps:
-  #         - checkout: self
-  #           fetchDepth: 0
-  #           displayName: Checkout source
+# ============================================================================
+# STAGE 0 — TESTS & COVERAGE GATE (blocks build if coverage < 80%)
+# ============================================================================
+  - stage: UnitTest
+    displayName: Tests & Coverage Gate
+    jobs:
+      - job: PytestCoverage
+        displayName: pytest with coverage >= 80%
+        steps:
+          - checkout: self
+            displayName: 'Checkout source'
 
-  #         - task: UsePythonVersion@0
-  #           inputs:
-  #             versionSpec: $(PYTHON_VERSION)
-  #             addToPath: true
-  #           displayName: Use Python $(PYTHON_VERSION)
+          - task: UsePythonVersion@0
+            displayName: 'Use Python 3.11'
+            inputs:
+              versionSpec: '3.11'
+              addToPath: true
 
-  #         - script: |
-  #             set -euo pipefail
-  #             python -m pip install --upgrade pip
-  #             pip install "uv>=0.5"
-  #           displayName: Install uv
+          - script: |
+              python -m pip install --upgrade pip
+              pip install uv
+              uv sync --frozen
+            displayName: 'Install dependencies (uv sync)'
 
-  #         - script: uv sync --frozen --all-groups
-  #           displayName: Install dependencies (uv sync)
+          - script: |
+              uv run pytest \
+                --cov=src \
+                --cov-report=xml:$(System.DefaultWorkingDirectory)/coverage.txt \
+                --cov-report=term-missing \
+                --cov-fail-under=80 \
+                --junitxml=$(System.DefaultWorkingDirectory)/test-results.txt
+            displayName: 'Run pytest with coverage gate (>= 80%)'
 
-  #         - script: uv run ruff check src tests
-  #           displayName: Ruff check
+          - task: PublishTestResults@2
+            displayName: 'Publish test results'
+            condition: always()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '$(System.DefaultWorkingDirectory)/test-results.txt'
+              testRunTitle: 'pytest'
+              failTaskOnFailedTests: true
 
-  #         - script: uv run ruff format --check src tests
-  #           displayName: Ruff format (--check)
-
-  #         - script: |
-  #             set -euo pipefail
-  #             uv run pytest \
-  #               --cov=src \
-  #               --cov-report=xml \
-  #               --cov-report=term \
-  #               --cov-fail-under=$(COVERAGE_FAIL_UNDER) \
-  #               -q
-  #           displayName: pytest + coverage (fail if below $(COVERAGE_FAIL_UNDER)%)
-
-  #         - task: PublishCodeCoverageResults@2
-  #           displayName: Publish coverage
-  #           inputs:
-  #             summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
-  #             failIfCoverageEmpty: true
+          - task: PublishCodeCoverageResults@2
+            displayName: 'Publish coverage report'
+            condition: always()
+            inputs:
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.txt'
 
   # ==========================================================================
   # STAGE 1 — BUILD and PUSH (only after Test succeeds)
   # ==========================================================================
   - stage: BuildAndPush
     displayName: Build and push Docker image
+    dependsOn: UnitTest
     jobs:
       - job: BuildPush
         displayName: Build and push
@@ -141,7 +98,7 @@ stages:
             displayName: Authenticate, build and push Docker image
             inputs:
               connectionType: 'azureRM'
-              azureSubscription: 'sc-ado-gcp-aicoe'
+              azureSubscription: $(Azure.WorkloadIdentity.Connection)
               addSpnToEnvironment: true
               scriptType: bash
               scriptLocation: inlineScript
@@ -170,12 +127,32 @@ stages:
                 docker build -t "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" "$(ROOT)"
                 docker push "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)"
 
+# ============================================================================
+# STAGE 2 — Deploy Approve
+# ============================================================================
+
+  - stage: Deploy_Approve
+    displayName: 'Deploy-Approve'
+    dependsOn: BuildAndPush
+    jobs:
+    - deployment: Deploy_Approve
+      displayName: 'Approve Deploy'
+      environment: $(ENV)        # ↝ ADO Environment with approval gate
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - script: |
+                echo "Approval granted for Deploy"
+                echo "Reviewer approved at: $(date -u)"
+              displayName: 'Approval Confirmed'
+
   # ==========================================================================
-  # STAGE 2 — DEPLOY
+  # STAGE 3 — DEPLOY
   # ==========================================================================
   - stage: Deploy
     displayName: Deploy to Cloud Run
-    dependsOn: BuildAndPush
+    dependsOn: Deploy_Approve
     condition: succeeded()
     jobs:
       - job: DeployJob
@@ -200,7 +177,7 @@ stages:
             displayName: Deploy to Cloud Run
             inputs:
               connectionType: 'azureRM'
-              azureSubscription: 'sc-ado-gcp-aicoe'
+              azureSubscription: $(Azure.WorkloadIdentity.Connection)
               addSpnToEnvironment: true
               scriptType: bash
               scriptLocation: inlineScript
@@ -231,6 +208,7 @@ stages:
                   --project="$(PROJECT_ID)" \
                   --network="$(NETWORK)"  \
                   --subnet="$(SUBNET)"  \
+                  --service-account="$(CLOUD_RUN_SA)" \
                   --min-instances=1 \
                   --concurrency=1 \
                   --port=8000 \
