@@ -29,8 +29,17 @@ def setup_telemetry(app, settings) -> None:
     except Exception:
         gcp_resource = Resource.get_empty()
 
+    import os
+
+    service_name = (
+        os.environ.get("OTEL_SERVICE_NAME")
+        or os.environ.get("K_SERVICE")
+        or settings.OTEL_SERVICE_NAME
+        or "translation_service"
+    )
+
     base_resource = Resource.create({
-        "service.name": "translation-api",
+        "service.name": service_name,
         "service.version": settings.APP_VERSION,
     })
     resource = base_resource.merge(gcp_resource)

@@ -263,6 +263,7 @@ class Settings(BaseSettings):
     TRACE_ENABLED: bool = True
     TRACE_SAMPLE_RATE: float = 1.0
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "telemetry.googleapis.com:443"
+    OTEL_SERVICE_NAME: str = "translation_service"
     APP_VERSION: str = "0.5.23"
 
     # -----------------------------
