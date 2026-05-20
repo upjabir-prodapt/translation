@@ -1,7 +1,8 @@
 """OTel SDK initialization — must be called before setup_logging()."""
 
+from google.cloud import trace_v2
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -44,9 +45,10 @@ def setup_telemetry(app, settings) -> None:
     })
     resource = base_resource.merge(gcp_resource)
 
-    exporter = OTLPSpanExporter(
-        endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT,
-        headers={"x-goog-user-project": settings.GOOGLE_CLOUD_PROJECT_ID},
+    client = trace_v2.TraceServiceClient(transport="rest")
+    exporter = CloudTraceSpanExporter(
+        project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+        client=client,
     )
 
     provider = TracerProvider(
