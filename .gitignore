@@ -140,3 +140,4 @@ sonar-proper
 sonar_issues.json
 sonar_measures.json
 sonarqube-report.md
+secret-manager.json
