@@ -43,12 +43,16 @@ def setup_telemetry(app, settings) -> None:
         "service.name": service_name,
         "service.version": settings.APP_VERSION,
     })
-    resource = base_resource.merge(gcp_resource)
+    resource = gcp_resource.merge(base_resource)
 
     client = trace_v2.TraceServiceClient(transport="rest")
     exporter = CloudTraceSpanExporter(
         project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
         client=client,
+        # resource_regex tells the exporter which resource attributes to copy
+        # into Cloud Trace span labels. Without this, service.name /
+        # service.version (and all other resource attrs) are silently dropped.
+        resource_regex=".*",
     )
 
     provider = TracerProvider(
