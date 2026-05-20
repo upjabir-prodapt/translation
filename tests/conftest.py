@@ -15,6 +15,7 @@ os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
 os.environ.setdefault("GCS_BUCKET_NAME", "mock-bucket")
 os.environ.setdefault("BIGQUERY_DATASET", "mock-dataset")
 os.environ.setdefault("JWT_SECRET_KEY", "mock-secret-key-for-testing-only-12345")
+os.environ.setdefault("TRACE_ENABLED", "false")
 
 import base64
 import io
