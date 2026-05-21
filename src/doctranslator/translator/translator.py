@@ -10,6 +10,8 @@ from abc import abstractmethod
 from google import genai
 from google.genai import types as genai_types
 from opentelemetry.trace import SpanKind
+from pydantic import BaseModel
+from pydantic import Field
 
 from src.config.constants import settings
 from src.config.retry import llm_retry
@@ -19,6 +21,12 @@ from src.doctranslator.utils.atomic_integer import AtomicInteger
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS_LOG_PREVIEW = 120
+
+
+class TranslationResponse(BaseModel):
+    """Structured translation response from the model."""
+
+    translated_text: str = Field(description="The translated text.")
 
 # OTel span attribute key constants (avoids S1192 duplicate-literal warnings)
 _ATTR_LLM_MODEL = "llm.model"
@@ -270,9 +278,22 @@ class GeminiVertexAITranslator(BaseTranslator):
         )
 
     def _extract_text(self, response) -> str:
+        parsed = getattr(response, "parsed", None)
+        if parsed and isinstance(parsed, TranslationResponse):
+            return parsed.translated_text
+
         text = getattr(response, "text", "")
         if text:
-            return text.strip()
+            text = text.strip()
+            if text.startswith("{"):
+                try:
+                    import json
+                    data = json.loads(text)
+                    if isinstance(data, dict) and "translated_text" in data:
+                        return str(data["translated_text"])
+                except Exception:
+                    pass
+            return text
         return ""
 
     def _update_token_count(self, response) -> None:
@@ -334,6 +355,8 @@ class GeminiVertexAITranslator(BaseTranslator):
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            response_mime_type="application/json",
+            response_schema=TranslationResponse,
         )
         contents = self.prompt(text)
         c_len = len(contents)
@@ -390,6 +413,8 @@ class GeminiVertexAITranslator(BaseTranslator):
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            response_mime_type="application/json",
+            response_schema=TranslationResponse,
         )
         contents = self.prompt(text)
         c_len = len(contents)

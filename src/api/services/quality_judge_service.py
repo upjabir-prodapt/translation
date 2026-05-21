@@ -176,7 +176,7 @@ class GoogleADKJudgeAgent:
             judge_config = genai_types.GenerateContentConfig(
                 temperature=0.1,
                 response_mime_type="application/json",
-                response_json_schema=QualityJudgeLLMScores.model_json_schema(),
+                response_schema=QualityJudgeLLMScores,
             )
             response = self._generate_judge_content_with_retry(
                 model=self.model,
