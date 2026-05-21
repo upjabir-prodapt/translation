@@ -9,6 +9,7 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import logging
@@ -81,6 +82,12 @@ async def lifespan(_app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await task
     logger.info("API shutting down")
+    # Flush and shut down the OTel TracerProvider so BatchSpanProcessor drains
+    # all buffered spans before the Cloud Run container is terminated.
+    provider = trace.get_tracer_provider()
+    if hasattr(provider, "shutdown"):
+        provider.shutdown()
+        logger.info("OTel TracerProvider shut down — all spans flushed")
 
 
 # Create FastAPI app

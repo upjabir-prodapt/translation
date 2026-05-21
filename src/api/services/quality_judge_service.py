@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import time
 from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +24,7 @@ from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
 from src.config.retry import llm_retry
+from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_llm
 
 logger = logging.getLogger(__name__)
@@ -96,11 +99,60 @@ class GoogleADKJudgeAgent:
     def _generate_judge_content_with_retry(
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
-        return self._client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
+        from opentelemetry.trace import Status, StatusCode
+
+        prompt_chars = len(contents)
+        prompt_hash = hashlib.md5(contents.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()[:12]  # noqa: S324
+        prompt_preview = contents[:300].replace("\n", "\\n")
+        temperature = float(getattr(config, "temperature", 0.0) or 0.0)
+        logger.debug(
+            f"Judge generate_content: model={model} "
+            f"prompt_chars={prompt_chars} prompt_hash={prompt_hash} "
+            f"temperature={temperature} "
+            f"prompt_preview={prompt_preview!r}",
         )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "llm.judge.generate_content",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "llm.name": "judge",
+                "llm.model": model,
+                "llm.provider": "google_vertexai",
+                "llm.temperature": temperature,
+                "llm.prompt_chars": prompt_chars,
+                "llm.prompt_hash": prompt_hash,
+                "llm.prompt_preview": prompt_preview,
+            },
+        ) as span:
+            try:
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                usage = getattr(response, "usage_metadata", None)
+                if usage:
+                    input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+                    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+                    total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
+                    cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+                    span.set_attribute("llm.input_tokens", input_tokens)
+                    span.set_attribute("llm.output_tokens", output_tokens)
+                    span.set_attribute("llm.total_tokens", total_tokens)
+                    span.set_attribute("llm.cached_tokens", cached_tokens)
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+            finally:
+                elapsed = time.monotonic() - t0
+                span.set_attribute("llm.latency_s", round(elapsed, 3))
+                logger.debug(
+                    f"Judge generate_content finished: model={model} "
+                    f"latency_s={elapsed:.3f} prompt_hash={prompt_hash}",
+                )
+        return response
 
     def _judge_with_llm(
         self, source_text: str, translated_text: str
@@ -205,12 +257,22 @@ class GoogleADKJudgeAgent:
                 )
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
+        source_chars = len(source_text)
+        translated_chars = len(translated_text)
+        logger.debug(
+            f"Judge evaluate: model={self.model} "
+            f"source_chars={source_chars} translated_chars={translated_chars}",
+        )
+        t0 = time.monotonic()
         with tracer_llm.start_as_current_span(
             "llm.judge",
             kind=SpanKind.CLIENT,
             attributes={
                 "llm.model": self.model,
+                "llm.name": "judge",
                 "llm.provider": "google_vertexai",
+                "judge.source_chars": source_chars,
+                "judge.translated_chars": translated_chars,
             },
         ) as span:
             llm_scores = self._judge_with_llm(source_text, translated_text)
@@ -224,19 +286,36 @@ class GoogleADKJudgeAgent:
             omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
             hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
             final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
+            passed = final >= settings.QUALITY_THRESHOLD
+            elapsed = time.monotonic() - t0
             span.set_attribute("judge.alignment_score", alignment)
             span.set_attribute("judge.omission_score", omission)
             span.set_attribute("judge.hallucination_score", hallucination)
-            span.set_attribute("judge.passed", final >= settings.QUALITY_THRESHOLD)
-            return QualityJudgeResult(
-                alignment_score=alignment,
-                omission_score=omission,
-                hallucination_score=hallucination,
-                final_score=final,
-                pass_fail=final >= settings.QUALITY_THRESHOLD,
-                reasons=list(llm_scores.get("reasons", [])),
-                model=self.model,
-            )
+            span.set_attribute("judge.final_score", round(final, 4))
+            span.set_attribute("judge.passed", passed)
+            span.set_attribute("llm.latency_s", round(elapsed, 3))
+        logger.info(
+            f"Judge evaluate done: model={self.model} "
+            f"latency_s={elapsed:.3f} "
+            f"source_chars={source_chars} translated_chars={translated_chars} "
+            f"alignment={alignment:.3f} omission={omission:.3f} "
+            f"hallucination={hallucination:.3f} final={final:.3f} passed={passed}",
+        )
+        # ── Bubble judge summary up to the pipeline.run root span ──────────
+        set_root_span_attributes({
+            "judge.model": self.model,
+            "judge.final_score": round(final, 4),
+            "judge.passed": passed,
+        })
+        return QualityJudgeResult(
+            alignment_score=alignment,
+            omission_score=omission,
+            hallucination_score=hallucination,
+            final_score=final,
+            pass_fail=passed,
+            reasons=list(llm_scores.get("reasons", [])),
+            model=self.model,
+        )
 
     async def evaluate_async(
         self, *, source_text: str, translated_text: str
