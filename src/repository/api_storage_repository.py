@@ -1,5 +1,7 @@
 """API Storage Repository - API-specific storage operations."""
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.cloud import storage
@@ -9,6 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 from src.repository.storage_repository import FileType
 from src.repository.storage_repository import StorageRepository
+from src.repository.repository_exception import StorageError
 
 
 class APIStorageRepository(StorageRepository):
@@ -71,9 +74,23 @@ class APIStorageRepository(StorageRepository):
         self, job_id: str, filename: str, folder: str = "output", expires_in: int = 3600
     ) -> str:
         blob_path = self.build_job_path(job_id=job_id, folder=folder, filename=filename)
-        return await self.generate_signed_url(
-            blob_path=blob_path, expires_in=expires_in, method="GET"
-        )
+        try:
+            blob = self.bucket.blob(blob_path)
+            expiration = datetime.now(UTC) + timedelta(seconds=expires_in)
+            url = await asyncio.to_thread(
+                blob.generate_signed_url,
+                expiration,
+                method="GET",
+                version="v4",
+            )
+            return url
+        except Exception as e:
+            logger.error(f"Failed to generate download URL: {e}")
+            raise StorageError(
+                f"Failed to generate signed URL: {e}",
+                operation="sign_url",
+                path=blob_path,
+            ) from e
 
     async def get_file_info(self, gcs_uri: str) -> dict[str, Any]:
         return await self.get_file_metadata(gcs_uri)
