@@ -11,7 +11,11 @@ from typing import Any
 
 import logging
 
+import google.auth
+import google.auth.transport.requests
 from google.api_core.exceptions import GoogleAPIError
+from google.auth import iam
+from google.auth.credentials import Credentials
 from google.cloud import storage
 from opentelemetry.trace import SpanKind
 
@@ -385,6 +389,10 @@ class StorageRepository:
         """
         Generate signed URL for file access.
 
+        Works both locally (service account key file) and on Cloud Run
+        (Compute Engine credentials), by falling back to IAM-based signing
+        when no private key is available in the current credentials.
+
         Args:
             blob_path: Blob path or GCS URI (gs://bucket/path)
             expires_in: Expiration time in seconds
@@ -401,11 +409,16 @@ class StorageRepository:
             blob = self.bucket.blob(blob_path)
             expiration = datetime.now(UTC) + timedelta(seconds=expires_in)
 
+            signing_credentials = await asyncio.to_thread(
+                self._get_signing_credentials
+            )
+
             url = await asyncio.to_thread(
                 blob.generate_signed_url,
                 expiration=expiration,
                 method=method,
                 version="v4",
+                credentials=signing_credentials,
             )
 
             logger.debug(f"Generated signed URL for {blob_path}")
@@ -418,6 +431,65 @@ class StorageRepository:
                 operation="sign_url",
                 path=blob_path,
             ) from e
+
+    @staticmethod
+    def _get_signing_credentials() -> Credentials | None:
+        """
+        Return credentials suitable for signing GCS URLs.
+
+        - If the current credentials already have a private key (e.g. a
+          service-account JSON key file used locally), return None so the
+          GCS client uses them as-is.
+        - Otherwise (Cloud Run / Compute Engine), build an IAM-backed signer
+          that delegates signing to the IAM API — no private key required.
+        """
+        credentials, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+
+        # Service account credentials loaded from a key file already have a
+        # private key — nothing extra needed.
+        if hasattr(credentials, "_private_key_pkcs8_pem") or hasattr(
+            credentials, "_signer"
+        ):
+            return None
+
+        # On GCE / Cloud Run we have impersonated or compute credentials that
+        # only carry a token.  Use the IAM signer instead.
+        request = google.auth.transport.requests.Request()
+        credentials.refresh(request)
+
+        service_account_email = getattr(
+            credentials, "service_account_email", None
+        )
+        if not service_account_email:
+            # Last resort: read the SA email from the GCE metadata server.
+            import urllib.request
+            meta_url = (
+                "http://metadata.google.internal/computeMetadata/v1/instance/"
+                "service-accounts/default/email"
+            )
+            req = urllib.request.Request(
+                meta_url, headers={"Metadata-Flavor": "Google"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                service_account_email = resp.read().decode()
+
+        signer = iam.Signer(
+            request=request,
+            credentials=credentials,
+            service_account=service_account_email,
+        )
+
+        # Build new service-account credentials that use IAM for signing.
+        from google.oauth2 import service_account as sa_module
+        signing_credentials = sa_module.Credentials(
+            signer=signer,
+            service_account_email=service_account_email,
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        return signing_credentials
 
     async def get_file_metadata(self, blob_path: str) -> dict[str, Any]:
         """

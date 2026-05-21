@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import logging
 import threading
 import time
@@ -15,6 +16,7 @@ from pydantic import Field
 
 from src.config.constants import settings
 from src.config.retry import llm_retry
+from src.config.tracing import set_root_span_attribute
 from src.config.tracing import tracer_llm
 from src.doctranslator.utils.atomic_integer import AtomicInteger
 
@@ -30,10 +32,20 @@ class TranslationResponse(BaseModel):
 
 # OTel span attribute key constants (avoids S1192 duplicate-literal warnings)
 _ATTR_LLM_MODEL = "llm.model"
+_ATTR_LLM_NAME = "llm.name"
 _ATTR_LLM_PROVIDER = "llm.provider"
 _ATTR_LLM_TEMPERATURE = "llm.temperature"
+_ATTR_LLM_INPUT_TOKENS = "llm.input_tokens"
 _ATTR_LLM_OUTPUT_TOKENS = "llm.output_tokens"
 _ATTR_LLM_TOTAL_TOKENS = "llm.total_tokens"
+_ATTR_LLM_PROMPT_CHARS = "llm.prompt_chars"
+_ATTR_LLM_PROMPT_HASH = "llm.prompt_hash"
+_ATTR_LLM_PROMPT_PREVIEW = "llm.prompt_preview"
+_ATTR_LLM_INPUT_CHARS = "llm.input_chars"
+_ATTR_LLM_OUTPUT_CHARS = "llm.output_chars"
+_ATTR_LLM_LATENCY_S = "llm.latency_s"
+
+_MAX_CHARS_PROMPT_PREVIEW = 300
 
 
 def _usage_metadata_summary(response) -> str:
@@ -317,20 +329,30 @@ class GeminiVertexAITranslator(BaseTranslator):
     def _generate_content_with_retry(
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
+        prompt_chars = len(contents)
+        prompt_hash = hashlib.md5(contents.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()[:12]  # noqa: S324
+        prompt_preview = contents[:_MAX_CHARS_PROMPT_PREVIEW].replace("\n", "\\n")
+        temperature = float(getattr(config, "temperature", 0.0) or 0.0)
+        max_output_tokens = int(getattr(config, "max_output_tokens", 0) or 0)
         logger.debug(
-            f"Gemini generate_content: model={model} contents_chars={len(contents)} "
-            f"max_output_tokens={getattr(config, 'max_output_tokens', None)} "
-            f"temperature={getattr(config, 'temperature', None)}",
+            f"Gemini generate_content: name={self.name} model={model} "
+            f"prompt_chars={prompt_chars} prompt_hash={prompt_hash} "
+            f"temperature={temperature} max_output_tokens={max_output_tokens} "
+            f"prompt_preview={prompt_preview!r}",
         )
         t0 = time.monotonic()
         with tracer_llm.start_as_current_span(
             "gemini.generate_content",
             kind=SpanKind.CLIENT,
             attributes={
+                _ATTR_LLM_NAME: self.name,
                 _ATTR_LLM_MODEL: model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
-                _ATTR_LLM_TEMPERATURE: float(getattr(config, "temperature", 0.0) or 0.0),
-                "llm.max_output_tokens": int(getattr(config, "max_output_tokens", 0) or 0),
+                _ATTR_LLM_TEMPERATURE: temperature,
+                _ATTR_LLM_PROMPT_CHARS: prompt_chars,
+                _ATTR_LLM_PROMPT_HASH: prompt_hash,
+                _ATTR_LLM_PROMPT_PREVIEW: prompt_preview,
+                "llm.max_output_tokens": max_output_tokens,
             },
         ) as span:
             try:
@@ -341,13 +363,25 @@ class GeminiVertexAITranslator(BaseTranslator):
                 )
                 usage = getattr(response, "usage_metadata", None)
                 if usage:
-                    span.set_attribute("llm.input_tokens", int(getattr(usage, "prompt_token_count", 0) or 0))
-                    span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(usage, "candidates_token_count", 0) or 0))
-                    span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(usage, "total_token_count", 0) or 0))
+                    input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+                    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+                    total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
+                    cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+                    span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+                    span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+                    span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, total_tokens)
+                    span.set_attribute("llm.cached_tokens", cached_tokens)
+            except Exception as exc:
+                span.record_exception(exc)
+                from opentelemetry.trace import Status, StatusCode
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
             finally:
                 elapsed = time.monotonic() - t0
+                span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
                 logger.debug(
-                    f"Gemini generate_content finished: model={model} latency_s={elapsed:.3f}",
+                    f"Gemini generate_content finished: name={self.name} model={model} "
+                    f"latency_s={elapsed:.3f} prompt_hash={prompt_hash}",
                 )
         return response
 
@@ -360,18 +394,24 @@ class GeminiVertexAITranslator(BaseTranslator):
         )
         contents = self.prompt(text)
         c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
         logger.debug(
-            f"do_translate: model={self.model} {self.lang_in}->{self.lang_out} "
-            f"prompt_chars={c_len}",
+            f"do_translate: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature}",
         )
         t0 = time.monotonic()
         with tracer_llm.start_as_current_span(
             "llm.translate_batch",
             kind=SpanKind.CLIENT,
             attributes={
+                _ATTR_LLM_NAME: self.name,
                 _ATTR_LLM_MODEL: self.model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
                 "translation.source_lang": self.lang_in,
                 "translation.target_lang": self.lang_out,
             },
@@ -384,23 +424,34 @@ class GeminiVertexAITranslator(BaseTranslator):
             self._update_token_count(response)
             out = self._extract_text(response)
             _usage = getattr(response, "usage_metadata", None)
-            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(_usage, "candidates_token_count", 0) or 0))
-            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(_usage, "total_token_count", 0) or 0))
+            input_tokens = int(getattr(_usage, "prompt_token_count", 0) or 0)
+            output_tokens = int(getattr(_usage, "candidates_token_count", 0) or 0)
+            total_tokens = int(getattr(_usage, "total_token_count", 0) or 0)
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, total_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
         elapsed = time.monotonic() - t0
-        o_len = len(out)
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        # ── Bubble key facts up to the pipeline.run root span ─────────────
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.name)
         if not out.strip() and c_len > 0:
             prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
             logger.warning(
-                f"do_translate empty model output: model={self.model} "
+                f"do_translate empty model output: name={self.name} model={self.model} "
                 f"prompt_chars={c_len} prompt_head={prev!r}",
             )
         logger.info(
-            f"do_translate done: model={self.model} {self.lang_in}->{self.lang_out} "
-            f"latency_s={elapsed:.3f} prompt_chars={c_len} out_chars={o_len} "
+            f"do_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
             f"{_usage_metadata_summary(response)}",
         )
         logger.debug(
-            f"do_translate totals: translator prompt_tokens="
+            f"do_translate totals: name={self.name} translator prompt_tokens="
             f"{self.prompt_token_count.value} completion_tokens="
             f"{self.completion_token_count.value}",
         )
@@ -418,19 +469,26 @@ class GeminiVertexAITranslator(BaseTranslator):
         )
         contents = self.prompt(text)
         c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
         rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
         logger.debug(
-            f"do_llm_translate begin: model={self.model} {self.lang_in}->{self.lang_out} "
-            f"prompt_chars={c_len} rate_limit_param_keys={rl_keys}",
+            f"do_llm_translate begin: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature} "
+            f"rate_limit_param_keys={rl_keys}",
         )
         t0 = time.monotonic()
         with tracer_llm.start_as_current_span(
             "llm.translate_batch",
             kind=SpanKind.CLIENT,
             attributes={
+                _ATTR_LLM_NAME: self.name,
                 _ATTR_LLM_MODEL: self.model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
                 "translation.source_lang": self.lang_in,
                 "translation.target_lang": self.lang_out,
             },
@@ -443,23 +501,34 @@ class GeminiVertexAITranslator(BaseTranslator):
             self._update_token_count(response)
             out = self._extract_text(response)
             _usage = getattr(response, "usage_metadata", None)
-            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, int(getattr(_usage, "candidates_token_count", 0) or 0))
-            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, int(getattr(_usage, "total_token_count", 0) or 0))
+            input_tokens = int(getattr(_usage, "prompt_token_count", 0) or 0)
+            output_tokens = int(getattr(_usage, "candidates_token_count", 0) or 0)
+            total_tokens = int(getattr(_usage, "total_token_count", 0) or 0)
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, total_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
         elapsed = time.monotonic() - t0
-        o_len = len(out)
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        # ── Bubble key facts up to the pipeline.run root span ─────────────
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.name)
         if not out.strip() and c_len > 0:
             prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
             logger.warning(
-                f"do_llm_translate empty model output: model={self.model} "
+                f"do_llm_translate empty model output: name={self.name} model={self.model} "
                 f"prompt_chars={c_len} prompt_head={prev!r}",
             )
         logger.info(
-            f"do_llm_translate done: model={self.model} {self.lang_in}->{self.lang_out} "
-            f"latency_s={elapsed:.3f} prompt_chars={c_len} out_chars={o_len} "
+            f"do_llm_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
             f"{_usage_metadata_summary(response)}",
         )
         logger.debug(
-            f"do_llm_translate totals: translator prompt_tokens="
+            f"do_llm_translate totals: name={self.name} translator prompt_tokens="
             f"{self.prompt_token_count.value} completion_tokens="
             f"{self.completion_token_count.value}",
         )

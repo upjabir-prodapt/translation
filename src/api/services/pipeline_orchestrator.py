@@ -22,6 +22,8 @@ from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode
 
 from src.config.constants import settings
+from src.config.tracing import set_root_span
+from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
@@ -121,6 +123,7 @@ class PipelineOrchestrator:
                 "translation.domain": str(translation_config.get("domain", "")),
             },
         ) as pipeline_span:
+            set_root_span(pipeline_span)
             await self._execute_pipeline(job_id, job_data, pipeline_span)
 
     async def _execute_pipeline(self, job_id: str, job_data: dict[str, Any], pipeline_span) -> None:
@@ -251,6 +254,28 @@ class PipelineOrchestrator:
                 }
             )
             logger.info(f"Translation pipeline finished for job {job_id}")
+
+            # ── Propagate final summary to the root pipeline span ──────────
+            quality_report = attempt_result.get("quality_report") or {}
+            token_usage = attempt_result.get("token_usage") or {}
+            set_root_span_attributes({
+                "pipeline.model_used": str(attempt_result.get("model_id") or ""),
+                "pipeline.intent": intent,
+                "pipeline.source_lang": source_lang,
+                "pipeline.target_lang": target_lang,
+                "pipeline.domain": domain,
+                "pipeline.attempt_index": int(attempt_result.get("attempt_index", 1)),
+                "pipeline.total_tokens": int(token_usage.get("total_tokens", 0)),
+                "pipeline.prompt_tokens": int(token_usage.get("prompt_tokens", 0)),
+                "pipeline.completion_tokens": int(token_usage.get("completion_tokens", 0)),
+                "pipeline.estimated_cost_usd": float(token_usage.get("estimated_cost_usd", 0.0)),
+                "pipeline.quality_final_score": float(quality_report.get("final_score", 0.0)),
+                "pipeline.quality_passed": bool(quality_report.get("pass_fail", False)),
+                "pipeline.quality_alignment": float(quality_report.get("alignment_score", 0.0)),
+                "pipeline.quality_omission": float(quality_report.get("omission_score", 0.0)),
+                "pipeline.quality_hallucination": float(quality_report.get("hallucination_score", 0.0)),
+                "pipeline.judge_model": str(quality_report.get("model") or ""),
+            })
         except Exception as exc:
             logger.error(f"Pipeline failed for job {job_id}. Exception: {exc}")
             pipeline_span.set_status(Status(StatusCode.ERROR, str(exc)))
