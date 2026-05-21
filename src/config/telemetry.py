@@ -43,7 +43,10 @@ def setup_telemetry(app, settings) -> None:
         "service.name": service_name,
         "service.version": settings.APP_VERSION,
     })
-    resource = gcp_resource.merge(base_resource)
+    # base_resource must be the receiver so that service.name / service.version
+    # take priority over anything the GCP detector may set for those keys.
+    # Resource.merge() semantics: self wins over the argument on key conflicts.
+    resource = base_resource.merge(gcp_resource)
 
     client = trace_v2.TraceServiceClient(transport="rest")
     exporter = CloudTraceSpanExporter(
