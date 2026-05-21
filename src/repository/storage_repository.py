@@ -478,7 +478,7 @@ class StorageRepository:
         signer = iam.Signer(
             request=request,
             credentials=credentials,
-            service_account=service_account_email,
+            service_account_email=service_account_email,
         )
 
         # Build new service-account credentials that use IAM for signing.
