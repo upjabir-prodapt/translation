@@ -10,8 +10,7 @@ import jwt
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
-from fastapi.security import HTTPAuthorizationCredentials
-from fastapi.security import HTTPBearer
+from fastapi.security import APIKeyHeader
 from jwt import InvalidTokenError
 from pydantic import BaseModel
 
@@ -19,8 +18,8 @@ from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
-# HTTP Bearer token scheme
-security = HTTPBearer(auto_error=False)
+# x-app-auth token scheme
+app_auth_scheme = APIKeyHeader(name="x-app-auth", auto_error=False)
 
 
 class AuthenticatedUser(BaseModel):
@@ -89,30 +88,31 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
 
 
 def verify_token(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
 ) -> dict[str, Any]:
     """Verify bearer token and return JWT payload."""
-    if not credentials:
+    if not api_key or not api_key.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return decode_and_verify_token(credentials.credentials)
+    token = api_key[7:]
+    return decode_and_verify_token(token)
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
 ) -> dict[str, Any]:
     """Backward-compatible dependency returning raw token payload."""
-    return verify_token(credentials)
+    return verify_token(api_key)
 
 
 def get_current_user_context(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    payload = verify_token(credentials)
+    payload = verify_token(api_key)
     return AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),

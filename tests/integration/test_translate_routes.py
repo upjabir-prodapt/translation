@@ -106,7 +106,7 @@ class TestSubmitTranslation:
     def test_rejects_invalid_token(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            headers={"Authorization": "Bearer invalid"},
+            headers={"x-app-auth": "Bearer invalid"},
             data={"target_language": "Spanish", "domain": "commercial"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )

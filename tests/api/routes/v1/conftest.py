@@ -114,7 +114,7 @@ def api_client(mock_translation_service, mock_job_service):
     )
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
+        client.headers.update({"x-app-auth": f"Bearer {token}"})
         yield client
 
     app.dependency_overrides.clear()
