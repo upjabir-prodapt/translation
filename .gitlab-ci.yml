@@ -1,0 +1,66 @@
+# This file is a template, and might need editing before it works on your project.
+# This is a sample GitLab CI/CD configuration file that should run without any modifications.
+# It demonstrates a basic 3 stage CI/CD pipeline. Instead of real tests or scripts,
+# it uses echo commands to simulate the pipeline execution.
+#
+# A pipeline is composed of independent jobs that run scripts, grouped into stages.
+# Stages run in sequential order, but jobs within stages run in parallel.
+#
+# For more information, see: https://docs.gitlab.com/ee/ci/yaml/#stages
+#
+# You can copy and paste this template into a new `.gitlab-ci.yml` file.
+# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
+#
+# To contribute improvements to CI/CD templates, please follow the Development guide at:
+# https://docs.gitlab.com/development/cicd/templates/
+# This specific template is located at:
+# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Getting-Started.gitlab-ci.yml
+stages:
+  - .pre
+  - test
+  - scan
+  - custom-scan
+  - .post
+
+include:
+    - template: Security/SAST.gitlab-ci.yml
+
+variables:
+    SAST_EXCLUDED_PATHS: "spec, test, tests, tmp" 
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+code-scan:
+  stage: scan
+  image: python:3.11
+  cache:
+      paths:
+          - .cache/pip
+  before_script:
+    - export http_proxy=$HTTP_PROXY
+    - export https_proxy=$HTTPS_PROXY
+    - pip install bandit pylint flake8 --quiet
+  script:
+    - echo "===================================="
+    - echo "Security Scan - Bandit"
+    - echo "===================================="
+    - bandit -r . -f txt -o bandit-report.txt -x ./tests,./venv,./.git || true
+    - echo "===================================="
+    - echo "Code Quality - Pylint"
+    - echo "===================================="
+    - find . -name "*.py" -not -path "./venv/*" -not -path "./.git/*" -not -path "./.cache/*"
+    - find . -name "*.py" -not -path "./venv/*" -not -path "./.git/*" -not -path "./.cache/*" | xargs pylint --output-format=text --output=pylint-report.txt --fail-under=7.0 --exit-zero || true
+    - echo "===================================="
+    - echo "Style Check - Flake8"
+    - echo "===================================="
+    - flake8 . --count --max-line-length=120 --exclude=venv,.git --output-file=flake8-report.txt --exit-zero
+  artifacts:
+    when: always
+    reports:
+        junit: report.xml
+    paths:
+        - bandit-report.txt
+        - flake8-report.txt
+        - pylint-report.txt
+    expire_in: 30 days
+  only:
+    - main
