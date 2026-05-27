@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -10,12 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-import logging
-logger = logging.getLogger(__name__)
 from src.doctranslator.glossary import Glossary
 from src.doctranslator.glossary import GlossaryEntry
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.repository import get_storage_client
+
+logger = logging.getLogger(__name__)
 
 
 class GlossaryService:

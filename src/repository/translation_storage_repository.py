@@ -1,15 +1,16 @@
 """Storage repository utilities for translation processing and assets."""
 
+import logging
 from pathlib import Path
 
 from google.cloud import storage
 
 from src.config.constants import settings
-import logging
-logger = logging.getLogger(__name__)
 from src.repository.storage_repository import FileType
 from src.repository.storage_repository import StorageError
 from src.repository.storage_repository import StorageRepository
+
+logger = logging.getLogger(__name__)
 
 
 class TranslationStorageRepository(StorageRepository):

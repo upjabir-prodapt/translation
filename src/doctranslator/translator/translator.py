@@ -30,6 +30,7 @@ class TranslationResponse(BaseModel):
 
     translated_text: str = Field(description="The translated text.")
 
+
 # OTel span attribute key constants (avoids S1192 duplicate-literal warnings)
 _ATTR_LLM_MODEL = "llm.model"
 _ATTR_LLM_NAME = "llm.name"
@@ -300,6 +301,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             if text.startswith("{"):
                 try:
                     import json
+
                     data = json.loads(text)
                     if isinstance(data, dict) and "translated_text" in data:
                         return str(data["translated_text"])
@@ -330,7 +332,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
         prompt_chars = len(contents)
-        prompt_hash = hashlib.md5(contents.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()[:12]  # noqa: S324
+        prompt_hash = hashlib.md5(
+            contents.encode("utf-8", errors="replace"), usedforsecurity=False
+        ).hexdigest()[:12]  # noqa: S324
         prompt_preview = contents[:_MAX_CHARS_PROMPT_PREVIEW].replace("\n", "\\n")
         temperature = float(getattr(config, "temperature", 0.0) or 0.0)
         max_output_tokens = int(getattr(config, "max_output_tokens", 0) or 0)
@@ -364,16 +368,22 @@ class GeminiVertexAITranslator(BaseTranslator):
                 usage = getattr(response, "usage_metadata", None)
                 if usage:
                     input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-                    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+                    output_tokens = int(
+                        getattr(usage, "candidates_token_count", 0) or 0
+                    )
                     total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
-                    cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+                    cached_tokens = int(
+                        getattr(usage, "cached_content_token_count", 0) or 0
+                    )
                     span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
                     span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
                     span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, total_tokens)
                     span.set_attribute("llm.cached_tokens", cached_tokens)
             except Exception as exc:
                 span.record_exception(exc)
-                from opentelemetry.trace import Status, StatusCode
+                from opentelemetry.trace import Status
+                from opentelemetry.trace import StatusCode
+
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
                 raise
             finally:

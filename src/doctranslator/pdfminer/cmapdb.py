@@ -245,7 +245,9 @@ class CMapDB:
             if os.path.exists(path):
                 gzfile = gzip.open(path)
                 try:
-                    return type(str(name), (), pickle.loads(gzfile.read()))
+                    # nosec B301 – data is read from a pre-bundled, trusted local
+                    # .pickle.gz file that ships with the package (never user-supplied).
+                    return type(str(name), (), pickle.loads(gzfile.read()))  # nosec B301
                 finally:
                     gzfile.close()
         raise CMapDB.CMapNotFound(name)

@@ -18,9 +18,9 @@ from src.api.schemas.responses import TranslateResponse
 from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
+from src.config.tracing import tracer_pipeline
 from src.config.translation_routing import normalize_domain
 from src.config.translation_routing import normalize_language
-from src.config.tracing import tracer_pipeline
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -55,7 +55,9 @@ class TranslationService:
         ):
             return await self._do_submit(request, job_id)
 
-    async def _do_submit(self, request: TranslateRequest, job_id: str) -> TranslateResponse:
+    async def _do_submit(
+        self, request: TranslateRequest, job_id: str
+    ) -> TranslateResponse:
         try:
             # Decode base64 content
             try:
@@ -190,7 +192,9 @@ class TranslationService:
         """Schedule API-local background translation pipeline."""
         if settings.API_USE_BACKGROUND_PIPELINE:
             task = asyncio.create_task(
-                self.orchestrator.run(job_id=job_id, job_data=job_data, parent_ctx=parent_ctx)
+                self.orchestrator.run(
+                    job_id=job_id, job_data=job_data, parent_ctx=parent_ctx
+                )
             )
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)

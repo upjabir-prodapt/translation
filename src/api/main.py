@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC
 from datetime import datetime
@@ -11,8 +12,6 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from starlette.middleware.base import BaseHTTPMiddleware
-
-import logging
 
 from src.api.middleware.exception_handler import exception_handler_middleware
 from src.api.middleware.trace_middleware import TraceEnrichmentMiddleware
