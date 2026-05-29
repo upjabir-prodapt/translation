@@ -1,11 +1,14 @@
 """Language normalization and model-chain routing utilities."""
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_DOMAINS = {"commercial", "legal", "finance", "hr", "operations"}
 
@@ -127,7 +130,12 @@ def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[str]:
             if models:
                 return models[: max(1, settings.MAX_MODEL_ATTEMPTS)]
 
-    raise ValueError(
-        "No model route found for "
-        f"source='{normalized_in}', target='{normalized_out}', domain='{normalized_domain}'"
+    logger.warning(
+        "No model route found for source='%s', target='%s', domain='%s'. "
+        "Falling back to default Gemini model '%s'.",
+        normalized_in,
+        normalized_out,
+        normalized_domain,
+        settings.GEMINI_MODEL,
     )
+    return [settings.GEMINI_MODEL]
