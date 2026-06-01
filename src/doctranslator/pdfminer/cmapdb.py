@@ -10,10 +10,11 @@ More information is available on:
 """
 
 import gzip
+import io
 import logging
 import os
 import os.path
-import pickle as pickle
+import pickle
 import struct
 import sys
 from collections.abc import Iterable
@@ -38,6 +39,30 @@ from src.doctranslator.pdfminer.utils import choplist
 from src.doctranslator.pdfminer.utils import nunpack
 
 log = logging.getLogger(__name__)
+
+
+class _SafeCMapUnpickler(pickle.Unpickler):
+    """Unpickler restricted to the primitive types used in bundled CMap data files.
+
+    Overrides find_class() to raise an error for any type outside the known-safe
+    set, preventing arbitrary code execution during deserialization (CWE-502).
+    """
+
+    _ALLOWED: frozenset[tuple[str, str]] = frozenset({
+        ("builtins", "dict"),
+        ("builtins", "int"),
+        ("builtins", "bool"),
+        ("builtins", "list"),
+        ("builtins", "str"),
+        ("builtins", "bytes"),
+    })
+
+    def find_class(self, module: str, name: str) -> Any:
+        if (module, name) not in self._ALLOWED:
+            raise pickle.UnpicklingError(
+                f"Blocked unsafe type during CMap load: {module}.{name}"
+            )
+        return super().find_class(module, name)
 
 
 class CMapError(PDFException):
@@ -245,11 +270,10 @@ class CMapDB:
             if os.path.exists(path):
                 gzfile = gzip.open(path)
                 try:
-                    # nosec B301 – data is read from a pre-bundled, trusted local
-                    # .pickle.gz file that ships with the package (never user-supplied).
-                    return type(str(name), (), pickle.loads(gzfile.read()))  # nosec B301
+                    data = gzfile.read()
                 finally:
                     gzfile.close()
+                return type(str(name), (), _SafeCMapUnpickler(io.BytesIO(data)).load())
         raise CMapDB.CMapNotFound(name)
 
     @classmethod

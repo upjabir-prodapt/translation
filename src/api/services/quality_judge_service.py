@@ -101,9 +101,9 @@ class GoogleADKJudgeAgent:
         from opentelemetry.trace import StatusCode
 
         prompt_chars = len(contents)
-        prompt_hash = hashlib.md5(
-            contents.encode("utf-8", errors="replace"), usedforsecurity=False
-        ).hexdigest()[:12]  # noqa: S324
+        prompt_hash = hashlib.sha256(
+            contents.encode("utf-8", errors="replace")
+        ).hexdigest()[:12]
         prompt_preview = contents[:300].replace("\n", "\\n")
         temperature = float(getattr(config, "temperature", 0.0) or 0.0)
         logger.debug(

@@ -7,18 +7,9 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import KeysView
 from collections.abc import Sequence
-from hashlib import (
-    md5,
-)  # usedforsecurity=False applied at every call site — see note below
 from hashlib import sha256
 from hashlib import sha384
 from hashlib import sha512
-
-# Note on MD5 usage: all md5() calls in this module implement Algorithms 3.2–3.7
-# from the PDF Reference (ISO 32000-1 §7.6.3). MD5 is mandated by the PDF
-# specification for revision 2–4 security handlers and cannot be substituted.
-# Each call passes usedforsecurity=False to document this and to maintain
-# compatibility with FIPS-mode deployments.
 from typing import Any
 from typing import cast
 
@@ -361,6 +352,19 @@ class PDFXRefStream(PDFBaseXRef):
 
 
 class PDFStandardSecurityHandler:
+    """Security handler for PDF encryption revisions 2 and 3 (RC4 + MD5).
+
+    .. deprecated::
+        RC4-based encryption (PDF revisions 2–4) was deprecated in PDF 1.6 and
+        removed in PDF 2.0 (ISO 32000-2:2017). This handler is intentionally
+        **not** registered in :attr:`PDFDocument.security_handler_registry` and
+        will never be instantiated for new documents.
+
+        Only PDF encryption revision 5/6 (AES-256, SHA-256) is supported.
+        Attempting to open an RC4-encrypted PDF raises
+        :class:`PDFEncryptionError` with a clear message.
+    """
+
     PASSWORD_PADDING = (
         b"(\xbfN^Nu\x8aAd\x00NV\xff\xfa\x01\x08..\x00\xb6\xd0h>\x80/\x0c\xa9\xfedSiz"
     )
@@ -717,10 +721,11 @@ class PDFDocument:
     """
 
     security_handler_registry: dict[int, type[PDFStandardSecurityHandler]] = {
-        1: PDFStandardSecurityHandler,
-        2: PDFStandardSecurityHandler,
-        4: PDFStandardSecurityHandlerV4,
+        # Revisions 2, 3, 4 (RC4 + MD5) are NOT registered.
+        # RC4-based encryption was deprecated in PDF 1.6 and removed in PDF 2.0.
+        # Only AES-256 / SHA-256 revision 5 and 6 handlers are supported.
         5: PDFStandardSecurityHandlerV5,
+        6: PDFStandardSecurityHandlerV5,
     }
 
     def __init__(

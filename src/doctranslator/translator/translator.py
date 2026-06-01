@@ -332,9 +332,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
         prompt_chars = len(contents)
-        prompt_hash = hashlib.md5(
-            contents.encode("utf-8", errors="replace"), usedforsecurity=False
-        ).hexdigest()[:12]  # noqa: S324
+        prompt_hash = hashlib.sha256(
+            contents.encode("utf-8", errors="replace")
+        ).hexdigest()[:12]
         prompt_preview = contents[:_MAX_CHARS_PROMPT_PREVIEW].replace("\n", "\\n")
         temperature = float(getattr(config, "temperature", 0.0) or 0.0)
         max_output_tokens = int(getattr(config, "max_output_tokens", 0) or 0)
