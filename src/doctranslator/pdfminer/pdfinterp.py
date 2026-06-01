@@ -216,7 +216,8 @@ class PDFResourceManager:
     def _create_type0_font(self, spec: Mapping[str, object]) -> PDFFont:
         """Build a Type0 (composite) font by delegating to its descendant font."""
         dfonts = list_value(spec["DescendantFonts"])
-        assert dfonts
+        if not dfonts:
+            raise AssertionError
         subspec = dict_value(dfonts[0]).copy()
         for k in ("Encoding", "ToUnicode"):
             if k in spec:
@@ -1267,7 +1268,8 @@ class PDFPageInterpreter:
             if settings.STRICT:
                 raise PDFInterpreterError("No font specified!")
             return
-        assert self.ncs is not None
+        if self.ncs is None:
+            raise AssertionError
         self.device.render_string(
             self.textstate,
             cast(PDFTextSeq, seq),

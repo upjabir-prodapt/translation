@@ -49,12 +49,18 @@ def decompose_ctm(m: Matrix | PdfMatrix) -> PdfAffineTransform:
         d = m.d
         e = m.e
         f = m.f
-        assert a is not None
-        assert b is not None
-        assert c is not None
-        assert d is not None
-        assert e is not None
-        assert f is not None
+        if a is None:
+            raise AssertionError
+        if b is None:
+            raise AssertionError
+        if c is None:
+            raise AssertionError
+        if d is None:
+            raise AssertionError
+        if e is None:
+            raise AssertionError
+        if f is None:
+            raise AssertionError
     else:
         (a, b, c, d, e, f) = m
 
@@ -196,10 +202,14 @@ def scale_and_set_translation(
         c = m.c
         d = m.d
         # e, f will be overridden by tx, ty
-        assert a is not None
-        assert b is not None
-        assert c is not None
-        assert d is not None
+        if a is None:
+            raise AssertionError
+        if b is None:
+            raise AssertionError
+        if c is None:
+            raise AssertionError
+        if d is None:
+            raise AssertionError
 
         return PdfMatrix(
             a=a * scale_factor,
@@ -258,14 +268,16 @@ def multiply_matrices(m1: Matrix | PdfMatrix, m2: Matrix | PdfMatrix) -> Matrix:
     # Extract components from first matrix
     if isinstance(m1, PdfMatrix):
         a1, b1, c1, d1, e1, f1 = m1.a, m1.b, m1.c, m1.d, m1.e, m1.f
-        assert all(x is not None for x in [a1, b1, c1, d1, e1, f1])
+        if not all(x is not None for x in [a1, b1, c1, d1, e1, f1]):
+            raise AssertionError
     else:
         a1, b1, c1, d1, e1, f1 = m1
 
     # Extract components from second matrix
     if isinstance(m2, PdfMatrix):
         a2, b2, c2, d2, e2, f2 = m2.a, m2.b, m2.c, m2.d, m2.e, m2.f
-        assert all(x is not None for x in [a2, b2, c2, d2, e2, f2])
+        if not all(x is not None for x in [a2, b2, c2, d2, e2, f2]):
+            raise AssertionError
     else:
         a2, b2, c2, d2, e2, f2 = m2
 

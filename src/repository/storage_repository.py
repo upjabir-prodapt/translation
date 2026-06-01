@@ -466,14 +466,11 @@ class StorageRepository:
             # URL is a hardcoded GCE internal constant — never user-supplied.
             import requests as _requests  # transitive dep via google-auth[requests]
 
-            _GCE_METADATA_BASE = (
-                "http://metadata.google.internal/computeMetadata/v1/"
-            )
+            _gce_metadata_base = "http://metadata.google.internal/computeMetadata/v1/"
             _gce_metadata_email_url = (
-                _GCE_METADATA_BASE
-                + "instance/service-accounts/default/email"
+                _gce_metadata_base + "instance/service-accounts/default/email"
             )
-            if not _gce_metadata_email_url.startswith(_GCE_METADATA_BASE):
+            if not _gce_metadata_email_url.startswith(_gce_metadata_base):
                 raise ValueError(
                     f"Unexpected GCE metadata URL: {_gce_metadata_email_url!r}"
                 )

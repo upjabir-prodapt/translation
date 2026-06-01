@@ -192,7 +192,8 @@ class RapidOCRModel:
             A YoloResult object containing the detected boxes.
         """
         # Handle single image input
-        assert isinstance(image, np.ndarray) and len(image.shape) == 3
+        if not (isinstance(image, np.ndarray) and len(image.shape) == 3):
+            raise AssertionError
 
         # Calculate target size based on the maximum height in the batch
         target_imgsz = 1024

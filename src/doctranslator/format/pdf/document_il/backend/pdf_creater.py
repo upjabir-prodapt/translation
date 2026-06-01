@@ -183,7 +183,8 @@ class FormRenderUnit(RenderUnit):
         form = self.form
         draw_op.append(b"q ")
 
-        assert form.pdf_matrix is not None
+        if form.pdf_matrix is None:
+            raise AssertionError
         if form.relocation_transform and len(form.relocation_transform) == 6:
             try:
                 relocation_matrix = tuple(float(x) for x in form.relocation_transform)
@@ -196,7 +197,8 @@ class FormRenderUnit(RenderUnit):
         draw_op.append(form.graphic_state.passthrough_per_char_instruction.encode())
         draw_op.append(b" ")
 
-        assert form.pdf_form_subtype is not None
+        if form.pdf_form_subtype is None:
+            raise AssertionError
         if form.pdf_form_subtype.pdf_xobj_form:
             draw_op.append(
                 f" /{form.pdf_form_subtype.pdf_xobj_form.do_args} Do ".encode()
@@ -453,7 +455,8 @@ def reproduce_one_font(doc, index):
 
 
 def reproduce_cmap(doc):
-    assert doc
+    if not doc:
+        raise AssertionError
     font_set = set()
     for page in doc:
         try:
@@ -1424,7 +1427,8 @@ class PDFCreater:
     def update_page_content_stream(
         self, check_font_exists, page, pdf, translation_config, skip_char: bool = False
     ):
-        assert page.cropbox is not None and page.cropbox.box is not None
+        if not (page.cropbox is not None and page.cropbox.box is not None):
+            raise AssertionError
         page_crop_box = page.cropbox.box
         ctm_for_ops = (1, 0, 0, 1, -page_crop_box.x, -page_crop_box.y)
         ctm_for_ops = f" {' '.join(f'{x:f}' for x in ctm_for_ops)} cm ".encode()

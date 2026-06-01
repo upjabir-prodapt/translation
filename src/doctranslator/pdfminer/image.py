@@ -61,7 +61,8 @@ class BMPWriter:
             ncols,
             0,
         )
-        assert len(info) == 40, str(len(info))
+        if len(info) != 40:
+            raise AssertionError(str(len(info)))
         header = struct.pack(
             "<ccIHHI",
             b"B",
@@ -71,7 +72,8 @@ class BMPWriter:
             0,
             headersize,
         )
-        assert len(header) == 14, str(len(header))
+        if len(header) != 14:
+            raise AssertionError(str(len(header)))
         self.fp.write(header)
         self.fp.write(info)
         if ncols == 2:

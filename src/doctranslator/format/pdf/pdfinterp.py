@@ -434,7 +434,8 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
             return
         if isinstance(seq, PSLiteral):
             return
-        assert self.ncs is not None
+        if self.ncs is None:
+            raise AssertionError
         gs = self.graphicstate.copy()
         gs.passthrough_instruction = (
             self.il_creater.passthrough_per_char_instruction.copy()

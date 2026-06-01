@@ -115,7 +115,8 @@ class PDFTextDevice(PDFDevice):
         ncs: PDFColorSpace,
         graphicstate: "PDFGraphicState",
     ) -> None:
-        assert self.ctm is not None
+        if self.ctm is None:
+            raise AssertionError
         matrix = utils.mult_matrix(textstate.matrix, self.ctm)
         font = textstate.font
         font.font_id_temp = getattr(textstate, "font_id", None)
@@ -124,7 +125,8 @@ class PDFTextDevice(PDFDevice):
         charspace = textstate.charspace * scaling
         wordspace = textstate.wordspace * scaling
         rise = textstate.rise
-        assert font is not None
+        if font is None:
+            raise AssertionError
         if font.is_multibyte():
             wordspace = 0
         dxscale = 0.001 * fontsize * scaling
@@ -348,7 +350,8 @@ class TagExtractor(PDFDevice):
         graphicstate: "PDFGraphicState",
     ) -> None:
         font = textstate.font
-        assert font is not None
+        if font is None:
+            raise AssertionError
         text = ""
         for obj in seq:
             if isinstance(obj, str):
@@ -390,7 +393,8 @@ class TagExtractor(PDFDevice):
         self._stack.append(tag)
 
     def end_tag(self) -> None:
-        assert self._stack, str(self.pageno)
+        if not self._stack:
+            raise AssertionError(str(self.pageno))
         tag = self._stack.pop(-1)
         out_s = "</%s>" % utils.enc(cast(str, tag.name))
         self._write(out_s)

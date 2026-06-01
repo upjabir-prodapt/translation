@@ -169,36 +169,42 @@ class LTComponent(LTItem):
         return self.width <= 0 or self.height <= 0
 
     def is_hoverlap(self, obj: "LTComponent") -> bool:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         return obj.x0 <= self.x1 and self.x0 <= obj.x1
 
     def hdistance(self, obj: "LTComponent") -> float:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         if self.is_hoverlap(obj):
             return 0
         else:
             return min(abs(self.x0 - obj.x1), abs(self.x1 - obj.x0))
 
     def hoverlap(self, obj: "LTComponent") -> float:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         if self.is_hoverlap(obj):
             return min(abs(self.x0 - obj.x1), abs(self.x1 - obj.x0))
         else:
             return 0
 
     def is_voverlap(self, obj: "LTComponent") -> bool:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         return obj.y0 <= self.y1 and self.y0 <= obj.y1
 
     def vdistance(self, obj: "LTComponent") -> float:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         if self.is_voverlap(obj):
             return 0
         else:
             return min(abs(self.y0 - obj.y1), abs(self.y1 - obj.y0))
 
     def voverlap(self, obj: "LTComponent") -> float:
-        assert isinstance(obj, LTComponent), str(type(obj))
+        if not isinstance(obj, LTComponent):
+            raise AssertionError(str(type(obj)))
         if self.is_voverlap(obj):
             return min(abs(self.y0 - obj.y1), abs(self.y1 - obj.y0))
         else:
@@ -369,7 +375,8 @@ class LTChar(LTComponent, LTText):
         # compute the boundary rectangle.
         if font.is_vertical():
             # vertical
-            assert isinstance(textdisp, tuple)
+            if not isinstance(textdisp, tuple):
+                raise AssertionError
             (vx, vy) = textdisp
             if vx is None:
                 vx = fontsize * 0.5
@@ -669,7 +676,8 @@ class LTTextGroup(LTTextContainer[TextGroupElement]):
 class LTTextGroupLRTB(LTTextGroup):
     def analyze(self, laparams: LAParams) -> None:
         super().analyze(laparams)
-        assert laparams.boxes_flow is not None
+        if laparams.boxes_flow is None:
+            raise AssertionError
         boxes_flow = laparams.boxes_flow
         # reorder the objects from top-left to bottom-right.
         self._objs.sort(
@@ -682,7 +690,8 @@ class LTTextGroupLRTB(LTTextGroup):
 class LTTextGroupTBRL(LTTextGroup):
     def analyze(self, laparams: LAParams) -> None:
         super().analyze(laparams)
-        assert laparams.boxes_flow is not None
+        if laparams.boxes_flow is None:
+            raise AssertionError
         boxes_flow = laparams.boxes_flow
         # reorder the objects from top-right to bottom-left.
         self._objs.sort(
@@ -780,7 +789,8 @@ class LTLayoutContainer(LTContainer[LTComponent]):
             obj0 = obj1
         if line is None:
             line = LTTextLineHorizontal(laparams.word_margin)
-            assert obj0 is not None
+            if obj0 is None:
+                raise AssertionError
             line.add(obj0)
         yield line
 

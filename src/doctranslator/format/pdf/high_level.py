@@ -308,8 +308,10 @@ def start_parse_il(
         il_creater=il_creater,
     )
 
-    assert il_creater is not None
-    assert translation_config is not None
+    if il_creater is None:
+        raise AssertionError
+    if translation_config is None:
+        raise AssertionError
     obj_patch = {}
     interpreter = PDFPageInterpreterEx(rsrcmgr, device, obj_patch, il_creater)
     if pages:
@@ -765,7 +767,8 @@ def _build_part_config(
         original_doc, from_page=split_point.start_page, to_page=split_point.end_page
     )
     safe_save(temp_doc, part_temp_input_path)
-    assert temp_doc.page_count == split_point.end_page - split_point.start_page + 1
+    if temp_doc.page_count != split_point.end_page - split_point.start_page + 1:
+        raise AssertionError
 
     if i > 0:
         part_config.watermark_output_mode = WatermarkOutputMode.NoWatermark

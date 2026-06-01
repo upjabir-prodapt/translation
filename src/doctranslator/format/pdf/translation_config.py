@@ -284,7 +284,8 @@ class TranslationConfig:
         self.only_parse_generate_pdf = only_parse_generate_pdf
         if self.skip_translation or self.only_parse_generate_pdf:
             self.auto_extract_glossary = False
-        assert primary_font_family in [None, "serif", "sans-serif", "script"]
+        if primary_font_family not in [None, "serif", "sans-serif", "script"]:
+            raise AssertionError
         self.primary_font_family = primary_font_family
         self.only_include_translated_page = (
             bool(only_include_translated_page)

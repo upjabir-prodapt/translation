@@ -128,7 +128,8 @@ class ParagraphFinder:
             if paragraph.box is None:
                 continue
             x1, y1, x2, y2 = self._expand_box_to_layout(paragraph.box, layout.box)
-            assert x2 > x1 and y2 > y1
+            if not (x2 > x1 and y2 > y1):
+                raise AssertionError
             page.pdf_rectangle.append(
                 self._make_fill_rectangle(x1, y1, x2, y2, paragraph.xobj_id)
             )
@@ -921,7 +922,8 @@ class ParagraphFinder:
         self.update_paragraph_data(paragraph)
 
     def create_line(self, chars: list[PdfCharacter]) -> PdfParagraphComposition:
-        assert chars
+        if not chars:
+            raise AssertionError
 
         line = PdfLine(pdf_character=chars)
         self.update_line_data(line)

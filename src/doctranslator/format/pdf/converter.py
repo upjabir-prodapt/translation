@@ -152,7 +152,8 @@ class AWLTChar(LTChar):
         # compute the boundary rectangle.
         if font.is_vertical():
             # vertical
-            assert isinstance(textdisp, tuple)
+            if not isinstance(textdisp, tuple):
+                raise AssertionError
             (vx, vy) = textdisp
             if vx is None:
                 vx = fontsize * 0.5

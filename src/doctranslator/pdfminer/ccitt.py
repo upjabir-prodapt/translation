@@ -49,7 +49,8 @@ class BitParser:
         b = None
         for i in range(len(bits)):
             if i > 0:
-                assert b is not None
+                if b is None:
+                    raise AssertionError
                 if p[b] is None:
                     p[b] = [None, None]
                 p = p[b]
@@ -57,7 +58,8 @@ class BitParser:
                 b = 1
             else:
                 b = 0
-        assert b is not None
+        if b is None:
+            raise AssertionError
         p[b] = v
 
     def feedbytes(self, data: bytes) -> None:
@@ -74,7 +76,8 @@ class BitParser:
         if isinstance(v, list):
             self._state = v
         else:
-            assert self._accept is not None
+            if self._accept is None:
+                raise AssertionError
             self._state = self._accept(v)
 
 
