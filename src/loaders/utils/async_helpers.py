@@ -4,16 +4,13 @@ import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Coroutine
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 class AsyncBridge:
     """Bridge between async and sync contexts."""
 
     @staticmethod
-    def run_async(coro: Coroutine[None, None, T]) -> T:
+    def run_async[T](coro: Coroutine[None, None, T]) -> T:
         """Run an async coroutine from a sync context.
 
         This handles both cases:
@@ -37,7 +34,7 @@ class AsyncBridge:
             return asyncio.run(coro)
 
     @staticmethod
-    def ensure_sync_result(coro: Coroutine[None, None, T]) -> T:
+    def ensure_sync_result[T](coro: Coroutine[None, None, T]) -> T:
         """Ensure we get a sync result, even from async context.
 
         This should only be called from truly sync contexts.
@@ -53,7 +50,7 @@ class AsyncBridge:
             ) from None
 
 
-def sync_to_async(
+def sync_to_async[T](
     func: Callable[..., T],
     *args,
     **kwargs,
