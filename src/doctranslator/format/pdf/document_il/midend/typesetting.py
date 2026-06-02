@@ -107,7 +107,9 @@ class TypesettingUnit:
         xobj_id: int | None = None,
         debug_info: bool = False,
     ):
-        if not ((char is not None) + (formular is not None) + (unicode is not None) == 1):
+        if not (
+            (char is not None) + (formular is not None) + (unicode is not None) == 1
+        ):
             raise AssertionError("Only one of chars and formular can be not None")
         self.char = char
         self.formular = formular
@@ -133,13 +135,17 @@ class TypesettingUnit:
 
         if unicode:
             if not font_size:
-                raise AssertionError("Font size must be provided when unicode is provided")
+                raise AssertionError(
+                    "Font size must be provided when unicode is provided"
+                )
             if not style:
                 raise AssertionError("Style must be provided when unicode is provided")
             if len(unicode) != 1:
                 raise AssertionError("Unicode must be a single character")
             if xobj_id is None:
-                raise AssertionError("Xobj id must be provided when unicode is provided")
+                raise AssertionError(
+                    "Xobj id must be provided when unicode is provided"
+                )
 
             self.font = font
             if font is not None and hasattr(font, "font_id"):
@@ -782,9 +788,13 @@ class TypesettingUnit:
             return self.passthrough()
         elif self.unicode:
             if self.x is None:
-                raise AssertionError("x position must be set, should be set by `relocate`")
+                raise AssertionError(
+                    "x position must be set, should be set by `relocate`"
+                )
             if self.y is None:
-                raise AssertionError("y position must be set, should be set by `relocate`")
+                raise AssertionError(
+                    "y position must be set, should be set by `relocate`"
+                )
             if self.scale is None:
                 raise AssertionError("scale must be set, should be set by `relocate`")
             x = self.x

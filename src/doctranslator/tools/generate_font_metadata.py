@@ -74,9 +74,13 @@ def main():
     if not repo_path.exists():
         raise AssertionError(f"Assets repo path {repo_path} does not exist.")
     if not (repo_path / "README.md").exists():
-        raise AssertionError(f"Assets repo path {repo_path} does not contain a README.md file.")
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a README.md file."
+        )
     if not (repo_path / "fonts").exists():
-        raise AssertionError(f"Assets repo path {repo_path} does not contain a fonts folder.")
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a fonts folder."
+        )
     logger.info(f"Getting font metadata for {repo_path}")
 
     metadatas = {}

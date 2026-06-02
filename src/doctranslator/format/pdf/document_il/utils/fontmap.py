@@ -38,7 +38,12 @@ class FontMapper:
 
     def __init__(self, translation_config: TranslationConfig):
         self.translation_config = translation_config
-        if translation_config.primary_font_family not in [None, "serif", "sans-serif", "script"]:
+        if translation_config.primary_font_family not in [
+            None,
+            "serif",
+            "sans-serif",
+            "script",
+        ]:
             raise AssertionError
         self.primary_font_family = PrimaryFontFamily.from_str(
             translation_config.primary_font_family,

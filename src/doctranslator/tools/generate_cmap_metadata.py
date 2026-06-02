@@ -44,9 +44,13 @@ def main() -> None:
     if not repo_path.exists():
         raise AssertionError(f"Assets repo path {repo_path} does not exist.")
     if not (repo_path / "README.md").exists():
-        raise AssertionError(f"Assets repo path {repo_path} does not contain a README.md file.")
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a README.md file."
+        )
     if not (repo_path / "cmap").exists():
-        raise AssertionError(f"Assets repo path {repo_path} does not contain a cmap folder.")
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a cmap folder."
+        )
     logger.info(f"Getting cmap metadata for {repo_path}")
 
     metadatas: dict[str, dict[str, object]] = {}

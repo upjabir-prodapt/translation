@@ -443,7 +443,9 @@ class PSBaseParser:
         elif self.oct:
             chrcode = int(self.oct, 8)
             if chrcode >= 256:
-                raise AssertionError("Invalid octal %s (%d)" % (repr(self.oct), chrcode))
+                raise AssertionError(
+                    "Invalid octal %s (%d)" % (repr(self.oct), chrcode)
+                )
             self._curtoken += bytes((chrcode,))
             self._parse1 = self._parse_string
             return i
