@@ -20,6 +20,7 @@ from src.api.services.intent_router_service import IntentRouterService
 from src.api.services.language_detection_service import LanguageDetectionService
 from src.api.services.processor_service import JobProcessor
 from src.api.services.temp_workspace_service import TempWorkspaceService
+from src.api.utils.docx_converter import convert_docx_to_pdf
 from src.config.constants import settings
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
@@ -145,6 +146,12 @@ class PipelineOrchestrator:
             blob_path = self._extract_blob_path(source_doc["gcs_uri"])
             await self.storage.download_file(blob_path, local_input_path)
 
+            if source_doc.get("format") == "docx":
+                logger.info(f"Converting DOCX to PDF for job {job_id}")
+                local_input_path = convert_docx_to_pdf(
+                    local_input_path, workspace.input_dir
+                )
+
             source_lang = translation_config.get("source_language")
             if not source_lang or source_lang == "auto":
                 source_lang = self.language_detector.detect(local_input_path)
@@ -192,11 +199,14 @@ class PipelineOrchestrator:
             if not attempt_result:
                 raise RuntimeError("No attempt report produced by translation pipeline")
             mono_pdf_path = attempt_result.get("mono_pdf_path")
-            preferred_output_name = str(
+            raw_output_name = str(
                 source_doc.get("output_filename")
                 or source_doc.get("original_filename")
                 or "output.pdf"
             )
+            if raw_output_name.lower().endswith(".docx"):
+                raw_output_name = raw_output_name[:-5] + ".pdf"
+            preferred_output_name = raw_output_name
             selected_output_uri = None
             if mono_pdf_path:
                 selected_output_uri = await self.assembly_service.upload_output(

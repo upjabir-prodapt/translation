@@ -31,6 +31,32 @@ class TranslationResponse(BaseModel):
     translated_text: str = Field(description="The translated text.")
 
 
+class BatchTranslationItem(BaseModel):
+    id: int = Field(description="The id of the input paragraph.")
+    output: str = Field(description="The translated text for this paragraph.")
+
+
+class BatchTranslationResponse(BaseModel):
+    """Structured response for batch paragraph translation."""
+
+    items: list[BatchTranslationItem] = Field(
+        description="Translated paragraphs in the same order as the input."
+    )
+
+
+class ExtractedTerm(BaseModel):
+    src: str = Field(description="Source language term.")
+    tgt: str = Field(description="Translated term in the target language.")
+
+
+class TermExtractionResponse(BaseModel):
+    """Structured response for automatic term extraction."""
+
+    terms: list[ExtractedTerm] = Field(
+        description="Extracted term pairs from the source text."
+    )
+
+
 # OTel span attribute key constants (avoids S1192 duplicate-literal warnings)
 _ATTR_LLM_MODEL = "llm.model"
 _ATTR_LLM_NAME = "llm.name"
@@ -145,10 +171,11 @@ class BaseTranslator(ABC):
         _translate_rate_limiter.wait()
         return self.do_translate(text, rate_limit_params)
 
-    def llm_translate(self, text, rate_limit_params: dict = None):
+    def llm_translate(self, text, rate_limit_params: dict = None, response_schema=None):
         """
         Translate the text, and the other part should call this method.
         :param text: text to translate
+        :param response_schema: optional Pydantic model to enforce structured output
         :return: translated text
         """
         self.translate_call_count += 1
@@ -159,18 +186,22 @@ class BaseTranslator(ABC):
             f"chars_in={in_len} rate_limit_param_keys={rl_keys}",
         )
         _translate_rate_limiter.wait()
-        return self.do_llm_translate(text, rate_limit_params)
+        return self.do_llm_translate(text, rate_limit_params, response_schema)
 
-    async def llm_translate_async(self, text, rate_limit_params: dict = None):
+    async def llm_translate_async(
+        self, text, rate_limit_params: dict = None, response_schema=None
+    ):
         in_len = len(text) if isinstance(text, str) else 0
         logger.debug(
             f"llm_translate_async: translator={self.name} scheduling thread "
             f"chars_in={in_len}",
         )
-        return await asyncio.to_thread(self.llm_translate, text, rate_limit_params)
+        return await asyncio.to_thread(
+            self.llm_translate, text, rate_limit_params, response_schema
+        )
 
     @abstractmethod
-    def do_llm_translate(self, text, rate_limit_params: dict = None):
+    def do_llm_translate(self, text, rate_limit_params: dict = None, response_schema=None):
         """
         Actual translate text, override this method
         :param text: text to translate
@@ -467,15 +498,16 @@ class GeminiVertexAITranslator(BaseTranslator):
         )
         return out
 
-    def do_llm_translate(self, text, rate_limit_params: dict = None):
+    def do_llm_translate(self, text, rate_limit_params: dict = None, response_schema=None):
         if text is None:
             logger.debug("do_llm_translate skipped: text is None")
             return None
+        schema = response_schema if response_schema is not None else TranslationResponse
         translate_config = genai_types.GenerateContentConfig(
             temperature=self.temperature,
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
-            response_schema=TranslationResponse,
+            response_schema=schema,
         )
         contents = self.prompt(text)
         c_len = len(contents)

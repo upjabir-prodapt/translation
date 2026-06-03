@@ -241,6 +241,10 @@ class GoogleADKJudgeAgent:
                 config=judge_config,
             )
             parsed = response.parsed
+            if not isinstance(parsed, QualityJudgeLLMScores):
+                raise ValueError(
+                    f"response.parsed is not QualityJudgeLLMScores: {type(parsed)}"
+                )
             return parsed
         except Exception as exc:
             logger.warning(
@@ -281,17 +285,9 @@ class GoogleADKJudgeAgent:
             },
         ) as span:
             llm_scores = self._judge_with_llm(source_text, translated_text)
-            if not isinstance(llm_scores, dict):
-                llm_scores = (
-                    llm_scores.model_dump()
-                    if isinstance(llm_scores, QualityJudgeLLMScores)
-                    else dict(llm_scores)
-                )
-            alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
-            omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
-            hallucination = max(
-                0.0, min(1.0, llm_scores.get("hallucination_score", 0.0))
-            )
+            alignment = max(0.0, min(1.0, llm_scores.alignment_score))
+            omission = max(0.0, min(1.0, llm_scores.omission_score))
+            hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))
             final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
             passed = final >= settings.QUALITY_THRESHOLD
             elapsed = time.monotonic() - t0
@@ -322,7 +318,7 @@ class GoogleADKJudgeAgent:
             hallucination_score=hallucination,
             final_score=final,
             pass_fail=passed,
-            reasons=list(llm_scores.get("reasons", [])),
+            reasons=list(llm_scores.reasons),
             model=self.model,
         )
 

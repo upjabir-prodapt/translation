@@ -24,6 +24,7 @@ from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
 from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_pure_numeric_paragraph,
 )
+from src.doctranslator.translator.translator import TermExtractionResponse
 from src.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
 )
@@ -406,10 +407,8 @@ class AutomaticTermExtractor:
             tracker.set_input(prompt)
             output = self.translate_engine.llm_translate(
                 prompt,
-                rate_limit_params={
-                    "paragraph_token_count": paragraph_token_count,
-                    "request_json_mode": True,
-                },
+                rate_limit_params={"paragraph_token_count": paragraph_token_count},
+                response_schema=TermExtractionResponse,
             )
             tracker.set_output(output)
             response = self._parse_terms_json(output, request_id)
