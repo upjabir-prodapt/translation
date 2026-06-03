@@ -1,6 +1,7 @@
 """DOCX to PDF conversion using LibreOffice headless."""
 
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,10 +16,14 @@ def convert_docx_to_pdf(docx_path: Path, output_dir: Path) -> Path:
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    libreoffice_bin = shutil.which("libreoffice")
+    if libreoffice_bin is None:
+        raise RuntimeError("LibreOffice is not installed or not on PATH")
+
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603
             [
-                "libreoffice",
+                libreoffice_bin,
                 "--headless",
                 "--convert-to",
                 "pdf",
@@ -30,10 +35,10 @@ def convert_docx_to_pdf(docx_path: Path, output_dir: Path) -> Path:
             text=True,
             timeout=120,
         )
-    except FileNotFoundError as e:
-        raise RuntimeError("LibreOffice is not installed or not on PATH") from e
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"DOCX to PDF conversion timed out for {docx_path.name}") from e
+        raise RuntimeError(
+            f"DOCX to PDF conversion timed out for {docx_path.name}"
+        ) from e
 
     if result.returncode != 0:
         raise RuntimeError(

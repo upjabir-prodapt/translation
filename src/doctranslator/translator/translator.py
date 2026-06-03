@@ -201,7 +201,9 @@ class BaseTranslator(ABC):
         )
 
     @abstractmethod
-    def do_llm_translate(self, text, rate_limit_params: dict = None, response_schema=None):
+    def do_llm_translate(
+        self, text, rate_limit_params: dict = None, response_schema=None
+    ):
         """
         Actual translate text, override this method
         :param text: text to translate
@@ -498,7 +500,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         )
         return out
 
-    def do_llm_translate(self, text, rate_limit_params: dict = None, response_schema=None):
+    def do_llm_translate(
+        self, text, rate_limit_params: dict = None, response_schema=None
+    ):
         if text is None:
             logger.debug("do_llm_translate skipped: text is None")
             return None

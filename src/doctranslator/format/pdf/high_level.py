@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import hashlib
 import io
@@ -569,6 +570,14 @@ async def async_translate(translation_config: TranslationConfig):
 
     finish_event = asyncio.Event()
     cancel_event = threading.Event()
+
+    # Capture the full contextvars snapshot here (on the async task) so that
+    # the worker thread inherits the active OTel span context.  Without this,
+    # run_in_executor spawns a bare thread with no ContextVar state, causing
+    # every llm.translate_batch / gemini.generate_content span to be created
+    # as an orphaned root span instead of a child of pipeline.run.
+    otel_ctx = contextvars.copy_context()
+
     with ProgressMonitor(
         get_translation_stage(translation_config),
         progress_change_callback=callback.step_callback,
@@ -578,7 +587,11 @@ async def async_translate(translation_config: TranslationConfig):
         loop=loop,
         report_interval=translation_config.report_interval,
     ) as pm:
-        future = loop.run_in_executor(None, do_translate, pm, translation_config)
+        # Run do_translate inside the captured context so OTel's active span
+        # and _root_span_var are visible to all translator code in the thread.
+        future = loop.run_in_executor(
+            None, otel_ctx.run, do_translate, pm, translation_config
+        )
         try:
             async for event in callback:
                 event = event.kwargs
