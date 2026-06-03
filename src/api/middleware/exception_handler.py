@@ -1,6 +1,7 @@
 """Global exception handling middleware."""
 
 import asyncio
+import logging
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -16,7 +17,7 @@ from src.api.exceptions import JobNotFoundError
 from src.api.exceptions import StorageError
 from src.api.exceptions import TranslationError
 from src.api.exceptions import ValidationError
-import logging
+
 logger = logging.getLogger(__name__)
 
 

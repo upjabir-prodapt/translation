@@ -213,7 +213,8 @@ def _parse_real_number(fp: BytesIO) -> float:
                 loop = False
             else:
                 nibble = NIBBLES[n]
-                assert nibble is not None
+                if nibble is None:
+                    raise AssertionError
                 s += nibble
     return float(s)
 
@@ -759,7 +760,7 @@ class CFFFont:
                     sid += 1
         elif charset_format == b"\x02":
             # Format 2
-            assert False, str(("Unhandled", charset_format))
+            raise AssertionError(str(("Unhandled", charset_format)))
         else:
             raise PDFValueError("unsupported charset format: %r" % charset_format)
 

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind
+from opentelemetry.trace import Status
+from opentelemetry.trace import StatusCode
 
 from src.api.services.assembly_service import AssemblyService
 from src.api.services.cover_page_service import CoverPageService
@@ -14,13 +20,7 @@ from src.api.services.intent_router_service import IntentRouterService
 from src.api.services.language_detection_service import LanguageDetectionService
 from src.api.services.processor_service import JobProcessor
 from src.api.services.temp_workspace_service import TempWorkspaceService
-import logging
-
-from opentelemetry import context as otel_context
-from opentelemetry.trace import SpanKind
-from opentelemetry.trace import Status
-from opentelemetry.trace import StatusCode
-
+from src.api.utils.docx_converter import convert_docx_to_pdf
 from src.config.constants import settings
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
@@ -110,7 +110,6 @@ class PipelineOrchestrator:
                 otel_context.detach(token)
 
     async def _run_pipeline(self, job_id: str, job_data: dict[str, Any]) -> None:
-        source_doc = job_data["source_document"]
         translation_config = job_data["translation_config"]
 
         with tracer_pipeline.start_as_current_span(
@@ -118,15 +117,21 @@ class PipelineOrchestrator:
             kind=SpanKind.INTERNAL,
             attributes={
                 "translation.job_id": job_id,
-                "translation.source_lang": str(translation_config.get("source_language", "auto")),
-                "translation.target_lang": str(translation_config.get("target_language", "")),
+                "translation.source_lang": str(
+                    translation_config.get("source_language", "auto")
+                ),
+                "translation.target_lang": str(
+                    translation_config.get("target_language", "")
+                ),
                 "translation.domain": str(translation_config.get("domain", "")),
             },
         ) as pipeline_span:
             set_root_span(pipeline_span)
             await self._execute_pipeline(job_id, job_data, pipeline_span)
 
-    async def _execute_pipeline(self, job_id: str, job_data: dict[str, Any], pipeline_span) -> None:
+    async def _execute_pipeline(
+        self, job_id: str, job_data: dict[str, Any], pipeline_span
+    ) -> None:
         workspace = self.temp_workspace_service.create(job_id)
         try:
             source_doc = job_data["source_document"]
@@ -139,6 +144,12 @@ class PipelineOrchestrator:
             local_input_path = workspace.input_dir / input_filename
             blob_path = self._extract_blob_path(source_doc["gcs_uri"])
             await self.storage.download_file(blob_path, local_input_path)
+
+            if source_doc.get("format") == "docx":
+                logger.info(f"Converting DOCX to PDF for job {job_id}")
+                local_input_path = convert_docx_to_pdf(
+                    local_input_path, workspace.input_dir
+                )
 
             source_lang = translation_config.get("source_language")
             if not source_lang or source_lang == "auto":
@@ -187,11 +198,14 @@ class PipelineOrchestrator:
             if not attempt_result:
                 raise RuntimeError("No attempt report produced by translation pipeline")
             mono_pdf_path = attempt_result.get("mono_pdf_path")
-            preferred_output_name = str(
+            raw_output_name = str(
                 source_doc.get("output_filename")
                 or source_doc.get("original_filename")
                 or "output.pdf"
             )
+            if raw_output_name.lower().endswith(".docx"):
+                raw_output_name = raw_output_name[:-5] + ".pdf"
+            preferred_output_name = raw_output_name
             selected_output_uri = None
             if mono_pdf_path:
                 selected_output_uri = await self.assembly_service.upload_output(
@@ -258,24 +272,42 @@ class PipelineOrchestrator:
             # ── Propagate final summary to the root pipeline span ──────────
             quality_report = attempt_result.get("quality_report") or {}
             token_usage = attempt_result.get("token_usage") or {}
-            set_root_span_attributes({
-                "pipeline.model_used": str(attempt_result.get("model_id") or ""),
-                "pipeline.intent": intent,
-                "pipeline.source_lang": source_lang,
-                "pipeline.target_lang": target_lang,
-                "pipeline.domain": domain,
-                "pipeline.attempt_index": int(attempt_result.get("attempt_index", 1)),
-                "pipeline.total_tokens": int(token_usage.get("total_tokens", 0)),
-                "pipeline.prompt_tokens": int(token_usage.get("prompt_tokens", 0)),
-                "pipeline.completion_tokens": int(token_usage.get("completion_tokens", 0)),
-                "pipeline.estimated_cost_usd": float(token_usage.get("estimated_cost_usd", 0.0)),
-                "pipeline.quality_final_score": float(quality_report.get("final_score", 0.0)),
-                "pipeline.quality_passed": bool(quality_report.get("pass_fail", False)),
-                "pipeline.quality_alignment": float(quality_report.get("alignment_score", 0.0)),
-                "pipeline.quality_omission": float(quality_report.get("omission_score", 0.0)),
-                "pipeline.quality_hallucination": float(quality_report.get("hallucination_score", 0.0)),
-                "pipeline.judge_model": str(quality_report.get("model") or ""),
-            })
+            set_root_span_attributes(
+                {
+                    "pipeline.model_used": str(attempt_result.get("model_id") or ""),
+                    "pipeline.intent": intent,
+                    "pipeline.source_lang": source_lang,
+                    "pipeline.target_lang": target_lang,
+                    "pipeline.domain": domain,
+                    "pipeline.attempt_index": int(
+                        attempt_result.get("attempt_index", 1)
+                    ),
+                    "pipeline.total_tokens": int(token_usage.get("total_tokens", 0)),
+                    "pipeline.prompt_tokens": int(token_usage.get("prompt_tokens", 0)),
+                    "pipeline.completion_tokens": int(
+                        token_usage.get("completion_tokens", 0)
+                    ),
+                    "pipeline.estimated_cost_usd": float(
+                        token_usage.get("estimated_cost_usd", 0.0)
+                    ),
+                    "pipeline.quality_final_score": float(
+                        quality_report.get("final_score", 0.0)
+                    ),
+                    "pipeline.quality_passed": bool(
+                        quality_report.get("pass_fail", False)
+                    ),
+                    "pipeline.quality_alignment": float(
+                        quality_report.get("alignment_score", 0.0)
+                    ),
+                    "pipeline.quality_omission": float(
+                        quality_report.get("omission_score", 0.0)
+                    ),
+                    "pipeline.quality_hallucination": float(
+                        quality_report.get("hallucination_score", 0.0)
+                    ),
+                    "pipeline.judge_model": str(quality_report.get("model") or ""),
+                }
+            )
         except Exception as exc:
             logger.error(f"Pipeline failed for job {job_id}. Exception: {exc}")
             pipeline_span.set_status(Status(StatusCode.ERROR, str(exc)))

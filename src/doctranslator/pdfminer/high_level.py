@@ -134,7 +134,8 @@ def extract_text_to_fp(  # NOSONAR - pdfminer-compatible public API intentionall
         msg = f"Output type can be text, html, xml or tag but is {output_type}"
         raise PDFValueError(msg)
 
-    assert device is not None
+    if device is None:
+        raise AssertionError
     interpreter = PDFPageInterpreter(rsrcmgr, device)
     for page in PDFPage.get_pages(
         inf,

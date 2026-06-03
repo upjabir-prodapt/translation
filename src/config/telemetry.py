@@ -88,17 +88,15 @@ def setup_telemetry(app, settings) -> None:
         or settings.OTEL_SERVICE_NAME
         or "translation_service"
     )
-    service_version = (
-        os.environ.get("COMMIT_SHA")
-        or settings.APP_VERSION
-        or "dev"
-    )
+    service_version = os.environ.get("COMMIT_SHA") or settings.APP_VERSION or "dev"
 
-    base_resource = Resource.create({
-        "service.name": service_name,
-        "service.version": service_version,
-        "gcp.project_id": project_id,
-    })
+    base_resource = Resource.create(
+        {
+            "service.name": service_name,
+            "service.version": service_version,
+            "gcp.project_id": project_id,
+        }
+    )
 
     # Merge OTEL_RESOURCE_ATTRIBUTES env var, then Cloud Run auto-detected attrs
     # (K_SERVICE → cloud_run.service, K_REVISION → cloud_run.revision, etc.)
@@ -107,6 +105,7 @@ def setup_telemetry(app, settings) -> None:
         from opentelemetry.resourcedetector.gcp_resource_detector import (
             GoogleCloudResourceDetector,
         )
+
         resource = resource.merge(
             GoogleCloudResourceDetector(raise_on_error=False).detect()
         )
@@ -158,7 +157,10 @@ def setup_telemetry(app, settings) -> None:
     #     Full prompt/response text is captured only when the env var
     #     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true is set.
     try:
-        from opentelemetry.instrumentation.google_genai import GoogleGenAiSdkInstrumentor
+        from opentelemetry.instrumentation.google_genai import (
+            GoogleGenAiSdkInstrumentor,
+        )
+
         GoogleGenAiSdkInstrumentor().instrument()
         logger.info(
             "GoogleGenAiSdkInstrumentor activated — gen_ai.* spans will appear "

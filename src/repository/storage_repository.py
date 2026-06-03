@@ -1,6 +1,7 @@
 """Generic GCS Storage Repository - Handles all Google Cloud Storage operations."""
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -8,8 +9,6 @@ from datetime import timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
-
-import logging
 
 import google.auth
 import google.auth.transport.requests
@@ -125,7 +124,9 @@ class StorageRepository:
                 if isinstance(source, bytes):
                     if file_type:
                         await asyncio.to_thread(
-                            blob.upload_from_string, source, content_type=file_type.value
+                            blob.upload_from_string,
+                            source,
+                            content_type=file_type.value,
                         )
                     else:
                         await asyncio.to_thread(blob.upload_from_string, source)
@@ -197,7 +198,9 @@ class StorageRepository:
             except GoogleAPIError as e:
                 logger.error(f"Failed to download file: {e}")
                 raise StorageError(
-                    f"Failed to download file: {e}", operation="download", path=blob_path
+                    f"Failed to download file: {e}",
+                    operation="download",
+                    path=blob_path,
                 ) from e
 
     async def list_files(
@@ -409,9 +412,7 @@ class StorageRepository:
             blob = self.bucket.blob(blob_path)
             expiration = datetime.now(UTC) + timedelta(seconds=expires_in)
 
-            signing_credentials = await asyncio.to_thread(
-                self._get_signing_credentials
-            )
+            signing_credentials = await asyncio.to_thread(self._get_signing_credentials)
 
             url = await asyncio.to_thread(
                 blob.generate_signed_url,
@@ -459,21 +460,27 @@ class StorageRepository:
         request = google.auth.transport.requests.Request()
         credentials.refresh(request)
 
-        service_account_email = getattr(
-            credentials, "service_account_email", None
-        )
+        service_account_email = getattr(credentials, "service_account_email", None)
         if not service_account_email:
             # Last resort: read the SA email from the GCE metadata server.
-            import urllib.request
-            meta_url = (
-                "http://metadata.google.internal/computeMetadata/v1/instance/"
-                "service-accounts/default/email"
+            # URL is a hardcoded GCE internal constant — never user-supplied.
+            import requests as _requests  # transitive dep via google-auth[requests]
+
+            _gce_metadata_base = "http://metadata.google.internal/computeMetadata/v1/"
+            _gce_metadata_email_url = (
+                _gce_metadata_base + "instance/service-accounts/default/email"
             )
-            req = urllib.request.Request(
-                meta_url, headers={"Metadata-Flavor": "Google"}
+            if not _gce_metadata_email_url.startswith(_gce_metadata_base):
+                raise ValueError(
+                    f"Unexpected GCE metadata URL: {_gce_metadata_email_url!r}"
+                )
+            _resp = _requests.get(
+                _gce_metadata_email_url,
+                headers={"Metadata-Flavor": "Google"},
+                timeout=5,
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                service_account_email = resp.read().decode()
+            _resp.raise_for_status()
+            service_account_email = _resp.text
 
         signer = iam.Signer(
             request=request,
@@ -483,10 +490,11 @@ class StorageRepository:
 
         # Build new service-account credentials that use IAM for signing.
         from google.oauth2 import service_account as sa_module
+
         signing_credentials = sa_module.Credentials(
             signer=signer,
             service_account_email=service_account_email,
-            token_uri="https://oauth2.googleapis.com/token",
+            token_uri="https://oauth2.googleapis.com/token",  # noqa: S106
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
         return signing_credentials

@@ -71,13 +71,16 @@ def main():
     parser.add_argument("assets_repo_path", type=str, help="Path to the font file.")
     args = parser.parse_args()
     repo_path = Path(args.assets_repo_path)
-    assert repo_path.exists(), f"Assets repo path {repo_path} does not exist."
-    assert (repo_path / "README.md").exists(), (
-        f"Assets repo path {repo_path} does not contain a README.md file."
-    )
-    assert (repo_path / "fonts").exists(), (
-        f"Assets repo path {repo_path} does not contain a fonts folder."
-    )
+    if not repo_path.exists():
+        raise AssertionError(f"Assets repo path {repo_path} does not exist.")
+    if not (repo_path / "README.md").exists():
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a README.md file."
+        )
+    if not (repo_path / "fonts").exists():
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a fonts folder."
+        )
     logger.info(f"Getting font metadata for {repo_path}")
 
     metadatas = {}

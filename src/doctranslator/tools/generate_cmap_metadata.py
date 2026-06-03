@@ -41,13 +41,16 @@ def main() -> None:
     )
     args = parser.parse_args()
     repo_path = Path(args.assets_repo_path)
-    assert repo_path.exists(), f"Assets repo path {repo_path} does not exist."
-    assert (repo_path / "README.md").exists(), (
-        f"Assets repo path {repo_path} does not contain a README.md file."
-    )
-    assert (repo_path / "cmap").exists(), (
-        f"Assets repo path {repo_path} does not contain a cmap folder."
-    )
+    if not repo_path.exists():
+        raise AssertionError(f"Assets repo path {repo_path} does not exist.")
+    if not (repo_path / "README.md").exists():
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a README.md file."
+        )
+    if not (repo_path / "cmap").exists():
+        raise AssertionError(
+            f"Assets repo path {repo_path} does not contain a cmap folder."
+        )
     logger.info(f"Getting cmap metadata for {repo_path}")
 
     metadatas: dict[str, dict[str, object]] = {}

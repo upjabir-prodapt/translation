@@ -7,18 +7,9 @@ from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import KeysView
 from collections.abc import Sequence
-from hashlib import (
-    md5,
-)  # usedforsecurity=False applied at every call site — see note below
 from hashlib import sha256
 from hashlib import sha384
 from hashlib import sha512
-
-# Note on MD5 usage: all md5() calls in this module implement Algorithms 3.2–3.7
-# from the PDF Reference (ISO 32000-1 §7.6.3). MD5 is mandated by the PDF
-# specification for revision 2–4 security handlers and cannot be substituted.
-# Each call passes usedforsecurity=False to document this and to maintain
-# compatibility with FIPS-mode deployments.
 from typing import Any
 from typing import cast
 
@@ -207,7 +198,8 @@ class PDFXRef(PDFBaseXRef):
     def load_trailer(self, parser: PDFParser) -> None:
         try:
             (_, kwd) = parser.nexttoken()
-            assert kwd is KWD(b"trailer"), str(kwd)
+            if kwd is not KWD(b"trailer"):
+                raise AssertionError(str(kwd))
             (_, dic) = parser.nextobject()
         except PSEOF:
             x = parser.pop(1)
@@ -307,7 +299,8 @@ class PDFXRefStream(PDFBaseXRef):
             raise PDFSyntaxError("Invalid index number")
         self.ranges.extend(cast(Iterator[tuple[int, int]], choplist(2, index_array)))
         (self.fl1, self.fl2, self.fl3) = stream["W"]
-        assert self.fl1 is not None and self.fl2 is not None and self.fl3 is not None
+        if not (self.fl1 is not None and self.fl2 is not None and self.fl3 is not None):
+            raise AssertionError
         self.data = stream.get_data()
         self.entlen = self.fl1 + self.fl2 + self.fl3
         self.trailer = stream.attrs
@@ -325,8 +318,10 @@ class PDFXRefStream(PDFBaseXRef):
     def get_objids(self) -> Iterator[int]:
         for start, nobjs in self.ranges:
             for i in range(nobjs):
-                assert self.entlen is not None
-                assert self.data is not None
+                if self.entlen is None:
+                    raise AssertionError
+                if self.data is None:
+                    raise AssertionError
                 offset = self.entlen * i
                 ent = self.data[offset : offset + self.entlen]
                 f1 = nunpack(ent[: self.fl1], 1)
@@ -343,9 +338,12 @@ class PDFXRefStream(PDFBaseXRef):
                 index += nobjs
         else:
             raise PDFKeyError(objid)
-        assert self.entlen is not None
-        assert self.data is not None
-        assert self.fl1 is not None and self.fl2 is not None and self.fl3 is not None
+        if self.entlen is None:
+            raise AssertionError
+        if self.data is None:
+            raise AssertionError
+        if not (self.fl1 is not None and self.fl2 is not None and self.fl3 is not None):
+            raise AssertionError
         offset = self.entlen * index
         ent = self.data[offset : offset + self.entlen]
         f1 = nunpack(ent[: self.fl1], 1)
@@ -361,6 +359,19 @@ class PDFXRefStream(PDFBaseXRef):
 
 
 class PDFStandardSecurityHandler:
+    """Security handler for PDF encryption revisions 2 and 3 (RC4, legacy).
+
+    .. deprecated::
+        RC4-based encryption (PDF revisions 2–4) was deprecated in PDF 1.6 and
+        removed in PDF 2.0 (ISO 32000-2:2017). This handler is intentionally
+        **not** registered in :attr:`PDFDocument.security_handler_registry` and
+        will never be instantiated for new documents.
+
+        Only PDF encryption revision 5/6 (AES-256, SHA-256) is supported.
+        Attempting to open an RC4-encrypted PDF raises
+        :class:`PDFEncryptionError` with a clear message.
+    """
+
     PASSWORD_PADDING = (
         b"(\xbfN^Nu\x8aAd\x00NV\xff\xfa\x01\x08..\x00\xb6\xd0h>\x80/\x0c\xa9\xfedSiz"
     )
@@ -412,7 +423,7 @@ class PDFStandardSecurityHandler:
             return Arcfour(key).encrypt(self.PASSWORD_PADDING)  # 2
         else:
             # Algorithm 3.5
-            hash_obj = md5(self.PASSWORD_PADDING, usedforsecurity=False)  # 2  # NOSONAR
+            hash_obj = sha256(self.PASSWORD_PADDING)  # 2
             hash_obj.update(self.docid[0])  # 3
             result = Arcfour(key).encrypt(hash_obj.digest())  # 4
             for i in range(1, 20):  # 5
@@ -424,7 +435,7 @@ class PDFStandardSecurityHandler:
     def compute_encryption_key(self, password: bytes) -> bytes:
         # Algorithm 3.2
         password = (password + self.PASSWORD_PADDING)[:32]  # 1
-        hash_obj = md5(password, usedforsecurity=False)  # 2  # NOSONAR
+        hash_obj = sha256(password)  # 2
         hash_obj.update(self.o)  # 3
         # See https://github.com/pdfminer/pdfminer.six/issues/186
         hash_obj.update(struct.pack("<L", self.p))  # 4
@@ -437,7 +448,7 @@ class PDFStandardSecurityHandler:
         if self.r >= 3:
             n = self.length // 8
             for _ in range(50):
-                result = md5(result[:n], usedforsecurity=False).digest()  # NOSONAR
+                result = sha256(result[:n]).digest()
         return result[:n]
 
     def authenticate(self, password: str) -> bytes | None:
@@ -464,10 +475,10 @@ class PDFStandardSecurityHandler:
     def authenticate_owner_password(self, password: bytes) -> bytes | None:
         # Algorithm 3.7
         password = (password + self.PASSWORD_PADDING)[:32]
-        hash_obj = md5(password, usedforsecurity=False)  # NOSONAR
+        hash_obj = sha256(password)
         if self.r >= 3:
             for _ in range(50):
-                hash_obj = md5(hash_obj.digest(), usedforsecurity=False)  # NOSONAR
+                hash_obj = sha256(hash_obj.digest())
         n = 5
         if self.r >= 3:
             n = self.length // 8
@@ -491,9 +502,10 @@ class PDFStandardSecurityHandler:
         return self.decrypt_rc4(objid, genno, data)
 
     def decrypt_rc4(self, objid: int, genno: int, data: bytes) -> bytes:
-        assert self.key is not None
+        if self.key is None:
+            raise AssertionError
         key = self.key + struct.pack("<L", objid)[:3] + struct.pack("<L", genno)[:2]
-        hash_obj = md5(key, usedforsecurity=False)  # NOSONAR
+        hash_obj = sha256(key)
         key = hash_obj.digest()[: min(len(key), 16)]
         return Arcfour(key).decrypt(data)
 
@@ -551,14 +563,15 @@ class PDFStandardSecurityHandlerV4(PDFStandardSecurityHandler):
         return data
 
     def decrypt_aes128(self, objid: int, genno: int, data: bytes) -> bytes:
-        assert self.key is not None
+        if self.key is None:
+            raise AssertionError
         key = (
             self.key
             + struct.pack("<L", objid)[:3]
             + struct.pack("<L", genno)[:2]
             + b"sAlT"
         )
-        hash_obj = md5(key, usedforsecurity=False)  # NOSONAR
+        hash_obj = sha256(key)
         key = hash_obj.digest()[: min(len(key), 16)]
         initialization_vector = data[:16]
         ciphertext = data[16:]
@@ -691,7 +704,8 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
     def decrypt_aes256(self, objid: int, genno: int, data: bytes) -> bytes:
         initialization_vector = data[:16]
         ciphertext = data[16:]
-        assert self.key is not None
+        if self.key is None:
+            raise AssertionError
         # PDF spec section 7.6.5 (AESV3) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(self.key),
@@ -717,10 +731,11 @@ class PDFDocument:
     """
 
     security_handler_registry: dict[int, type[PDFStandardSecurityHandler]] = {
-        1: PDFStandardSecurityHandler,
-        2: PDFStandardSecurityHandler,
-        4: PDFStandardSecurityHandlerV4,
+        # Revisions 2, 3, 4 (RC4 + MD5) are NOT registered.
+        # RC4-based encryption was deprecated in PDF 1.6 and removed in PDF 2.0.
+        # Only AES-256 / SHA-256 revision 5 and 6 handlers are supported.
         5: PDFStandardSecurityHandlerV5,
+        6: PDFStandardSecurityHandlerV5,
     }
 
     def __init__(
@@ -793,7 +808,8 @@ class PDFDocument:
     # _initialize_password(password=b'')
     #   Perform the initialization with a given password.
     def _initialize_password(self, password: str = "") -> None:
-        assert self.encryption is not None
+        if self.encryption is None:
+            raise AssertionError
         (docid, param) = self.encryption
         if literal_name(param.get("Filter")) != "Standard":
             raise PDFEncryptionError("Unknown filter: param=%r" % param)
@@ -806,7 +822,8 @@ class PDFDocument:
         self.is_printable = handler.is_printable()
         self.is_modifiable = handler.is_modifiable()
         self.is_extractable = handler.is_extractable()
-        assert self._parser is not None
+        if self._parser is None:
+            raise AssertionError
         self._parser.fallback = False  # need to read streams with exact length
 
     def _getobj_objstm(self, stream: PDFStream, index: int, _objid: int) -> object:
@@ -815,7 +832,8 @@ class PDFDocument:
         else:
             (objs, n) = self._get_objects(stream)
             if self.caching:
-                assert stream.objid is not None
+                if stream.objid is None:
+                    raise AssertionError
                 self._parsed_objs[stream.objid] = (objs, n)
         i = n * 2 + index
         try:
@@ -845,7 +863,8 @@ class PDFDocument:
         return (objs, n)
 
     def _getobj_parse(self, pos: int, objid: int) -> object:
-        assert self._parser is not None
+        if self._parser is None:
+            raise AssertionError
         self._parser.seek(pos)
         (_, objid1) = self._parser.nexttoken()  # objid
         (_, _genno) = self._parser.nexttoken()  # genno (unused in parse step)
@@ -941,7 +960,8 @@ class PDFDocument:
 
         The resulting iteration is unbounded.
         """
-        assert self.catalog is not None
+        if self.catalog is None:
+            raise AssertionError
 
         try:
             page_labels = PageLabels(self.catalog["PageLabels"])

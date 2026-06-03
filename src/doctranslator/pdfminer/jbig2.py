@@ -65,7 +65,8 @@ def mask_value(mask: int, value: int) -> int:
 
 
 def unpack_int(format: str, buffer: bytes) -> int:
-    assert format in {">B", ">I", ">L"}
+    if format not in {">B", ">I", ">L"}:
+        raise AssertionError
     [result] = cast(tuple[int], unpack(format, buffer))
     return result
 
@@ -147,7 +148,8 @@ class JBIG2StreamReader:
                     retain_segments.append(bit_set(bit_pos, ret_byte))
 
         seg_num = segment["number"]
-        assert isinstance(seg_num, int)
+        if not isinstance(seg_num, int):
+            raise AssertionError
         if seg_num <= 256:
             ref_format = ">B"
         elif seg_num <= 65536:
@@ -347,7 +349,8 @@ class JBIG2StreamWriter:
         segment: JBIG2Segment,
     ) -> bytes:
         ref_count = value["ref_count"]
-        assert isinstance(ref_count, int)
+        if not isinstance(ref_count, int):
+            raise AssertionError
         retain_segments = cast(list[bool], value.get("retain_segments", []))
 
         if ref_count <= 4:

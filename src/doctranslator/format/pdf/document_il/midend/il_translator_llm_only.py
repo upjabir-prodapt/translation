@@ -32,6 +32,7 @@ from src.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
 )
 from src.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.doctranslator.translator.translator import BaseTranslator
+from src.doctranslator.translator.translator import BatchTranslationResponse
 from src.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
 )
@@ -1010,10 +1011,8 @@ class ILTranslatorLLMOnly:
                 llm_translate_tracker.set_input(final_input)
             llm_output = self.translate_engine.llm_translate(
                 final_input,
-                rate_limit_params={
-                    "paragraph_token_count": paragraph_token_count,
-                    "request_json_mode": True,
-                },
+                rate_limit_params={"paragraph_token_count": paragraph_token_count},
+                response_schema=BatchTranslationResponse,
             )
             for llm_translate_tracker in llm_translate_trackers:
                 llm_translate_tracker.set_output(llm_output)

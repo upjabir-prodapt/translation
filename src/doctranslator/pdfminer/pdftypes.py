@@ -96,7 +96,8 @@ class PDFObjRef(PDFObject):
         return "<PDFObjRef:%d>" % (self.objid)
 
     def resolve(self, default: object = None) -> Any:
-        assert self.doc is not None
+        if self.doc is None:
+            raise AssertionError
         try:
             return self.doc.getobj(self.objid)
         except PDFObjectNotFound:
@@ -245,7 +246,8 @@ class PDFStream(PDFObject):
         rawdata: bytes,
         decipher: DecipherCallable | None = None,
     ) -> None:
-        assert isinstance(attrs, dict), str(type(attrs))
+        if not isinstance(attrs, dict):
+            raise AssertionError(str(type(attrs)))
         self.attrs = attrs
         self.rawdata: bytes | None = rawdata
         self.decipher = decipher
@@ -259,14 +261,16 @@ class PDFStream(PDFObject):
 
     def __repr__(self) -> str:
         if self.data is None:
-            assert self.rawdata is not None
+            if self.rawdata is None:
+                raise AssertionError
             return "<PDFStream(%r): raw=%d, %r>" % (
                 self.objid,
                 len(self.rawdata),
                 self.attrs,
             )
         else:
-            assert self.data is not None
+            if self.data is None:
+                raise AssertionError
             return "<PDFStream(%r): len=%d, %r>" % (
                 self.objid,
                 len(self.data),
@@ -374,14 +378,15 @@ class PDFStream(PDFObject):
         return data
 
     def decode(self) -> None:
-        assert self.data is None and self.rawdata is not None, str(
-            (self.data, self.rawdata),
-        )
+        if not (self.data is None and self.rawdata is not None):
+            raise AssertionError(str((self.data, self.rawdata)))
         data = self.rawdata
         if self.decipher:
             # Handle encryption
-            assert self.objid is not None
-            assert self.genno is not None
+            if self.objid is None:
+                raise AssertionError
+            if self.genno is None:
+                raise AssertionError
             data = self.decipher(self.objid, self.genno, data, self.attrs)
         filters = self.get_filters()
         if not filters:
@@ -396,7 +401,8 @@ class PDFStream(PDFObject):
     def get_data(self) -> bytes:
         if self.data is None:
             self.decode()
-            assert self.data is not None
+            if self.data is None:
+                raise AssertionError
         return self.data
 
     def get_rawdata(self) -> bytes | None:

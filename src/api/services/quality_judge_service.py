@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from dataclasses import asdict
@@ -14,13 +15,10 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
+from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
-
-import logging
-
-from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
 from src.config.retry import llm_retry
@@ -99,10 +97,13 @@ class GoogleADKJudgeAgent:
     def _generate_judge_content_with_retry(
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
-        from opentelemetry.trace import Status, StatusCode
+        from opentelemetry.trace import Status
+        from opentelemetry.trace import StatusCode
 
         prompt_chars = len(contents)
-        prompt_hash = hashlib.md5(contents.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()[:12]  # noqa: S324
+        prompt_hash = hashlib.sha256(
+            contents.encode("utf-8", errors="replace")
+        ).hexdigest()[:12]
         prompt_preview = contents[:300].replace("\n", "\\n")
         temperature = float(getattr(config, "temperature", 0.0) or 0.0)
         logger.debug(
@@ -134,9 +135,13 @@ class GoogleADKJudgeAgent:
                 usage = getattr(response, "usage_metadata", None)
                 if usage:
                     input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-                    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+                    output_tokens = int(
+                        getattr(usage, "candidates_token_count", 0) or 0
+                    )
                     total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
-                    cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
+                    cached_tokens = int(
+                        getattr(usage, "cached_content_token_count", 0) or 0
+                    )
                     span.set_attribute("llm.input_tokens", input_tokens)
                     span.set_attribute("llm.output_tokens", output_tokens)
                     span.set_attribute("llm.total_tokens", total_tokens)
@@ -236,6 +241,10 @@ class GoogleADKJudgeAgent:
                 config=judge_config,
             )
             parsed = response.parsed
+            if not isinstance(parsed, QualityJudgeLLMScores):
+                raise ValueError(
+                    f"response.parsed is not QualityJudgeLLMScores: {type(parsed)}"
+                )
             return parsed
         except Exception as exc:
             logger.warning(
@@ -276,15 +285,9 @@ class GoogleADKJudgeAgent:
             },
         ) as span:
             llm_scores = self._judge_with_llm(source_text, translated_text)
-            if not isinstance(llm_scores, dict):
-                llm_scores = (
-                    llm_scores.model_dump()
-                    if isinstance(llm_scores, QualityJudgeLLMScores)
-                    else dict(llm_scores)
-                )
-            alignment = max(0.0, min(1.0, llm_scores.get("alignment_score", 0.0)))
-            omission = max(0.0, min(1.0, llm_scores.get("omission_score", 0.0)))
-            hallucination = max(0.0, min(1.0, llm_scores.get("hallucination_score", 0.0)))
+            alignment = max(0.0, min(1.0, llm_scores.alignment_score))
+            omission = max(0.0, min(1.0, llm_scores.omission_score))
+            hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))
             final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
             passed = final >= settings.QUALITY_THRESHOLD
             elapsed = time.monotonic() - t0
@@ -302,18 +305,20 @@ class GoogleADKJudgeAgent:
             f"hallucination={hallucination:.3f} final={final:.3f} passed={passed}",
         )
         # ── Bubble judge summary up to the pipeline.run root span ──────────
-        set_root_span_attributes({
-            "judge.model": self.model,
-            "judge.final_score": round(final, 4),
-            "judge.passed": passed,
-        })
+        set_root_span_attributes(
+            {
+                "judge.model": self.model,
+                "judge.final_score": round(final, 4),
+                "judge.passed": passed,
+            }
+        )
         return QualityJudgeResult(
             alignment_score=alignment,
             omission_score=omission,
             hallucination_score=hallucination,
             final_score=final,
             pass_fail=passed,
-            reasons=list(llm_scores.get("reasons", [])),
+            reasons=list(llm_scores.reasons),
             model=self.model,
         )
 

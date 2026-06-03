@@ -1,6 +1,7 @@
 """Job management service."""
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC
 from datetime import datetime
@@ -20,10 +21,10 @@ from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
 from src.api.schemas.responses import TranslationResult
-import logging
-logger = logging.getLogger(__name__)
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:

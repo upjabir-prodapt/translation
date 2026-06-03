@@ -1,6 +1,7 @@
 """Translation processing service for API-only runtime."""
 
 import json
+import logging
 import re
 import uuid
 from collections import Counter
@@ -14,20 +15,15 @@ import pymupdf
 from langdetect import DetectorFactory
 from langdetect import LangDetectException
 from langdetect import detect_langs
+from opentelemetry.trace import SpanKind
 
 from src.api.services.quality_judge_service import GoogleADKJudgeAgent
 from src.api.services.quality_judge_service import QualityJudgeResult
 from src.api.services.quality_judge_service import extract_attempt_text
 from src.api.services.task_models import DocTranslatorTranslationConfig
-import logging
-
-from opentelemetry.trace import SpanKind
-
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
 from src.doctranslator import async_translate
-
-logger = logging.getLogger(__name__)
 from src.doctranslator.docvision.doclayout import OnnxModel
 from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
 from src.doctranslator.format.pdf.translation_config import DlpConfig
@@ -40,6 +36,8 @@ from src.loaders.assets import get_doclayout_onnx_model_path
 from src.repository.translation_storage_repository import (
     get_translation_storage_repository,
 )
+
+logger = logging.getLogger(__name__)
 
 DetectorFactory.seed = 0
 

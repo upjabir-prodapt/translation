@@ -19,6 +19,8 @@ from concurrent.futures.thread import _WorkItem
 from heapq import heappop
 from heapq import heappush
 
+from opentelemetry import context as otel_context
+
 logger = logging.getLogger(__name__)
 
 ########################################################################################################################
@@ -203,6 +205,22 @@ class PriorityThreadPoolExecutor(ThreadPoolExecutor):
         - priority (integer later sys.maxsize)
 
         """
+        # Propagate the active OTel span context into the worker thread.
+        # ThreadPoolExecutor does not copy contextvars automatically, so without
+        # this every gemini.generate_content / llm.translate_batch span becomes
+        # an orphaned root span in GCP instead of a child of pipeline.translation.
+        _ctx = otel_context.get_current()
+        _fn = fn
+
+        def _fn_with_otel(*a, **kw):
+            token = otel_context.attach(_ctx)
+            try:
+                return _fn(*a, **kw)
+            finally:
+                otel_context.detach(token)
+
+        fn = _fn_with_otel
+
         with self._shutdown_lock:
             if self._broken:
                 raise BrokenThreadPool(self._broken)

@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import hashlib
 import io
@@ -15,6 +16,7 @@ from typing import Any
 from typing import BinaryIO
 
 import pymupdf
+from opentelemetry import context as otel_context
 from pymupdf import Document
 from pymupdf import Font
 
@@ -308,8 +310,10 @@ def start_parse_il(
         il_creater=il_creater,
     )
 
-    assert il_creater is not None
-    assert translation_config is not None
+    if il_creater is None:
+        raise AssertionError
+    if translation_config is None:
+        raise AssertionError
     obj_patch = {}
     interpreter = PDFPageInterpreterEx(rsrcmgr, device, obj_patch, il_creater)
     if pages:
@@ -567,6 +571,14 @@ async def async_translate(translation_config: TranslationConfig):
 
     finish_event = asyncio.Event()
     cancel_event = threading.Event()
+
+    # Capture the full contextvars snapshot here (on the async task) so that
+    # the worker thread inherits the active OTel span context.  Without this,
+    # run_in_executor spawns a bare thread with no ContextVar state, causing
+    # every llm.translate_batch / gemini.generate_content span to be created
+    # as an orphaned root span instead of a child of pipeline.run.
+    otel_ctx = contextvars.copy_context()
+
     with ProgressMonitor(
         get_translation_stage(translation_config),
         progress_change_callback=callback.step_callback,
@@ -576,7 +588,11 @@ async def async_translate(translation_config: TranslationConfig):
         loop=loop,
         report_interval=translation_config.report_interval,
     ) as pm:
-        future = loop.run_in_executor(None, do_translate, pm, translation_config)
+        # Run do_translate inside the captured context so OTel's active span
+        # and _root_span_var are visible to all translator code in the thread.
+        future = loop.run_in_executor(
+            None, otel_ctx.run, do_translate, pm, translation_config
+        )
         try:
             async for event in callback:
                 event = event.kwargs
@@ -765,7 +781,8 @@ def _build_part_config(
         original_doc, from_page=split_point.start_page, to_page=split_point.end_page
     )
     safe_save(temp_doc, part_temp_input_path)
-    assert temp_doc.page_count == split_point.end_page - split_point.start_page + 1
+    if temp_doc.page_count != split_point.end_page - split_point.start_page + 1:
+        raise AssertionError
 
     if i > 0:
         part_config.watermark_output_mode = WatermarkOutputMode.NoWatermark
@@ -824,9 +841,20 @@ def _run_split_translation(
         if part_config is not None:
             part_configs[i] = part_config
 
+    # Capture the active OTel span context here (pipeline.translation is current)
+    # so worker threads can parent their spans correctly.  ThreadPoolExecutor does
+    # not propagate contextvars automatically; without this every
+    # gemini.generate_content / llm.translate_batch span inside a split part
+    # becomes an orphaned root span in GCP instead of a child of pipeline.translation.
+    split_otel_ctx = otel_context.get_current()
+
     def run_part(part_idx: int, part_cfg: TranslationConfig):
-        part_monitor = pm.create_part_monitor(part_idx, len(split_points))
-        return _do_translate_single(part_monitor, part_cfg)
+        token = otel_context.attach(split_otel_ctx)
+        try:
+            part_monitor = pm.create_part_monitor(part_idx, len(split_points))
+            return _do_translate_single(part_monitor, part_cfg)
+        finally:
+            otel_context.detach(token)
 
     max_part_workers = max(1, int(settings.SPLIT_PART_MAX_CONCURRENT))
     with concurrent.futures.ThreadPoolExecutor(

@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from src.api.services.glossary_service import GlossaryService
 from src.api.services.intent_router_service import IntentRouterService
-import logging
-
 from src.config.constants import settings
 from src.loaders.services.download_service import download_async
-
-logger = logging.getLogger(__name__)
 from src.loaders.services.warmup_service import WarmupService
 from src.loaders.utils.path_helpers import get_cache_file_path
 from src.loaders.utils.path_helpers import get_cache_root
 from src.loaders.utils.path_helpers import get_subdir_path
+
+logger = logging.getLogger(__name__)
 
 
 class StartupAssetsService:

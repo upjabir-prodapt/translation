@@ -16,7 +16,8 @@ class YoloResult:
         if boxes is not None:
             self.boxes = boxes
         else:
-            assert boxes_data is not None
+            if boxes_data is None:
+                raise AssertionError
             self.boxes = [YoloBox(data=d) for d in boxes_data]
         self.boxes.sort(key=lambda x: x.conf, reverse=True)
         self.names = names
@@ -31,7 +32,8 @@ class YoloBox:
             self.conf = data[-2]
             self.cls = data[-1]
             return
-        assert xyxy is not None and conf is not None and cls is not None
+        if not (xyxy is not None and conf is not None and cls is not None):
+            raise AssertionError
         self.xyxy = xyxy
         self.conf = conf
         self.cls = cls

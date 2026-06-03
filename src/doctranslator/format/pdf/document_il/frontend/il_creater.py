@@ -580,8 +580,10 @@ class ILCreater:
         self.current_page.mediabox = il_version_1.Mediabox(box=box)
 
     def on_page_number(self, page_number: int):
-        assert isinstance(page_number, int)
-        assert page_number >= 0
+        if not isinstance(page_number, int):
+            raise AssertionError
+        if page_number < 0:
+            raise AssertionError
         self.current_page.page_number = page_number
 
     def on_page_base_operation(self, operation: str):
@@ -1220,8 +1222,10 @@ class ILCreater:
         return self.docs
 
     def on_total_pages(self, total_pages: int):
-        assert isinstance(total_pages, int)
-        assert total_pages > 0
+        if not isinstance(total_pages, int):
+            raise AssertionError
+        if total_pages <= 0:
+            raise AssertionError
         self.docs.total_pages = total_pages
         total = 0
         for page in range(total_pages):

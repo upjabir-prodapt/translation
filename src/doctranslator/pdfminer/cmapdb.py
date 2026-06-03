@@ -10,10 +10,11 @@ More information is available on:
 """
 
 import gzip
+import io
 import logging
 import os
 import os.path
-import pickle as pickle
+import pickle
 import struct
 import sys
 from collections.abc import Iterable
@@ -38,6 +39,32 @@ from src.doctranslator.pdfminer.utils import choplist
 from src.doctranslator.pdfminer.utils import nunpack
 
 log = logging.getLogger(__name__)
+
+
+class _SafeCMapUnpickler(pickle.Unpickler):
+    """Unpickler restricted to the primitive types used in bundled CMap data files.
+
+    Overrides find_class() to raise an error for any type outside the known-safe
+    set, preventing arbitrary code execution during deserialization (CWE-502).
+    """
+
+    _ALLOWED: frozenset[tuple[str, str]] = frozenset(
+        {
+            ("builtins", "dict"),
+            ("builtins", "int"),
+            ("builtins", "bool"),
+            ("builtins", "list"),
+            ("builtins", "str"),
+            ("builtins", "bytes"),
+        }
+    )
+
+    def find_class(self, module: str, name: str) -> Any:
+        if (module, name) not in self._ALLOWED:
+            raise pickle.UnpicklingError(
+                f"Blocked unsafe type during CMap load: {module}.{name}"
+            )
+        return super().find_class(module, name)
 
 
 class CMapError(PDFException):
@@ -81,7 +108,8 @@ class CMap(CMapBase):
         return "<CMap: %s>" % self.attrs.get("CMapName")
 
     def use_cmap(self, cmap: CMapBase) -> None:
-        assert isinstance(cmap, CMap), str(type(cmap))
+        if not isinstance(cmap, CMap):
+            raise AssertionError(str(type(cmap)))
 
         def copy(dst: dict[int, object], src: dict[int, object]) -> None:
             for k, v in src.items():
@@ -169,9 +197,8 @@ class IdentityUnicodeMap(UnicodeMap):
 
 class FileCMap(CMap):
     def add_code2cid(self, code: str, cid: int) -> None:
-        assert isinstance(code, str) and isinstance(cid, int), str(
-            (type(code), type(cid)),
-        )
+        if not (isinstance(code, str) and isinstance(cid, int)):
+            raise AssertionError(str((type(code), type(cid))))
         d = self.code2cid
         for c in code[:-1]:
             ci = ord(c)
@@ -187,10 +214,12 @@ class FileCMap(CMap):
 
 class FileUnicodeMap(UnicodeMap):
     def add_cid2unichr(self, cid: int, code: PSLiteral | bytes | int) -> None:
-        assert isinstance(cid, int), str(type(cid))
+        if not isinstance(cid, int):
+            raise AssertionError(str(type(cid)))
         if isinstance(code, PSLiteral):
             # Interpret as an Adobe glyph name.
-            assert isinstance(code.name, str)
+            if not isinstance(code.name, str):
+                raise AssertionError
             unichr = name2unicode(code.name)
         elif isinstance(code, bytes):
             # Interpret as UTF-16BE.
@@ -245,9 +274,10 @@ class CMapDB:
             if os.path.exists(path):
                 gzfile = gzip.open(path)
                 try:
-                    return type(str(name), (), pickle.loads(gzfile.read()))
+                    data = gzfile.read()
                 finally:
                     gzfile.close()
+                return type(str(name), (), _SafeCMapUnpickler(io.BytesIO(data)).load())
         raise CMapDB.CMapNotFound(name)
 
     @classmethod
@@ -389,7 +419,8 @@ class CMapParser(PSStackParser[PSKeyword]):
             if isinstance(code, list):
                 self._apply_bfrange_list(start, end, code)
             else:
-                assert isinstance(code, bytes)
+                if not isinstance(code, bytes):
+                    raise AssertionError
                 self._apply_bfrange_bytes(start, end, code)
 
     def _handle_def(self) -> None:

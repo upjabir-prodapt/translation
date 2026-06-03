@@ -134,7 +134,8 @@ class PDFParser(PSStackParser[Union[PSKeyword, PDFStream, PDFObjRef, None]]):
             dic,
             data[:10],
         )
-        assert self.doc is not None
+        if self.doc is None:
+            raise AssertionError
         stream = PDFStream(dic, bytes(data), self.doc.decipher)
         self.push((pos, stream))
 

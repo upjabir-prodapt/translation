@@ -1,11 +1,11 @@
 """Progress tracking service for translation jobs."""
 
+import logging
 from datetime import UTC
 from datetime import datetime
 from typing import Any
 from typing import Protocol
 
-import logging
 logger = logging.getLogger(__name__)
 
 
