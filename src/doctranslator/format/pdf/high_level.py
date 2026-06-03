@@ -16,6 +16,7 @@ from typing import Any
 from typing import BinaryIO
 
 import pymupdf
+from opentelemetry import context as otel_context
 from pymupdf import Document
 from pymupdf import Font
 
@@ -840,9 +841,20 @@ def _run_split_translation(
         if part_config is not None:
             part_configs[i] = part_config
 
+    # Capture the active OTel span context here (pipeline.translation is current)
+    # so worker threads can parent their spans correctly.  ThreadPoolExecutor does
+    # not propagate contextvars automatically; without this every
+    # gemini.generate_content / llm.translate_batch span inside a split part
+    # becomes an orphaned root span in GCP instead of a child of pipeline.translation.
+    split_otel_ctx = otel_context.get_current()
+
     def run_part(part_idx: int, part_cfg: TranslationConfig):
-        part_monitor = pm.create_part_monitor(part_idx, len(split_points))
-        return _do_translate_single(part_monitor, part_cfg)
+        token = otel_context.attach(split_otel_ctx)
+        try:
+            part_monitor = pm.create_part_monitor(part_idx, len(split_points))
+            return _do_translate_single(part_monitor, part_cfg)
+        finally:
+            otel_context.detach(token)
 
     max_part_workers = max(1, int(settings.SPLIT_PART_MAX_CONCURRENT))
     with concurrent.futures.ThreadPoolExecutor(

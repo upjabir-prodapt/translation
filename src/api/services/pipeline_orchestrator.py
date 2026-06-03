@@ -110,7 +110,6 @@ class PipelineOrchestrator:
                 otel_context.detach(token)
 
     async def _run_pipeline(self, job_id: str, job_data: dict[str, Any]) -> None:
-        source_doc = job_data["source_document"]
         translation_config = job_data["translation_config"]
 
         with tracer_pipeline.start_as_current_span(
