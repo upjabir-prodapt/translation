@@ -10,6 +10,8 @@ def mock_storage_client():
     client = MagicMock()
     bucket = MagicMock()
     blob = MagicMock()
+    blob.upload_from_string = MagicMock()
+    blob.upload_from_filename = MagicMock()
     client.bucket.return_value = bucket
     bucket.blob.return_value = blob
     return client

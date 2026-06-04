@@ -285,6 +285,10 @@ class GoogleADKJudgeAgent:
             },
         ) as span:
             llm_scores = self._judge_with_llm(source_text, translated_text)
+            if isinstance(llm_scores, dict):
+                llm_scores = QualityJudgeLLMScores(**llm_scores)
+            elif not isinstance(llm_scores, QualityJudgeLLMScores):
+                llm_scores = QualityJudgeLLMScores(**dict(llm_scores))
             alignment = max(0.0, min(1.0, llm_scores.alignment_score))
             omission = max(0.0, min(1.0, llm_scores.omission_score))
             hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))

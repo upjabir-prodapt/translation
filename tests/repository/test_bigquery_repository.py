@@ -80,7 +80,7 @@ class TestBigQueryRepository:
         )
 
         mock_query_job = MagicMock()
-        mock_query_job.result.return_value = [mock_row]
+        mock_query_job.result = MagicMock(return_value=[mock_row])
         mock_bq_client.query.return_value = mock_query_job
 
         res = await repo.get_translation_job("job1")
