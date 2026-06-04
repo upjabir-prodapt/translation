@@ -135,7 +135,7 @@ class PDFParser(PSStackParser[Union[PSKeyword, PDFStream, PDFObjRef, None]]):
             data[:10],
         )
         if self.doc is None:
-            raise AssertionError
+            raise RuntimeError("doc must be set before parsing streams")
         stream = PDFStream(dic, bytes(data), self.doc.decipher)
         self.push((pos, stream))
 

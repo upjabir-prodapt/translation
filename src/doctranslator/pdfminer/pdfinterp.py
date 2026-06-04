@@ -217,7 +217,7 @@ class PDFResourceManager:
         """Build a Type0 (composite) font by delegating to its descendant font."""
         dfonts = list_value(spec["DescendantFonts"])
         if not dfonts:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         subspec = dict_value(dfonts[0]).copy()
         for k in ("Encoding", "ToUnicode"):
             if k in spec:
@@ -1269,7 +1269,7 @@ class PDFPageInterpreter:
                 raise PDFInterpreterError("No font specified!")
             return
         if self.ncs is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         self.device.render_string(
             self.textstate,
             cast(PDFTextSeq, seq),

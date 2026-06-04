@@ -581,9 +581,11 @@ class ILCreater:
 
     def on_page_number(self, page_number: int):
         if not isinstance(page_number, int):
-            raise AssertionError
+            raise ValueError(
+                f"page_number must be an int, got {type(page_number).__name__}"
+            )
         if page_number < 0:
-            raise AssertionError
+            raise ValueError(f"page_number must be non-negative, got {page_number}")
         self.current_page.page_number = page_number
 
     def on_page_base_operation(self, operation: str):
@@ -1223,9 +1225,11 @@ class ILCreater:
 
     def on_total_pages(self, total_pages: int):
         if not isinstance(total_pages, int):
-            raise AssertionError
+            raise ValueError(
+                f"total_pages must be an int, got {type(total_pages).__name__}"
+            )
         if total_pages <= 0:
-            raise AssertionError
+            raise ValueError(f"total_pages must be positive, got {total_pages}")
         self.docs.total_pages = total_pages
         total = 0
         for page in range(total_pages):

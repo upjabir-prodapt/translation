@@ -44,7 +44,9 @@ class FontMapper:
             "sans-serif",
             "script",
         ]:
-            raise AssertionError
+            raise ValueError(
+                f"primary_font_family must be one of None, 'serif', 'sans-serif', 'script'; got {translation_config.primary_font_family!r}"
+            )
         self.primary_font_family = PrimaryFontFamily.from_str(
             translation_config.primary_font_family,
         )
@@ -337,7 +339,7 @@ class FontMapper:
     def _build_pdf_font(self, font_name: str, font_id: dict) -> "il_version_1.PdfFont":
         """Build a PdfFont IL object for *font_name* using cached mupdf metadata."""
         if font_name not in self.fontid2font:
-            raise AssertionError(f"Font {font_name} not found")
+            raise KeyError(f"Font {font_name} not found")
         mupdf_font = self.fontid2font[font_name]
         return il_version_1.PdfFont(
             name=font_name,

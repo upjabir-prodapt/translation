@@ -97,7 +97,7 @@ class PDFObjRef(PDFObject):
 
     def resolve(self, default: object = None) -> Any:
         if self.doc is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         try:
             return self.doc.getobj(self.objid)
         except PDFObjectNotFound:
@@ -247,7 +247,7 @@ class PDFStream(PDFObject):
         decipher: DecipherCallable | None = None,
     ) -> None:
         if not isinstance(attrs, dict):
-            raise AssertionError(str(type(attrs)))
+            raise TypeError(str(type(attrs)))
         self.attrs = attrs
         self.rawdata: bytes | None = rawdata
         self.decipher = decipher
@@ -262,7 +262,7 @@ class PDFStream(PDFObject):
     def __repr__(self) -> str:
         if self.data is None:
             if self.rawdata is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             return "<PDFStream(%r): raw=%d, %r>" % (
                 self.objid,
                 len(self.rawdata),
@@ -270,7 +270,7 @@ class PDFStream(PDFObject):
             )
         else:
             if self.data is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             return "<PDFStream(%r): len=%d, %r>" % (
                 self.objid,
                 len(self.data),
@@ -379,14 +379,14 @@ class PDFStream(PDFObject):
 
     def decode(self) -> None:
         if not (self.data is None and self.rawdata is not None):
-            raise AssertionError(str((self.data, self.rawdata)))
+            raise RuntimeError(str((self.data, self.rawdata)))
         data = self.rawdata
         if self.decipher:
             # Handle encryption
             if self.objid is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             if self.genno is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             data = self.decipher(self.objid, self.genno, data, self.attrs)
         filters = self.get_filters()
         if not filters:
@@ -402,7 +402,7 @@ class PDFStream(PDFObject):
         if self.data is None:
             self.decode()
             if self.data is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
         return self.data
 
     def get_rawdata(self) -> bytes | None:

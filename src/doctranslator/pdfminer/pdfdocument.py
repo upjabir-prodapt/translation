@@ -199,7 +199,7 @@ class PDFXRef(PDFBaseXRef):
         try:
             (_, kwd) = parser.nexttoken()
             if kwd is not KWD(b"trailer"):
-                raise AssertionError(str(kwd))
+                raise RuntimeError(str(kwd))
             (_, dic) = parser.nextobject()
         except PSEOF:
             x = parser.pop(1)
@@ -300,7 +300,7 @@ class PDFXRefStream(PDFBaseXRef):
         self.ranges.extend(cast(Iterator[tuple[int, int]], choplist(2, index_array)))
         (self.fl1, self.fl2, self.fl3) = stream["W"]
         if not (self.fl1 is not None and self.fl2 is not None and self.fl3 is not None):
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         self.data = stream.get_data()
         self.entlen = self.fl1 + self.fl2 + self.fl3
         self.trailer = stream.attrs
@@ -319,9 +319,9 @@ class PDFXRefStream(PDFBaseXRef):
         for start, nobjs in self.ranges:
             for i in range(nobjs):
                 if self.entlen is None:
-                    raise AssertionError
+                    raise RuntimeError("Unexpected state")
                 if self.data is None:
-                    raise AssertionError
+                    raise RuntimeError("Unexpected state")
                 offset = self.entlen * i
                 ent = self.data[offset : offset + self.entlen]
                 f1 = nunpack(ent[: self.fl1], 1)
@@ -339,11 +339,11 @@ class PDFXRefStream(PDFBaseXRef):
         else:
             raise PDFKeyError(objid)
         if self.entlen is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         if self.data is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         if not (self.fl1 is not None and self.fl2 is not None and self.fl3 is not None):
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         offset = self.entlen * index
         ent = self.data[offset : offset + self.entlen]
         f1 = nunpack(ent[: self.fl1], 1)
@@ -423,7 +423,7 @@ class PDFStandardSecurityHandler:
             return Arcfour(key).encrypt(self.PASSWORD_PADDING)  # 2
         else:
             # Algorithm 3.5
-            hash_obj = sha256(self.PASSWORD_PADDING)  # 2
+            hash_obj = sha256(self.PASSWORD_PADDING)  # nosec B303 - sha256 used to implement PDF spec Algorithm 3.5 (protocol requirement, not password storage)  # 2
             hash_obj.update(self.docid[0])  # 3
             result = Arcfour(key).encrypt(hash_obj.digest())  # 4
             for i in range(1, 20):  # 5
@@ -435,7 +435,7 @@ class PDFStandardSecurityHandler:
     def compute_encryption_key(self, password: bytes) -> bytes:
         # Algorithm 3.2
         password = (password + self.PASSWORD_PADDING)[:32]  # 1
-        hash_obj = sha256(password)  # 2
+        hash_obj = sha256(password)  # nosec B303 - sha256 used in PDF spec Algorithm 3.2 key derivation (protocol requirement)  # 2
         hash_obj.update(self.o)  # 3
         # See https://github.com/pdfminer/pdfminer.six/issues/186
         hash_obj.update(struct.pack("<L", self.p))  # 4
@@ -448,7 +448,7 @@ class PDFStandardSecurityHandler:
         if self.r >= 3:
             n = self.length // 8
             for _ in range(50):
-                result = sha256(result[:n]).digest()
+                result = sha256(result[:n]).digest()  # nosec B303
         return result[:n]
 
     def authenticate(self, password: str) -> bytes | None:
@@ -475,10 +475,10 @@ class PDFStandardSecurityHandler:
     def authenticate_owner_password(self, password: bytes) -> bytes | None:
         # Algorithm 3.7
         password = (password + self.PASSWORD_PADDING)[:32]
-        hash_obj = sha256(password)
+        hash_obj = sha256(password)  # nosec B303 - sha256 used in PDF spec Algorithm 3.7 (protocol requirement)
         if self.r >= 3:
             for _ in range(50):
-                hash_obj = sha256(hash_obj.digest())
+                hash_obj = sha256(hash_obj.digest())  # nosec B303
         n = 5
         if self.r >= 3:
             n = self.length // 8
@@ -503,9 +503,9 @@ class PDFStandardSecurityHandler:
 
     def decrypt_rc4(self, objid: int, genno: int, data: bytes) -> bytes:
         if self.key is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         key = self.key + struct.pack("<L", objid)[:3] + struct.pack("<L", genno)[:2]
-        hash_obj = sha256(key)
+        hash_obj = sha256(key)  # nosec B303 - sha256 used for RC4 key derivation per PDF spec (protocol requirement)
         key = hash_obj.digest()[: min(len(key), 16)]
         return Arcfour(key).decrypt(data)
 
@@ -564,14 +564,14 @@ class PDFStandardSecurityHandlerV4(PDFStandardSecurityHandler):
 
     def decrypt_aes128(self, objid: int, genno: int, data: bytes) -> bytes:
         if self.key is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         key = (
             self.key
             + struct.pack("<L", objid)[:3]
             + struct.pack("<L", genno)[:2]
             + b"sAlT"
         )
-        hash_obj = sha256(key)
+        hash_obj = sha256(key)  # nosec B303 - sha256 for AES key derivation per PDF spec AESV2 (protocol requirement)
         key = hash_obj.digest()[: min(len(key), 16)]
         initialization_vector = data[:16]
         ciphertext = data[16:]
@@ -705,7 +705,7 @@ class PDFStandardSecurityHandlerV5(PDFStandardSecurityHandlerV4):
         initialization_vector = data[:16]
         ciphertext = data[16:]
         if self.key is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         # PDF spec section 7.6.5 (AESV3) mandates AES-CBC with IV prepended to data
         cipher = Cipher(  # noqa: S304
             algorithms.AES(self.key),
@@ -809,7 +809,7 @@ class PDFDocument:
     #   Perform the initialization with a given password.
     def _initialize_password(self, password: str = "") -> None:
         if self.encryption is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         (docid, param) = self.encryption
         if literal_name(param.get("Filter")) != "Standard":
             raise PDFEncryptionError("Unknown filter: param=%r" % param)
@@ -823,7 +823,7 @@ class PDFDocument:
         self.is_modifiable = handler.is_modifiable()
         self.is_extractable = handler.is_extractable()
         if self._parser is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         self._parser.fallback = False  # need to read streams with exact length
 
     def _getobj_objstm(self, stream: PDFStream, index: int, _objid: int) -> object:
@@ -833,7 +833,7 @@ class PDFDocument:
             (objs, n) = self._get_objects(stream)
             if self.caching:
                 if stream.objid is None:
-                    raise AssertionError
+                    raise RuntimeError("Unexpected state")
                 self._parsed_objs[stream.objid] = (objs, n)
         i = n * 2 + index
         try:
@@ -864,7 +864,7 @@ class PDFDocument:
 
     def _getobj_parse(self, pos: int, objid: int) -> object:
         if self._parser is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         self._parser.seek(pos)
         (_, objid1) = self._parser.nexttoken()  # objid
         (_, _genno) = self._parser.nexttoken()  # genno (unused in parse step)
@@ -961,7 +961,7 @@ class PDFDocument:
         The resulting iteration is unbounded.
         """
         if self.catalog is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
 
         try:
             page_labels = PageLabels(self.catalog["PageLabels"])

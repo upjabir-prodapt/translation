@@ -184,7 +184,7 @@ class FormRenderUnit(RenderUnit):
         draw_op.append(b"q ")
 
         if form.pdf_matrix is None:
-            raise AssertionError
+            raise RuntimeError("form.pdf_matrix must be set before rendering")
         if form.relocation_transform and len(form.relocation_transform) == 6:
             try:
                 relocation_matrix = tuple(float(x) for x in form.relocation_transform)
@@ -198,7 +198,7 @@ class FormRenderUnit(RenderUnit):
         draw_op.append(b" ")
 
         if form.pdf_form_subtype is None:
-            raise AssertionError
+            raise RuntimeError("form.pdf_form_subtype must be set before rendering")
         if form.pdf_form_subtype.pdf_xobj_form:
             draw_op.append(
                 f" /{form.pdf_form_subtype.pdf_xobj_form.do_args} Do ".encode()
@@ -456,7 +456,7 @@ def reproduce_one_font(doc, index):
 
 def reproduce_cmap(doc):
     if not doc:
-        raise AssertionError
+        raise ValueError("doc must not be None or empty")
     font_set = set()
     for page in doc:
         try:
@@ -1428,7 +1428,9 @@ class PDFCreater:
         self, check_font_exists, page, pdf, translation_config, skip_char: bool = False
     ):
         if not (page.cropbox is not None and page.cropbox.box is not None):
-            raise AssertionError
+            raise RuntimeError(
+                "page.cropbox and page.cropbox.box must be set before updating content stream"
+            )
         page_crop_box = page.cropbox.box
         ctm_for_ops = (1, 0, 0, 1, -page_crop_box.x, -page_crop_box.y)
         ctm_for_ops = f" {' '.join(f'{x:f}' for x in ctm_for_ops)} cm ".encode()

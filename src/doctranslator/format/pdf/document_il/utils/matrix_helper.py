@@ -50,17 +50,17 @@ def decompose_ctm(m: Matrix | PdfMatrix) -> PdfAffineTransform:
         e = m.e
         f = m.f
         if a is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'a' must not be None")
         if b is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'b' must not be None")
         if c is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'c' must not be None")
         if d is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'd' must not be None")
         if e is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'e' must not be None")
         if f is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'f' must not be None")
     else:
         (a, b, c, d, e, f) = m
 
@@ -203,13 +203,13 @@ def scale_and_set_translation(
         d = m.d
         # e, f will be overridden by tx, ty
         if a is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'a' must not be None")
         if b is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'b' must not be None")
         if c is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'c' must not be None")
         if d is None:
-            raise AssertionError
+            raise ValueError("Matrix component 'd' must not be None")
 
         return PdfMatrix(
             a=a * scale_factor,
@@ -269,7 +269,7 @@ def multiply_matrices(m1: Matrix | PdfMatrix, m2: Matrix | PdfMatrix) -> Matrix:
     if isinstance(m1, PdfMatrix):
         a1, b1, c1, d1, e1, f1 = m1.a, m1.b, m1.c, m1.d, m1.e, m1.f
         if not all(x is not None for x in [a1, b1, c1, d1, e1, f1]):
-            raise AssertionError
+            raise ValueError("PdfMatrix m1 has one or more None components")
     else:
         a1, b1, c1, d1, e1, f1 = m1
 
@@ -277,7 +277,7 @@ def multiply_matrices(m1: Matrix | PdfMatrix, m2: Matrix | PdfMatrix) -> Matrix:
     if isinstance(m2, PdfMatrix):
         a2, b2, c2, d2, e2, f2 = m2.a, m2.b, m2.c, m2.d, m2.e, m2.f
         if not all(x is not None for x in [a2, b2, c2, d2, e2, f2]):
-            raise AssertionError
+            raise ValueError("PdfMatrix m2 has one or more None components")
     else:
         a2, b2, c2, d2, e2, f2 = m2
 

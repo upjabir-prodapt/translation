@@ -435,7 +435,9 @@ class PDFPageInterpreterEx(PDFPageInterpreter):
         if isinstance(seq, PSLiteral):
             return
         if self.ncs is None:
-            raise AssertionError
+            raise RuntimeError(
+                "ncs (non-stroke color space) must be set before rendering text"
+            )
         gs = self.graphicstate.copy()
         gs.passthrough_instruction = (
             self.il_creater.passthrough_per_char_instruction.copy()

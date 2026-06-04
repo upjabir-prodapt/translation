@@ -109,7 +109,7 @@ class CMap(CMapBase):
 
     def use_cmap(self, cmap: CMapBase) -> None:
         if not isinstance(cmap, CMap):
-            raise AssertionError(str(type(cmap)))
+            raise TypeError(str(type(cmap)))
 
         def copy(dst: dict[int, object], src: dict[int, object]) -> None:
             for k, v in src.items():
@@ -198,7 +198,7 @@ class IdentityUnicodeMap(UnicodeMap):
 class FileCMap(CMap):
     def add_code2cid(self, code: str, cid: int) -> None:
         if not (isinstance(code, str) and isinstance(cid, int)):
-            raise AssertionError(str((type(code), type(cid))))
+            raise TypeError(str((type(code), type(cid))))
         d = self.code2cid
         for c in code[:-1]:
             ci = ord(c)
@@ -215,11 +215,11 @@ class FileCMap(CMap):
 class FileUnicodeMap(UnicodeMap):
     def add_cid2unichr(self, cid: int, code: PSLiteral | bytes | int) -> None:
         if not isinstance(cid, int):
-            raise AssertionError(str(type(cid)))
+            raise TypeError(str(type(cid)))
         if isinstance(code, PSLiteral):
             # Interpret as an Adobe glyph name.
             if not isinstance(code.name, str):
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             unichr = name2unicode(code.name)
         elif isinstance(code, bytes):
             # Interpret as UTF-16BE.
@@ -277,7 +277,7 @@ class CMapDB:
                     data = gzfile.read()
                 finally:
                     gzfile.close()
-                return type(str(name), (), _SafeCMapUnpickler(io.BytesIO(data)).load())
+                return type(str(name), (), _SafeCMapUnpickler(io.BytesIO(data)).load())  # nosec B301,B403 - _SafeCMapUnpickler restricts deserialization to primitive types only (CWE-502 mitigated)
         raise CMapDB.CMapNotFound(name)
 
     @classmethod
@@ -420,7 +420,7 @@ class CMapParser(PSStackParser[PSKeyword]):
                 self._apply_bfrange_list(start, end, code)
             else:
                 if not isinstance(code, bytes):
-                    raise AssertionError
+                    raise RuntimeError("Unexpected state")
                 self._apply_bfrange_bytes(start, end, code)
 
     def _handle_def(self) -> None:

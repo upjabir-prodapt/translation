@@ -101,7 +101,7 @@ class GoogleADKJudgeAgent:
         from opentelemetry.trace import StatusCode
 
         prompt_chars = len(contents)
-        prompt_hash = hashlib.sha256(
+        prompt_hash = hashlib.sha256(  # nosec B303 - sha256 used for debug logging identifier only, not for security
             contents.encode("utf-8", errors="replace")
         ).hexdigest()[:12]
         prompt_preview = contents[:300].replace("\n", "\\n")

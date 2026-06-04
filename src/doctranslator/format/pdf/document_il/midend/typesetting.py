@@ -110,7 +110,7 @@ class TypesettingUnit:
         if not (
             (char is not None) + (formular is not None) + (unicode is not None) == 1
         ):
-            raise AssertionError("Only one of chars and formular can be not None")
+            raise ValueError("Only one of chars and formular can be not None")
         self.char = char
         self.formular = formular
         self.unicode = unicode
@@ -135,17 +135,13 @@ class TypesettingUnit:
 
         if unicode:
             if not font_size:
-                raise AssertionError(
-                    "Font size must be provided when unicode is provided"
-                )
+                raise ValueError("Font size must be provided when unicode is provided")
             if not style:
-                raise AssertionError("Style must be provided when unicode is provided")
+                raise ValueError("Style must be provided when unicode is provided")
             if len(unicode) != 1:
-                raise AssertionError("Unicode must be a single character")
+                raise ValueError("Unicode must be a single character")
             if xobj_id is None:
-                raise AssertionError(
-                    "Xobj id must be provided when unicode is provided"
-                )
+                raise ValueError("Xobj id must be provided when unicode is provided")
 
             self.font = font
             if font is not None and hasattr(font, "font_id"):
@@ -247,7 +243,7 @@ class TypesettingUnit:
         if len(unicode) > 1:
             return False
         if len(unicode) != 1:
-            raise AssertionError("Unicode must be a single character")
+            raise ValueError("Unicode must be a single character")
         if unicode in [
             "（",
             "）",
@@ -788,15 +784,15 @@ class TypesettingUnit:
             return self.passthrough()
         elif self.unicode:
             if self.x is None:
-                raise AssertionError(
+                raise RuntimeError(
                     "x position must be set, should be set by `relocate`"
                 )
             if self.y is None:
-                raise AssertionError(
+                raise RuntimeError(
                     "y position must be set, should be set by `relocate`"
                 )
             if self.scale is None:
-                raise AssertionError("scale must be set, should be set by `relocate`")
+                raise RuntimeError("scale must be set, should be set by `relocate`")
             x = self.x
             y = self.y
             # if self.original_font and self.font and hasattr(self.original_font, "descent") and hasattr(self.font, "descent_fontmap"):

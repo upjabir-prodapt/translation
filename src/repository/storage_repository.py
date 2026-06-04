@@ -475,7 +475,7 @@ class StorageRepository:
                     f"Unexpected GCE metadata URL: {_gce_metadata_email_url!r}"
                 )
             _resp = _requests.get(
-                _gce_metadata_email_url,
+                _gce_metadata_email_url,  # nosec B310 - URL is constructed from hardcoded GCE metadata constant; validated by startswith check above
                 headers={"Metadata-Flavor": "Google"},
                 timeout=5,
             )

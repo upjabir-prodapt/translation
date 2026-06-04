@@ -116,7 +116,7 @@ class PDFTextDevice(PDFDevice):
         graphicstate: "PDFGraphicState",
     ) -> None:
         if self.ctm is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         matrix = utils.mult_matrix(textstate.matrix, self.ctm)
         font = textstate.font
         font.font_id_temp = getattr(textstate, "font_id", None)
@@ -126,7 +126,7 @@ class PDFTextDevice(PDFDevice):
         wordspace = textstate.wordspace * scaling
         rise = textstate.rise
         if font is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         if font.is_multibyte():
             wordspace = 0
         dxscale = 0.001 * fontsize * scaling
@@ -351,7 +351,7 @@ class TagExtractor(PDFDevice):
     ) -> None:
         font = textstate.font
         if font is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         text = ""
         for obj in seq:
             if isinstance(obj, str):
@@ -394,7 +394,7 @@ class TagExtractor(PDFDevice):
 
     def end_tag(self) -> None:
         if not self._stack:
-            raise AssertionError(str(self.pageno))
+            raise RuntimeError(str(self.pageno))
         tag = self._stack.pop(-1)
         out_s = "</%s>" % utils.enc(cast(str, tag.name))
         self._write(out_s)

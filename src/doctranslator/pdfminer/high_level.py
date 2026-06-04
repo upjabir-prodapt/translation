@@ -135,7 +135,7 @@ def extract_text_to_fp(  # NOSONAR - pdfminer-compatible public API intentionall
         raise PDFValueError(msg)
 
     if device is None:
-        raise AssertionError
+        raise RuntimeError("Unexpected state")
     interpreter = PDFPageInterpreter(rsrcmgr, device)
     for page in PDFPage.get_pages(
         inf,

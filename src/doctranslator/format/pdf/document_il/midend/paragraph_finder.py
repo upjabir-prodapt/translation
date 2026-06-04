@@ -129,7 +129,9 @@ class ParagraphFinder:
                 continue
             x1, y1, x2, y2 = self._expand_box_to_layout(paragraph.box, layout.box)
             if not (x2 > x1 and y2 > y1):
-                raise AssertionError
+                raise ValueError(
+                    f"Expanded box has invalid dimensions: x1={x1}, y1={y1}, x2={x2}, y2={y2}"
+                )
             page.pdf_rectangle.append(
                 self._make_fill_rectangle(x1, y1, x2, y2, paragraph.xobj_id)
             )
@@ -923,7 +925,7 @@ class ParagraphFinder:
 
     def create_line(self, chars: list[PdfCharacter]) -> PdfParagraphComposition:
         if not chars:
-            raise AssertionError
+            raise ValueError("chars list must not be empty")
 
         line = PdfLine(pdf_character=chars)
         self.update_line_data(line)

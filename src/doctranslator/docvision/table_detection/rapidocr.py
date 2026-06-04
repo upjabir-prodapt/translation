@@ -193,7 +193,9 @@ class RapidOCRModel:
         """
         # Handle single image input
         if not (isinstance(image, np.ndarray) and len(image.shape) == 3):
-            raise AssertionError
+            raise ValueError(
+                "Input image must be a 3-dimensional numpy array (H, W, C)"
+            )
 
         # Calculate target size based on the maximum height in the batch
         target_imgsz = 1024

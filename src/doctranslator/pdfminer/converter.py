@@ -76,9 +76,9 @@ class PDFLayoutAnalyzer(PDFTextDevice):
 
     def end_page(self, page: PDFPage) -> None:
         if self._stack:
-            raise AssertionError(str(len(self._stack)))
+            raise RuntimeError(str(len(self._stack)))
         if not isinstance(self.cur_item, LTPage):
-            raise AssertionError(str(type(self.cur_item)))
+            raise TypeError(str(type(self.cur_item)))
         if self.laparams is not None:
             self.cur_item.analyze(self.laparams)
         self.pageno += 1
@@ -91,13 +91,13 @@ class PDFLayoutAnalyzer(PDFTextDevice):
     def end_figure(self, _: str) -> None:
         fig = self.cur_item
         if not isinstance(self.cur_item, LTFigure):
-            raise AssertionError(str(type(self.cur_item)))
+            raise TypeError(str(type(self.cur_item)))
         self.cur_item = self._stack.pop()
         self.cur_item.add(fig)
 
     def render_image(self, name: str, stream: PDFStream) -> None:
         if not isinstance(self.cur_item, LTFigure):
-            raise AssertionError(str(type(self.cur_item)))
+            raise TypeError(str(type(self.cur_item)))
         item = LTImage(
             name,
             stream,
@@ -383,7 +383,7 @@ class PDFLayoutAnalyzer(PDFTextDevice):
         try:
             text = font.to_unichr(cid)
             if not isinstance(text, str):
-                raise AssertionError(str(type(text)))
+                raise TypeError(str(type(text)))
         except PDFUnicodeNotDefined:
             text = self.handle_undefined_char(font, cid)
         textwidth = font.char_width(cid)
@@ -426,7 +426,7 @@ class PDFPageAggregator(PDFLayoutAnalyzer):
 
     def get_result(self) -> LTPage:
         if self.result is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         return self.result
 
 
@@ -1007,7 +1007,7 @@ class XMLConverter(PDFConverter[AnyIO]):
         elif isinstance(item, LTImage):
             self._render_xml_image(item)
         else:
-            raise AssertionError(str(("Unhandled", item)))
+            raise NotImplementedError(str(("Unhandled", item)))
 
     def _show_group_xml(self, item: "LTItem") -> None:
         """Recursively write XML for a text-group hierarchy."""

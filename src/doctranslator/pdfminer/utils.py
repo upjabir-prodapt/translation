@@ -62,7 +62,7 @@ class open_filename:
 def make_compat_bytes(in_str: str) -> bytes:
     """Converts to bytes, encoding to unicode."""
     if not isinstance(in_str, str):
-        raise AssertionError(str(type(in_str)))
+        raise TypeError(str(type(in_str)))
     return in_str.encode()
 
 
@@ -100,7 +100,7 @@ def compatible_encode_method(
     if isinstance(bytesorstring, str):
         return bytesorstring
     if not isinstance(bytesorstring, bytes):
-        raise AssertionError(str(type(bytesorstring)))
+        raise TypeError(str(type(bytesorstring)))
     return bytesorstring.decode(encoding, erraction)
 
 
@@ -758,7 +758,9 @@ ROMAN_FIVES = ["v", "l", "d"]
 def format_int_roman(value: int) -> str:
     """Format a number as lowercase Roman numerals."""
     if not (0 < value < 4000):
-        raise AssertionError
+        raise ValueError(
+            f"Value {value} is out of range for Roman numerals (must be 1-3999)"
+        )
     result: list[str] = []
     index = 0
 
@@ -784,7 +786,7 @@ def format_int_roman(value: int) -> str:
 def format_int_alpha(value: int) -> str:
     """Format a number as lowercase letters a-z, aa-zz, etc."""
     if value <= 0:
-        raise AssertionError
+        raise ValueError(f"Value must be positive for alpha formatting, got {value}")
     result: list[str] = []
 
     while value != 0:

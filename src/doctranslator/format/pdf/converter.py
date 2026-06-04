@@ -153,7 +153,9 @@ class AWLTChar(LTChar):
         if font.is_vertical():
             # vertical
             if not isinstance(textdisp, tuple):
-                raise AssertionError
+                raise ValueError(
+                    f"textdisp must be a tuple for vertical fonts, got {type(textdisp).__name__}"
+                )
             (vx, vy) = textdisp
             if vx is None:
                 vx = fontsize * 0.5

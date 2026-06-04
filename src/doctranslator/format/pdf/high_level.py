@@ -311,9 +311,9 @@ def start_parse_il(
     )
 
     if il_creater is None:
-        raise AssertionError
+        raise RuntimeError("il_creater must be initialized before this point")
     if translation_config is None:
-        raise AssertionError
+        raise RuntimeError("translation_config must be initialized before this point")
     obj_patch = {}
     interpreter = PDFPageInterpreterEx(rsrcmgr, device, obj_patch, il_creater)
     if pages:
@@ -782,7 +782,10 @@ def _build_part_config(
     )
     safe_save(temp_doc, part_temp_input_path)
     if temp_doc.page_count != split_point.end_page - split_point.start_page + 1:
-        raise AssertionError
+        raise RuntimeError(
+            f"Unexpected page count after split: got {temp_doc.page_count}, "
+            f"expected {split_point.end_page - split_point.start_page + 1}"
+        )
 
     if i > 0:
         part_config.watermark_output_mode = WatermarkOutputMode.NoWatermark

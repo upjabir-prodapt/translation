@@ -50,7 +50,7 @@ class BitParser:
         for i in range(len(bits)):
             if i > 0:
                 if b is None:
-                    raise AssertionError
+                    raise RuntimeError("Unexpected state")
                 if p[b] is None:
                     p[b] = [None, None]
                 p = p[b]
@@ -59,7 +59,7 @@ class BitParser:
             else:
                 b = 0
         if b is None:
-            raise AssertionError
+            raise RuntimeError("Unexpected state")
         p[b] = v
 
     def feedbytes(self, data: bytes) -> None:
@@ -77,7 +77,7 @@ class BitParser:
             self._state = v
         else:
             if self._accept is None:
-                raise AssertionError
+                raise RuntimeError("Unexpected state")
             self._state = self._accept(v)
 
 
