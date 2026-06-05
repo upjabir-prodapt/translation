@@ -117,7 +117,7 @@ class GoogleADKJudgeAgent:
             "llm.judge.generate_content",
             kind=SpanKind.CLIENT,
             attributes={
-                "llm.name": "judge",
+                "llm.name": self.model,
                 "llm.model": model,
                 "llm.provider": "google_vertexai",
                 "llm.temperature": temperature,
@@ -278,7 +278,7 @@ class GoogleADKJudgeAgent:
             kind=SpanKind.CLIENT,
             attributes={
                 "llm.model": self.model,
-                "llm.name": "judge",
+                "llm.name": self.model,
                 "llm.provider": "google_vertexai",
                 "judge.source_chars": source_chars,
                 "judge.translated_chars": translated_chars,

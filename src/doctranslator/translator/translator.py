@@ -382,7 +382,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             "gemini.generate_content",
             kind=SpanKind.CLIENT,
             attributes={
-                _ATTR_LLM_NAME: self.name,
+                _ATTR_LLM_NAME: model,
                 _ATTR_LLM_MODEL: model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
                 _ATTR_LLM_TEMPERATURE: temperature,
@@ -449,7 +449,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             "llm.translate_batch",
             kind=SpanKind.CLIENT,
             attributes={
-                _ATTR_LLM_NAME: self.name,
+                _ATTR_LLM_NAME: self.model,
                 _ATTR_LLM_MODEL: self.model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
@@ -479,7 +479,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
         # ── Bubble key facts up to the pipeline.run root span ─────────────
         set_root_span_attribute("llm.model", self.model)
-        set_root_span_attribute("llm.name", self.name)
+        set_root_span_attribute("llm.name", self.model)
         if not out.strip() and c_len > 0:
             prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
             logger.warning(
@@ -529,7 +529,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             "llm.translate_batch",
             kind=SpanKind.CLIENT,
             attributes={
-                _ATTR_LLM_NAME: self.name,
+                _ATTR_LLM_NAME: self.model,
                 _ATTR_LLM_MODEL: self.model,
                 _ATTR_LLM_PROVIDER: "google_vertexai",
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
@@ -559,7 +559,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
         # ── Bubble key facts up to the pipeline.run root span ─────────────
         set_root_span_attribute("llm.model", self.model)
-        set_root_span_attribute("llm.name", self.name)
+        set_root_span_attribute("llm.name", self.model)
         if not out.strip() and c_len > 0:
             prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
             logger.warning(
