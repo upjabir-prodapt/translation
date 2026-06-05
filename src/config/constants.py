@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     """Application settings loaded from env vars or a mounted .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=_DOTENV_FILE,        # pydantic also reads the file as a fallback
+        env_file=_DOTENV_FILE,  # pydantic also reads the file as a fallback
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -384,7 +384,7 @@ class Settings(BaseSettings):
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls: type[BaseSettings],
+        _settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
