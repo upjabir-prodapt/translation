@@ -1,0 +1,160 @@
+# You can override the included template(s) by including variable overrides
+# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
+# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
+# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/#customizing-analyzer-behavior
+# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
+# Note that environment variables can be set in several places
+# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
+include:
+- template: Security/SAST.gitlab-ci.yml
+- template: Security/Secret-Detection.gitlab-ci.yml
+- template: Security/Dependency-Scanning.gitlab-ci.yml
+workflow:
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+stages:
+- lint
+- test
+- build
+- deploy
+variables:
+  WORKLOAD_IDENTITY_PROJECT_NUMBER: '297743845367'
+  WORKLOAD_IDENTITY_POOL: gitlab-pool
+  WORKLOAD_IDENTITY_PROVIDER: gitlab-provider
+  SERVICE_ACCOUNT: gitlab-deployer@aicoesandox.iam.gserviceaccount.com
+  IMAGE_TAG: "$CI_PIPELINE_IID"
+  DOCKER_TLS_CERTDIR: "/certs"
+sast:
+  stage: lint
+".sast-analyzer":
+  tags:
+  - Sast
+  - secret-detection
+  - container
+  - codequality
+".secret-analyzer":
+  stage: lint
+  tags:
+  - Sast
+  - secret-detection
+  - container
+  - codequality
+".gcp_wif":
+  id_tokens:
+    WORKLOAD_IDENTITY_TOKEN:
+      aud: https://iam.googleapis.com
+  before_script:
+  - echo "$WORKLOAD_IDENTITY_TOKEN" > workload_identity.jwt
+  - |
+    printf '%s\n' "{
+      \"type\": \"external_account\",
+      \"audience\": \"//iam.googleapis.com/projects/${WORKLOAD_IDENTITY_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WORKLOAD_IDENTITY_POOL}/providers/${WORKLOAD_IDENTITY_PROVIDER}\",
+      \"subject_token_type\": \"urn:ietf:params:oauth:token-type:jwt\",
+      \"token_url\": \"https://sts.googleapis.com/v1/token\",
+      \"credential_source\": { \"file\": \"workload_identity.jwt\" },
+      \"service_account_impersonation_url\": \"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT}:generateAccessToken\"
+    }" > credentials.json
+  - gcloud auth login --cred-file=credentials.json
+  - gcloud config set project "$GCP_PROJECT_ID"
+".python_ci":
+  image: python:3.12
+  tags:
+  - docker1
+  cache:
+    key: uv-$CI_COMMIT_REF_SLUG
+    paths:
+    - ".venv/"
+  before_script:
+  - python -m pip install --upgrade pip uv
+  - uv sync --frozen
+pre-commit-lint:
+  stage: lint
+  extends: ".python_ci"
+  script:
+  - uv run pre-commit run --all-files --show-diff-on-failure
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+unit-test:
+  stage: test
+  extends: ".python_ci"
+  script:
+  - |
+    uv run pytest \
+      --cov=src \
+      --cov-report=xml:coverage.xml \
+      --cov-report=term-missing \
+      --cov-fail-under=80 \
+      --junitxml=test-results.xml
+  coverage: "/(?i)total.*? (100(?:\\.0+)?\\%|[1-9]?\\d(?:\\.\\d+)?\\%)$/"
+  artifacts:
+    when: always
+    reports:
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+    - coverage.xml
+    - test-results.xml
+    expire_in: 7 days
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+# build-and-push:
+#   stage: build
+#   extends: ".gcp_wif"
+#   image: google/cloud-sdk:slim
+#   tags:
+#   - docker1
+#   services:
+#   - docker:24-dind
+#   script:
+#   - apt-get update -qq && apt-get install -y -qq docker.io
+#   - gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin
+#     "https://${GCP_REGION}-docker.pkg.dev"
+#   - |
+#     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+#     docker build -t "$IMAGE_URI" .
+#     docker push "$IMAGE_URI"
+#   rules:
+#   - if: $CI_COMMIT_BRANCH == "sandbox"
+#   - if: $CI_COMMIT_BRANCH == "dev"
+#   - if: $CI_COMMIT_BRANCH == "prod"
+# deploy-cloud-run:
+#   stage: deploy
+#   extends: ".gcp_wif"
+#   image: google/cloud-sdk:slim
+#   tags:
+#   - docker1
+#   needs:
+#   - build-and-push
+#   environment:
+#     name: "$ENV"
+#   when: manual
+#   script:
+#   - |
+#     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+#     gcloud run deploy "$CLOUD_RUN_SERVICE" \
+#       --quiet \
+#       --image "$IMAGE_URI" \
+#       --platform=managed \
+#       --region="$GCP_REGION" \
+#       --project="$GCP_PROJECT_ID" \
+#       --network="$CLOUD_RUN_NETWORK" \
+#       --subnet="$CLOUD_RUN_SUBNET" \
+#       --service-account="$CLOUD_RUN_SA" \
+#       --min-instances=1 \
+#       --port=8080 \
+#       --memory=4Gi \
+#       --cpu=2 \
+#       --no-cpu-throttling \
+#       --set-secrets="/secrets/.env=sales-agent-service-env:1"
+#   rules:
+#   - if: $CI_COMMIT_BRANCH == "sandbox"
+#   - if: $CI_COMMIT_BRANCH == "dev"
+#   - if: $CI_COMMIT_BRANCH == "prod"
