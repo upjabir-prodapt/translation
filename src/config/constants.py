@@ -3,17 +3,21 @@ Application Settings - Centralized configuration using Pydantic Settings.
 
 Source priority (first wins):
   1. Process environment variables
-  2. GCP Secret Manager JSON  (IS_LOCAL=false + APP_CONFIG_SECRET_NAME set)
-  3. .env file                (IS_LOCAL=true / local development)
-  4. Field defaults
+  2. .env file (IS_LOCAL=true  → <repo-root>/.env)
+              (IS_LOCAL=false → /secrets/.env, mounted by Cloud Run)
+  3. Field defaults
 
-Bootstrap variables are always read from process env and must be passed via
-``--set-env-vars`` on Cloud Run:
-  GOOGLE_CLOUD_PROJECT_ID, GOOGLE_CLOUD_LOCATION,
-  APP_CONFIG_SECRET_NAME, APP_CONFIG_SECRET_VERSION, IS_LOCAL
+Bootstrap variables are always read from the process environment.
+For local dev they live in <repo-root>/.env.
+For Cloud Run they are either set via --set-env-vars (IS_LOCAL, ASSETS_ROOT,
+TEMP_DIR, GOOGLE_CLOUD_PROJECT_ID, GOOGLE_CLOUD_LOCATION) or come from the
+mounted /secrets/.env file.
+
+Escape hatches (checked before IS_LOCAL):
+  DOTENV_DISABLE=true   – skip loading any .env file (useful in tests/CI)
+  DOTENV_PATH=/path     – load that exact file instead of the auto-selected one
 """
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -24,13 +28,82 @@ from pydantic_settings import BaseSettings
 from pydantic_settings import PydanticBaseSettingsSource
 from pydantic_settings import SettingsConfigDict
 
-DEFAULT_SECRET_VERSION = "latest"  # noqa: S105
-
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------
-# Project Root Detection
-# --------------------------------------------------
+# ---------------------------------------------------------------------------
+# Repository root detection
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # src/config → src → repo root
+
+LOCAL_ENV_FILE = _REPO_ROOT / ".env"
+CLOUD_RUN_ENV_FILE = Path("/secrets/.env")
+
+
+# ---------------------------------------------------------------------------
+# Runtime detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _env_flag(name: str) -> bool | None:
+    """Return True/False for recognised truthy/falsy strings, None if absent/empty."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return None
+    return str(raw).strip().lower() in ("1", "true", "yes")
+
+
+def is_local_runtime() -> bool:
+    """Return True when running in local-dev mode (default when IS_LOCAL is unset)."""
+    explicit = _env_flag("IS_LOCAL")
+    return explicit if explicit is not None else True
+
+
+def resolve_dotenv_path() -> Path | None:
+    """Resolve which .env file to load.
+
+    Priority:
+      1. DOTENV_DISABLE=true  → None (skip loading)
+      2. DOTENV_PATH=<path>   → that exact path
+      3. IS_LOCAL=true        → <repo-root>/.env
+      4. IS_LOCAL=false       → /secrets/.env
+    """
+    if _env_flag("DOTENV_DISABLE"):
+        return None
+    raw = os.getenv("DOTENV_PATH", "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else (_REPO_ROOT / p).resolve()
+    return LOCAL_ENV_FILE if is_local_runtime() else CLOUD_RUN_ENV_FILE
+
+
+def load_dotenv_file(path: Path | None = None) -> Path | None:
+    """Load the resolved .env file into os.environ via python-dotenv.
+
+    A missing file is silently ignored (returns None).
+    Called once at module-import time so os.environ is populated before
+    Settings() is instantiated.
+    """
+    from dotenv import load_dotenv
+
+    target = resolve_dotenv_path() if path is None else path
+    if target is None:
+        return None
+    if target.is_file():
+        load_dotenv(target)
+        logger.debug("Loaded .env from %s", target)
+        return target
+    logger.debug(".env file not found at %s (skipped)", target)
+    return None
+
+
+# Load once at module-import time — must happen before Settings() is built.
+_DOTENV_FILE = load_dotenv_file()
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
 
 
 def find_project_root(start_path: Path) -> Path:
@@ -41,84 +114,22 @@ def find_project_root(start_path: Path) -> Path:
     raise RuntimeError("Project root not found")
 
 
-def get_secrets(project_id: str, secret_name: str, version: str = "latest") -> dict:
-    """Fetch and JSON-decode a secret payload from GCP Secret Manager."""
-    from google.cloud import secretmanager
-
-    client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project_id}/secrets/{secret_name}/versions/{version}"
-    response = client.access_secret_version(name=name)
-    return json.loads(response.payload.data.decode("utf-8"))
-
-
-# --------------------------------------------------
-# Custom Settings Source: GCP Secret Manager
-# --------------------------------------------------
-
-
-class SecretManagerSettingsSource(PydanticBaseSettingsSource):
-    """Loads settings from a GCP Secret Manager secret when IS_LOCAL is falsy.
-
-    The secret payload must be a flat JSON object whose keys match Settings
-    field names (same names as environment variables).  Env vars always win because
-    ``env_settings`` is placed before this source in
-    ``settings_customise_sources``.
-    """
-
-    def __init__(self, settings_cls: type[BaseSettings]) -> None:
-        super().__init__(settings_cls)
-        self._data: dict = {}
-
-        is_local_raw = os.environ.get("IS_LOCAL", "true").strip().lower()
-        is_local = is_local_raw not in ("false", "0", "no")
-        secret_name = os.environ.get("APP_CONFIG_SECRET_NAME", "").strip()
-        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT_ID", "").strip()
-        version = os.environ.get("APP_CONFIG_SECRET_VERSION", "latest").strip()
-
-        if not is_local and secret_name and project_id:
-            try:
-                self._data = get_secrets(project_id, secret_name, version)
-                logger.info(
-                    "Loaded %d config keys from Secret Manager secret '%s' (version=%s)",
-                    len(self._data),
-                    secret_name,
-                    version,
-                )
-            except Exception as exc:
-                logger.exception(
-                    f"Failed to load config from Secret Manager secret {secret_name} with exception {exc}"
-                )
-
-    def get_field_value(self, field: object, field_name: str) -> tuple:  # type: ignore[override]
-        return self._data.get(field_name), field_name, False
-
-    def __call__(self) -> dict:
-        return {k: v for k, v in self._data.items() if v is not None}
-
-
-# --------------------------------------------------
-# Settings
-# --------------------------------------------------
-
-
 class Settings(BaseSettings):
-    """Application settings loaded from env vars, Secret Manager, or .env."""
+    """Application settings loaded from env vars or a mounted .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_DOTENV_FILE,        # pydantic also reads the file as a fallback
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     # -----------------------------
-    # Bootstrap (always from env, set via Cloud Run --set-env-vars)
+    # Bootstrap (always from env)
     # -----------------------------
 
     GOOGLE_CLOUD_PROJECT_ID: str
     GOOGLE_CLOUD_LOCATION: str
     IS_LOCAL: bool = Field(default=True)
-    APP_CONFIG_SECRET_NAME: str | None = None
-    APP_CONFIG_SECRET_VERSION: str = DEFAULT_SECRET_VERSION
 
     # -----------------------------
     # GCS
@@ -357,18 +368,11 @@ class Settings(BaseSettings):
     def _log_config_sources(self) -> None:
         """Log a startup summary of where configuration was loaded from."""
         if self.IS_LOCAL:
-            source = ".env"
-            secret_info = ""
+            source = str(LOCAL_ENV_FILE)
         else:
-            source = "Secret Manager"
-            secret_info = (
-                f" (secret={self.APP_CONFIG_SECRET_NAME!r},"
-                f" version={self.APP_CONFIG_SECRET_VERSION!r})"
-                if self.APP_CONFIG_SECRET_NAME
-                else " (no secret name provided)"
-            )
+            source = str(CLOUD_RUN_ENV_FILE)
         logger.info(
-            f"Settings loaded | IS_LOCAL={self.IS_LOCAL} | source={source}{secret_info}"
+            f"Settings loaded | IS_LOCAL={self.IS_LOCAL} | source={source}"
             f" | project={self.GOOGLE_CLOUD_PROJECT_ID} | location={self.GOOGLE_CLOUD_LOCATION}"
             f" | assets_root={self.assets_root_path} | temp_root={self.temp_root_path}"
         )
@@ -389,7 +393,6 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            SecretManagerSettingsSource(settings_cls),
             dotenv_settings,
             file_secret_settings,
         )
