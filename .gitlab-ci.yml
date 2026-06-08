@@ -29,15 +29,18 @@ variables:
   GCLOUD_ARCHIVE_URL: "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz"
   UV_INSTALL_DIR: "${CI_PROJECT_DIR}/.tools/uv"
   UV_VERSION: "0.6.14"
-  # Shell runner tag: ShellR2 (shell executor on amsgit02)
-  # Avoid ~/.cache/uv under $HOME — home partition is often full; use project dir under /app/builds
+  # Shell runner tag: Shell1 (shell executor on amsgit02)
+  # Avoid ~/.cache/* and ~/.local/share/uv/python under $HOME — home partition is often full
   UV_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/uv"
+  UV_PYTHON_INSTALL_DIR: "${CI_PROJECT_DIR}/.cache/uv/python"
+  PRE_COMMIT_HOME: "${CI_PROJECT_DIR}/.cache/pre-commit"
+  PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
   # Do not set TMPDIR here — GitLab Runner uses $CI_PROJECT_DIR/.tmp for artifact downloads
   CI_WORK_TMP: "${CI_PROJECT_DIR}/.ci-work"
 
 ".shell_runner":
   tags:
-  - ShellR2
+  - Shell1
 
 ".proxy":
   before_script:
@@ -213,8 +216,11 @@ variables:
   - |
     set -e
     export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
-    mkdir -p "$UV_CACHE_DIR" "$TMPDIR"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:${HOME}/.local/bin:${HOME}/.cargo/bin:$PATH"
 
     # --retry-all-errors requires curl >= 7.82; amsgit02 shell runners ship older curl
@@ -313,13 +319,18 @@ variables:
     - ".venv/"
     - ".tools/uv/"
     - ".cache/uv/"
+    - ".cache/pre-commit/"
+    - ".cache/pip/"
   before_script:
   - !reference [".ensure_uv", before_script]
   - |
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
     export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
-    mkdir -p "$UV_CACHE_DIR" "$TMPDIR"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
     # pre-commit/ruff only — skip app deps (pymupdf, transformers, etc.)
     uv sync --frozen --no-default-groups --only-group dev --no-install-project
 
@@ -336,13 +347,14 @@ variables:
   - |
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
     export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
-    mkdir -p "$UV_CACHE_DIR" "$TMPDIR"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$TMPDIR"
     # Tests import src/ — must install project + dev deps (cannot use --only-group dev)
     uv sync --frozen
 
 # Security scanners: docker executor runners (template runs /analyzer in analyzer image).
-# App build/test/deploy jobs use ShellR2 — do not route DS/SAST/secret jobs to shell tags.
+# App build/test/deploy jobs use Shell1 — do not route DS/SAST/secret jobs to shell tags.
 sast:
   stage: lint
 ".sast-analyzer":
@@ -368,11 +380,15 @@ pre-commit-lint:
   - |
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
     export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
-    mkdir -p "$TMPDIR"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
 
     run_pre_commit() {
-      uv run pre-commit run "$@" --show-diff-on-failure
+      # --no-sync: dev-only venv from before_script; avoid re-installing app deps on lint
+      uv run --no-sync pre-commit run "$@" --show-diff-on-failure
     }
 
     if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
@@ -435,8 +451,9 @@ unit-test:
   - |
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
     export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
-    mkdir -p "$TMPDIR"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$TMPDIR"
     uv run pytest \
       --cov=src \
       --cov-report=xml:coverage.xml \
