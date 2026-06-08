@@ -181,6 +181,8 @@ variables:
       exit 1
     fi
     gcloud --version
+    # deploy-cloud-run uses gcloud beta (GCS volume mounts); install non-interactively for CI
+    gcloud components install beta --quiet
     echo "OK - gcloud ready"
 
 ".gcp_wif":
@@ -202,7 +204,7 @@ variables:
       \"credential_source\": { \"file\": \"workload_identity.jwt\" },
       \"service_account_impersonation_url\": \"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT}:generateAccessToken\"
     }" > credentials.json
-  - gcloud auth login --cred-file=credentials.json
+  - gcloud auth login --quiet --cred-file=credentials.json
   - gcloud config set project "$GCP_PROJECT_ID"
   cache:
     key: gcloud-sdk-$CI_COMMIT_REF_SLUG
