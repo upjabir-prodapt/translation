@@ -530,6 +530,7 @@ deploy-cloud-run:
     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
     gcloud beta run deploy "$CLOUD_RUN_SERVICE" \
       --quiet \
+      --update-labels="app=translation,env=${CI_COMMIT_BRANCH},managed-by=gitlab-ci,git-sha=${CI_COMMIT_SHORT_SHA},pipeline=${CI_PIPELINE_IID}" \
       --image "$IMAGE_URI" \
       --platform=managed \
       --region="$GCP_REGION" \
