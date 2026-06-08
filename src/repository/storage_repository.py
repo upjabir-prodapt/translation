@@ -19,6 +19,7 @@ from google.cloud import storage
 from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
+from src.config.retry import gcs_write_retry
 from src.config.tracing import tracer_repository
 from src.repository.repository_exception import StorageError
 
@@ -82,6 +83,33 @@ class StorageRepository:
     # Generic File Operations
     # ========================================================================
 
+    @gcs_write_retry(logger=logger)
+    async def _upload_blob(
+        self,
+        blob: "storage.Blob",
+        source: "Path | bytes",
+        file_type: "FileType | None",
+    ) -> None:
+        """Execute the GCS upload; retried automatically on transient failures."""
+        if isinstance(source, bytes):
+            if file_type:
+                await asyncio.to_thread(
+                    blob.upload_from_string, source, content_type=file_type.value
+                )
+            else:
+                await asyncio.to_thread(blob.upload_from_string, source)
+        elif isinstance(source, Path):
+            if not source.exists():
+                raise FileNotFoundError(f"Source file not found: {source}")
+            if file_type:
+                await asyncio.to_thread(
+                    blob.upload_from_filename, str(source), content_type=file_type.value
+                )
+            else:
+                await asyncio.to_thread(blob.upload_from_filename, str(source))
+        else:
+            raise ValueError("Source must be Path or bytes")
+
     async def upload_file(
         self,
         source: Path | bytes,
@@ -102,7 +130,7 @@ class StorageRepository:
             GCS URI (gs://bucket/path)
 
         Raises:
-            StorageError: If upload fails
+            StorageError: If upload fails after all retry attempts
         """
         size_bytes = len(source) if isinstance(source, bytes) else 0
         with tracer_repository.start_as_current_span(
@@ -117,39 +145,16 @@ class StorageRepository:
         ):
             try:
                 blob = self.bucket.blob(blob_path)
-
                 if metadata:
                     blob.metadata = metadata
-
-                if isinstance(source, bytes):
-                    if file_type:
-                        await asyncio.to_thread(
-                            blob.upload_from_string,
-                            source,
-                            content_type=file_type.value,
-                        )
-                    else:
-                        await asyncio.to_thread(blob.upload_from_string, source)
-                elif isinstance(source, Path):
-                    if not source.exists():
-                        raise FileNotFoundError(f"Source file not found: {source}")
-                    if file_type:
-                        await asyncio.to_thread(
-                            blob.upload_from_filename,
-                            str(source),
-                            content_type=file_type.value,
-                        )
-                    else:
-                        await asyncio.to_thread(blob.upload_from_filename, str(source))
-                else:
-                    raise ValueError("Source must be Path or bytes")
-
+                await self._upload_blob(blob, source, file_type)
                 gcs_uri = f"gs://{self.bucket_name}/{blob_path}"
                 logger.info(f"Uploaded file to {gcs_uri}")
                 return gcs_uri
-
+            except (FileNotFoundError, ValueError):
+                raise
             except GoogleAPIError as e:
-                logger.error(f"Failed to upload file: {e}")
+                logger.error(f"Failed to upload file after all retry attempts: {e}")
                 raise StorageError(
                     f"Failed to upload file: {e}", operation="upload", path=blob_path
                 ) from e

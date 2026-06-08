@@ -20,13 +20,17 @@ from src.api.services.intent_router_service import IntentRouterService
 from src.api.services.language_detection_service import LanguageDetectionService
 from src.api.services.processor_service import JobProcessor
 from src.api.services.temp_workspace_service import TempWorkspaceService
+from src.api.utils.cost_utils import compute_per_chunk_costs
+from src.api.utils.cost_utils import validate_job_cost
 from src.api.utils.docx_converter import convert_docx_to_pdf
 from src.config.constants import settings
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
+from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
+from src.repository.repository_exception import StorageError
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +245,10 @@ class PipelineOrchestrator:
                 error_message=None,
             )
 
+            token_usage = attempt_result.get("token_usage") or {}
+            total_cost_usd = float(token_usage.get("estimated_cost_usd", 0.0))
+            validate_job_cost(total_cost_usd)
+
             await self.bigquery.write_cost_attribution(
                 {
                     "job_id": job_id,
@@ -249,23 +257,19 @@ class PipelineOrchestrator:
                     "organization": cost_attribution.get("organization"),
                     "model_id": attempt_result.get("model_id"),
                     "intent": intent,
-                    "input_tokens": int(
-                        (attempt_result.get("token_usage") or {}).get(
-                            "prompt_tokens", 0
-                        )
-                    ),
-                    "output_tokens": int(
-                        (attempt_result.get("token_usage") or {}).get(
-                            "completion_tokens", 0
-                        )
-                    ),
-                    "cost_usd": float(
-                        (attempt_result.get("token_usage") or {}).get(
-                            "estimated_cost_usd", 0.0
-                        )
-                    ),
+                    "input_tokens": int(token_usage.get("prompt_tokens", 0)),
+                    "output_tokens": int(token_usage.get("completion_tokens", 0)),
+                    "cost_usd": total_cost_usd,
                     "timestamp": completed_at.isoformat(),
                 }
+            )
+
+            await self._write_per_chunk_costs(
+                job_id=job_id,
+                local_input_path=local_input_path,
+                token_usage=token_usage,
+                model_id=str(attempt_result.get("model_id") or ""),
+                timestamp=completed_at.isoformat(),
             )
             logger.info(f"Translation pipeline finished for job {job_id}")
 
@@ -309,7 +313,27 @@ class PipelineOrchestrator:
                 }
             )
         except Exception as exc:
-            logger.error(f"Pipeline failed for job {job_id}. Exception: {exc}")
+            if isinstance(exc, StorageError):
+                logger.critical(
+                    f"GCS write failed for job {job_id} after all retry attempts. "
+                    f"Adding to dead-letter queue. Error: {exc}"
+                )
+                try:
+                    await self.bigquery.write_dlq_entry(
+                        {
+                            "job_id": job_id,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "operation": getattr(exc, "operation", "upload"),
+                            "path": getattr(exc, "path", ""),
+                            "attempt_count": settings.GCS_RETRY_MAX_ATTEMPTS,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
+                except Exception:
+                    logger.exception(f"Failed to write DLQ entry for job {job_id}")
+            else:
+                logger.error(f"Pipeline failed for job {job_id}. Exception: {exc}")
             pipeline_span.set_status(Status(StatusCode.ERROR, str(exc)))
             pipeline_span.record_exception(exc)
             await self._update_status(
@@ -321,3 +345,35 @@ class PipelineOrchestrator:
             )
         finally:
             self.temp_workspace_service.cleanup(job_id)
+
+    async def _write_per_chunk_costs(
+        self,
+        *,
+        job_id: str,
+        local_input_path: Path,
+        token_usage: dict[str, Any],
+        model_id: str,
+        timestamp: str,
+    ) -> None:
+        """Compute and persist per-chunk token usage and cost to BigQuery."""
+        try:
+            strategy = StructureAwareSplitStrategy()
+            mock_cfg = type("_Cfg", (), {"input_file": str(local_input_path)})()
+            chunks = strategy.determine_split_points(mock_cfg)
+
+            records = compute_per_chunk_costs(
+                chunks=chunks,
+                total_input_tokens=int(token_usage.get("prompt_tokens", 0)),
+                total_output_tokens=int(token_usage.get("completion_tokens", 0)),
+                input_rate_per_1k=float(settings.GEMINI_INPUT_COST_PER_1K),
+                output_rate_per_1k=float(settings.GEMINI_OUTPUT_COST_PER_1K),
+            )
+            for rec in records:
+                rec["model_id"] = model_id
+                rec["timestamp"] = timestamp
+
+            await self.bigquery.write_chunk_cost_attribution(job_id, records)
+        except Exception:
+            logger.exception(
+                f"Failed to write per-chunk cost attribution for job {job_id}"
+            )

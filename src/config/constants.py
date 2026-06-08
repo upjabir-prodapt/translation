@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     BIGQUERY_TABLE: str = "translation_jobs"
     BIGQUERY_COST_TABLE: str = "cost_attribution"
     BIGQUERY_DLP_TABLE: str = "dlp_tokens"
+    BIGQUERY_DLQ_TABLE: str = "dead_letter_queue"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
@@ -258,7 +259,7 @@ class Settings(BaseSettings):
     # File Limits
     # -----------------------------
 
-    MAX_FILE_SIZE: int = 5 * 1024 * 1024
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024
     ALLOWED_EXTENSIONS: set[str] = Field(default_factory=set)
 
     # -----------------------------
@@ -289,6 +290,10 @@ class Settings(BaseSettings):
     LLM_RETRY_MIN_SECONDS: int = 1
     LLM_RETRY_MAX_SECONDS: int = 8
     LLM_RETRY_MULTIPLIER: int = 1
+    GCS_RETRY_MAX_ATTEMPTS: int = 5
+    GCS_RETRY_MIN_SECONDS: int = 10
+    GCS_RETRY_MAX_SECONDS: int = 300
+    GCS_RETRY_MULTIPLIER: int = 2
     LANGUAGE_DETECTION_MAX_CHARS: int = 10000
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int = 300000
 
