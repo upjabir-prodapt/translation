@@ -217,6 +217,12 @@ variables:
     mkdir -p "$UV_CACHE_DIR" "$TMPDIR"
     export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:${HOME}/.local/bin:${HOME}/.cargo/bin:$PATH"
 
+    # --retry-all-errors requires curl >= 7.82; amsgit02 shell runners ship older curl
+    CURL_RETRY_OPTS="--retry 3 --retry-delay 5"
+    if curl --help 2>&1 | grep -q -- '--retry-all-errors'; then
+      CURL_RETRY_OPTS="$CURL_RETRY_OPTS --retry-all-errors"
+    fi
+
     if ! command -v uv >/dev/null 2>&1 \
         && [ ! -x "${UV_INSTALL_DIR}/uv" ] \
         && [ ! -x "${UV_INSTALL_DIR}/bin/uv" ]; then
@@ -238,7 +244,7 @@ variables:
       mkdir -p "${UV_INSTALL_DIR}"
       local attempt=1
       while [ "$attempt" -le 3 ]; do
-        if curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+        if curl -fsSL $CURL_RETRY_OPTS \
             https://astral.sh/uv/install.sh \
             | env UV_INSTALL_DIR="${UV_INSTALL_DIR}" UV_NO_MODIFY_PATH=1 sh; then
           return 0
@@ -259,7 +265,7 @@ variables:
       mkdir -p "${UV_INSTALL_DIR}"
       local tmp
       tmp="$(mktemp -d)"
-      if ! curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors "$url" -o "${tmp}/${archive}"; then
+      if ! curl -fsSL $CURL_RETRY_OPTS "$url" -o "${tmp}/${archive}"; then
         rm -rf "$tmp"
         return 1
       fi
