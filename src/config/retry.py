@@ -67,3 +67,45 @@ def llm_retry(
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
+
+
+def is_retryable_gcs_exception(exc: BaseException) -> bool:
+    """Return True when a GCS exception is likely transient and worth retrying."""
+    from google.api_core.exceptions import Aborted
+    from google.api_core.exceptions import DeadlineExceeded
+    from google.api_core.exceptions import InternalServerError
+    from google.api_core.exceptions import ServiceUnavailable
+    from google.api_core.exceptions import TooManyRequests
+
+    if isinstance(
+        exc,
+        ServiceUnavailable
+        | TooManyRequests
+        | InternalServerError
+        | DeadlineExceeded
+        | Aborted,
+    ):
+        return True
+    if isinstance(exc, ConnectionError | TimeoutError) or (
+        isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError)
+    ):
+        return True
+    error_message = str(exc).lower()
+    return any(keyword in error_message for keyword in _RETRYABLE_ERROR_SUBSTRINGS)
+
+
+def gcs_write_retry(
+    *, logger: logging.Logger
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Build a Tenacity decorator for GCS write retry with exponential backoff."""
+    return retry(
+        stop=stop_after_attempt(settings.GCS_RETRY_MAX_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=settings.GCS_RETRY_MULTIPLIER,
+            min=settings.GCS_RETRY_MIN_SECONDS,
+            max=settings.GCS_RETRY_MAX_SECONDS,
+        ),
+        retry=retry_if_exception(is_retryable_gcs_exception),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )

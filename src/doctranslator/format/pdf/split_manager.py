@@ -1,7 +1,11 @@
 import logging
 from dataclasses import dataclass
+from dataclasses import field
 
 logger = logging.getLogger(__name__)
+
+MAX_CHUNK_TOKEN_COUNT = 8000
+_TOKENS_PER_PAGE_ESTIMATE = 300
 
 
 @dataclass
@@ -13,6 +17,16 @@ class SplitPoint:
     estimated_complexity: float = 1.0
     chapter_title: str | None = None
     overlap_pages: int = 0
+    chunk_index: int = 0
+    token_count: int = field(default=0)
+
+    @property
+    def page_number(self) -> int:
+        return self.start_page
+
+    @property
+    def section_header(self) -> str:
+        return self.chapter_title or f"Section {self.chunk_index + 1}"
 
 
 class BaseSplitStrategy:
@@ -36,16 +50,21 @@ class PageCountStrategy(BaseSplitStrategy):
 
         split_points = []
         current_page = 0
+        chunk_index = 0
 
         while current_page < total_pages:
             end_page = min(current_page + self.max_pages_per_part, total_pages)
+            page_count = end_page - current_page
             split_points.append(
                 SplitPoint(
                     start_page=current_page,
                     end_page=end_page - 1,  # end_page is inclusive
+                    chunk_index=chunk_index,
+                    token_count=page_count * _TOKENS_PER_PAGE_ESTIMATE,
                 )
             )
             current_page = end_page
+            chunk_index += 1
 
         return split_points
 
@@ -82,7 +101,14 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
                 f"Document has {total_pages} pages (< {self.min_pages_to_split}), "
                 "processing as single document."
             )
-            return [SplitPoint(start_page=0, end_page=total_pages - 1)]
+            return [
+                SplitPoint(
+                    start_page=0,
+                    end_page=total_pages - 1,
+                    chunk_index=0,
+                    token_count=total_pages * _TOKENS_PER_PAGE_ESTIMATE,
+                )
+            ]
 
         section_starts, titles = self._get_sections_from_toc(doc, total_pages)
         logger.info(
@@ -198,12 +224,15 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
             actual_start, overlap = self._section_actual_start_and_overlap(
                 i, section_start
             )
+            page_count = section_end - actual_start + 1
             split_points.append(
                 SplitPoint(
                     start_page=actual_start,
                     end_page=section_end,
                     overlap_pages=overlap,
                     chapter_title=titles[i],
+                    chunk_index=i,
+                    token_count=page_count * _TOKENS_PER_PAGE_ESTIMATE,
                 )
             )
             logger.debug(
@@ -212,6 +241,21 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
             )
 
         return split_points
+
+
+def validate_chunk_metadata(chunks: list[SplitPoint]) -> None:
+    """Raise ValueError if any chunk is missing required metadata or exceeds the token limit."""
+    errors: list[str] = []
+    for chunk in chunks:
+        prefix = f"Chunk {chunk.chunk_index}"
+        if chunk.token_count <= 0:
+            errors.append(f"{prefix}: token_count is not populated")
+        elif chunk.token_count > MAX_CHUNK_TOKEN_COUNT:
+            errors.append(
+                f"{prefix}: token_count {chunk.token_count} exceeds {MAX_CHUNK_TOKEN_COUNT}"
+            )
+    if errors:
+        raise ValueError("Chunk metadata validation failed:\n" + "\n".join(errors))
 
 
 class SplitManager:

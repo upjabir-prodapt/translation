@@ -37,6 +37,9 @@ class BigQueryRepository:
         self.dlp_tokens_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
         )
+        self.dlq_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLQ_TABLE}"
+        )
 
     def _to_json_string(self, value: Any) -> str | None:
         if value is None:
@@ -224,6 +227,58 @@ class BigQueryRepository:
                     path=self.jobs_table,
                 ) from exc
 
+    async def get_completed_job_by_hash(
+        self,
+        source_hash: str,
+        lang_out: str,
+        domain: str,
+    ) -> dict[str, Any] | None:
+        """Return the most recent completed job matching content hash and translation target."""
+        jobs_table = self._validate_table_name(self.jobs_table)
+        # nosec B608 – table name validated; all values bound via ScalarQueryParameter.
+        query = f"""
+        SELECT *
+        FROM `{jobs_table}`
+        WHERE source_hash = @source_hash
+          AND status = 'completed'
+          AND JSON_VALUE(translation_config, '$.target_language') = @lang_out
+          AND JSON_VALUE(translation_config, '$.domain') = @domain
+        ORDER BY completed_at DESC
+        LIMIT 1
+        """  # noqa: S608  # nosec B608
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("source_hash", "STRING", source_hash),
+                bigquery.ScalarQueryParameter("lang_out", "STRING", lang_out),
+                bigquery.ScalarQueryParameter("domain", "STRING", domain),
+            ]
+        )
+        with tracer_repository.start_as_current_span(
+            "bigquery.get_by_hash",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "db.system": "bigquery",
+                "db.name": self.dataset,
+                "db.sql.table": settings.BIGQUERY_TABLE,
+                "db.operation": "SELECT",
+            },
+        ) as span:
+            try:
+                query_job = await asyncio.to_thread(
+                    self.client.query, query, job_config=job_config
+                )
+                rows = list(await asyncio.to_thread(query_job.result))
+                span.set_attribute("cache_hit", len(rows) > 0)
+                if not rows:
+                    return None
+                return self._deserialize_job_row(rows[0])
+            except GoogleAPIError as exc:
+                raise StorageError(
+                    f"Failed to query translation job by hash: {exc}",
+                    operation="select",
+                    path=self.jobs_table,
+                ) from exc
+
     async def list_translation_jobs(
         self,
         status: str | None = None,
@@ -375,6 +430,41 @@ class BigQueryRepository:
             "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
         }
         await self._insert_rows_json(self.cost_attribution_table, [row])
+
+    async def write_chunk_cost_attribution(
+        self, job_id: str, records: list[dict[str, Any]]
+    ) -> None:
+        """Write per-chunk token usage and cost records for a completed job."""
+        if not records:
+            return
+        rows = [
+            {
+                "job_id": job_id,
+                "chunk_index": int(r["chunk_index"]),
+                "tokens_input": int(r.get("tokens_input", 0) or 0),
+                "tokens_output": int(r.get("tokens_output", 0) or 0),
+                "cost_usd": float(r.get("cost_usd", 0.0) or 0.0),
+                "model_id": r.get("model_id"),
+                "timestamp": r.get("timestamp", datetime.now(UTC).isoformat()),
+            }
+            for r in records
+        ]
+        await self._insert_rows_json(self.cost_attribution_table, rows)
+
+    async def write_dlq_entry(self, data: dict[str, Any]) -> None:
+        """Write a dead-letter queue entry for a persistently failing GCS operation."""
+        row = {
+            "job_id": data["job_id"],
+            "error_type": data.get("error_type", "StorageError"),
+            "error_message": str(data.get("error_message", "")),
+            "operation": data.get("operation", "upload"),
+            "path": data.get("path", ""),
+            "attempt_count": int(
+                data.get("attempt_count", settings.GCS_RETRY_MAX_ATTEMPTS)
+            ),
+            "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
+        }
+        await self._insert_rows_json(self.dlq_table, [row])
 
     async def write_job_completion(self, job_data: dict[str, Any]) -> None:
         """Backward-compatible alias for legacy call sites."""

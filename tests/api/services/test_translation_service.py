@@ -1,4 +1,8 @@
 import base64
+import hashlib
+import uuid
+from datetime import UTC
+from datetime import datetime
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
@@ -6,6 +10,7 @@ import pytest
 from src.api.exceptions import ValidationError
 from src.api.schemas.requests import CostAttributionInput
 from src.api.schemas.requests import DocumentInput
+from src.api.schemas.requests import ProcessingOptions
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.requests import TranslationConfigInput
 from src.api.services.translation_service import TranslationService
@@ -18,7 +23,9 @@ def mock_storage():
 
 @pytest.fixture
 def mock_bq():
-    return AsyncMock()
+    bq = AsyncMock()
+    bq.get_completed_job_by_hash.return_value = None  # cache miss by default
+    return bq
 
 
 @pytest.fixture
@@ -111,3 +118,264 @@ class TestTranslationService:
                 with pytest.raises(Exception, match="Oops"):
                     await service.submit_translation(valid_request)
                 mock_storage.delete_job_files.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Cache-hit: submitting the same document twice reuses the prior result
+# ---------------------------------------------------------------------------
+
+
+def _make_cached_job(source_hash: str) -> dict:
+    now = datetime.now(UTC)
+    jid = str(uuid.uuid4())
+    return {
+        "job_id": jid,
+        "status": "completed",
+        "source_document": {
+            "gcs_uri": f"gs://bucket/translation/{jid}/input/doc.pdf",
+            "format": "pdf",
+            "page_count": 2,
+            "source_language": "auto",
+            "original_filename": "contract.pdf",
+            "output_filename": "contract.pdf",
+            "file_size_bytes": 1024,
+            "checksum": source_hash,
+        },
+        "translation_config": {
+            "source_language": "auto",
+            "target_language": "fr",
+            "domain": "legal",
+        },
+        "result": {
+            "output_gcs_uri": f"gs://bucket/translation/{jid}/output/contract.pdf",
+            "token_count": 3000,
+            "cost_usd": 0.90,
+            "model_used": "claude-sonnet-4-6",
+            "intent": "legal_en_fr",
+        },
+        "source_hash": source_hash,
+        "submitted_at": now,
+        "completed_at": now,
+    }
+
+
+_PDF_METADATA = {
+    "filename": "contract.pdf",
+    "size_bytes": 1024,
+    "content_type": "application/pdf",
+    "checksum": "placeholder",  # overridden per-fixture
+    "page_count": 2,
+}
+
+_CACHED_CONTENT = b"%PDF-1.4 cached doc content"
+
+
+def _make_cache_request() -> TranslateRequest:
+    return TranslateRequest(
+        document=DocumentInput(
+            content=base64.b64encode(_CACHED_CONTENT).decode(),
+            filename="contract.pdf",
+        ),
+        translation_config=TranslationConfigInput(
+            target_language="French",
+            domain="legal",
+        ),
+        cost_attribution=CostAttributionInput(
+            user_id="user@colt.net",
+            business_unit="legal-dept",
+            organization="colt",
+        ),
+        processing_options=ProcessingOptions(),
+    )
+
+
+class TestCachedTranslation:
+    """
+    Objective: submitting the same document twice returns the cached translation
+    without re-processing.
+
+    Pre-conditions:
+    - User is authenticated.
+    - The same document was previously translated (completed job exists in BigQuery).
+    - Cache TTL is still active (completed job is returned by get_completed_job_by_hash).
+
+    Test data: POST request whose SHA-256 matches an existing completed job.
+
+    Expected behaviour:
+    - Response status is "completed" (not "queued").
+    - A new job record is written to BigQuery immediately as "completed".
+    - No GCS upload occurs; no pipeline is scheduled.
+    - The result payload is copied verbatim from the cached job.
+    """
+
+    @pytest.fixture
+    def source_hash(self) -> str:
+        return hashlib.sha256(_CACHED_CONTENT).hexdigest()
+
+    @pytest.fixture
+    def cached_job(self, source_hash) -> dict:
+        return _make_cached_job(source_hash)
+
+    @pytest.fixture
+    def cache_bq(self, cached_job) -> AsyncMock:
+        bq = AsyncMock()
+        bq.get_completed_job_by_hash.return_value = cached_job
+        bq.upsert_translation_job.return_value = None
+        return bq
+
+    @pytest.fixture
+    def cache_storage(self) -> AsyncMock:
+        return AsyncMock()
+
+    @pytest.fixture
+    def cache_service(self, cache_storage, cache_bq) -> TranslationService:
+        return TranslationService(storage=cache_storage, bigquery=cache_bq)
+
+    @pytest.fixture
+    def cache_request(self) -> TranslateRequest:
+        return _make_cache_request()
+
+    @pytest.fixture
+    def pdf_meta(self, source_hash) -> dict:
+        return {**_PDF_METADATA, "checksum": source_hash}
+
+    # ------------------------------------------------------------------
+    # Response shape
+    # ------------------------------------------------------------------
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_response_status_is_completed(
+        self, mock_validate, cache_service, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        resp = await cache_service.submit_translation(cache_request)
+        assert resp.status == "completed"
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_response_has_job_id(
+        self, mock_validate, cache_service, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        resp = await cache_service.submit_translation(cache_request)
+        assert resp.job_id
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_response_has_status_url(
+        self, mock_validate, cache_service, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        resp = await cache_service.submit_translation(cache_request)
+        assert "/api/v1/translate/" in resp.status_url
+
+    # ------------------------------------------------------------------
+    # No re-processing
+    # ------------------------------------------------------------------
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_does_not_upload_to_gcs(
+        self, mock_validate, cache_service, cache_storage, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        await cache_service.submit_translation(cache_request)
+        cache_storage.upload_input_pdf.assert_not_called()
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_does_not_schedule_pipeline(
+        self, mock_validate, cache_service, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        with patch.object(cache_service, "_schedule_background_pipeline") as mock_sched:
+            await cache_service.submit_translation(cache_request)
+        mock_sched.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # BigQuery job is written immediately as completed
+    # ------------------------------------------------------------------
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_bq_job_written_with_completed_status(
+        self, mock_validate, cache_service, cache_bq, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        await cache_service.submit_translation(cache_request)
+        cache_bq.upsert_translation_job.assert_called_once()
+        job_data = cache_bq.upsert_translation_job.call_args[0][0]
+        assert job_data["status"] == "completed"
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_bq_job_has_completed_at(
+        self, mock_validate, cache_service, cache_bq, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        await cache_service.submit_translation(cache_request)
+        job_data = cache_bq.upsert_translation_job.call_args[0][0]
+        assert job_data.get("completed_at") is not None
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_bq_job_id_differs_from_cached_job(
+        self,
+        mock_validate,
+        cache_service,
+        cache_bq,
+        cache_request,
+        pdf_meta,
+        cached_job,
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        resp = await cache_service.submit_translation(cache_request)
+        assert resp.job_id != cached_job["job_id"]
+
+    # ------------------------------------------------------------------
+    # Result is copied verbatim from the cache
+    # ------------------------------------------------------------------
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_result_copied_from_cache(
+        self,
+        mock_validate,
+        cache_service,
+        cache_bq,
+        cache_request,
+        pdf_meta,
+        cached_job,
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        await cache_service.submit_translation(cache_request)
+        job_data = cache_bq.upsert_translation_job.call_args[0][0]
+        assert job_data["result"] == cached_job["result"]
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_cache_lookup_uses_correct_hash(
+        self,
+        mock_validate,
+        cache_service,
+        cache_bq,
+        cache_request,
+        pdf_meta,
+        source_hash,
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        await cache_service.submit_translation(cache_request)
+        cache_bq.get_completed_job_by_hash.assert_called_once_with(
+            source_hash=source_hash,
+            lang_out="fr",
+            domain="legal",
+        )
+
+    # ------------------------------------------------------------------
+    # Cache miss falls through to normal queued flow
+    # ------------------------------------------------------------------
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_cache_miss_returns_queued(
+        self, mock_validate, cache_storage, cache_request, pdf_meta
+    ):
+        mock_validate.return_value = (b"", pdf_meta)
+        bq_miss = AsyncMock()
+        bq_miss.get_completed_job_by_hash.return_value = None
+        bq_miss.upsert_translation_job.return_value = None
+        cache_storage.upload_input_pdf.return_value = "gs://bucket/input.pdf"
+        svc = TranslationService(storage=cache_storage, bigquery=bq_miss)
+        with patch.object(svc, "_schedule_background_pipeline"):
+            resp = await svc.submit_translation(cache_request)
+        assert resp.status == "queued"
