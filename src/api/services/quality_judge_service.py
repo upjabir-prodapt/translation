@@ -89,7 +89,7 @@ class GoogleADKJudgeAgent:
         if genai is not None:
             self._client = genai.Client(
                 vertexai=True,
-                project=settings.GOOGLE_CLOUD_PROJECT_ID,
+                project=settings.GOOGLE_CLOUD_PROJECT,
                 location=settings.GOOGLE_CLOUD_LOCATION,
             )
 

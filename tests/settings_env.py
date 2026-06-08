@@ -21,7 +21,7 @@ TEST_SETTINGS_ENV: dict[str, str] = {
     # Runtime mode
     "IS_LOCAL": "true",
     # GCP Bootstrap
-    "GOOGLE_CLOUD_PROJECT_ID": "mock-project-id",
+    "GOOGLE_CLOUD_PROJECT": "mock-project-id",
     "GOOGLE_CLOUD_LOCATION": "us-central1",
     # GCS
     "GCS_BUCKET_NAME": "mock-bucket",

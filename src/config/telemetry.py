@@ -73,10 +73,10 @@ def setup_telemetry(app, settings) -> None:
         )
         return
 
-    project_id = settings.GOOGLE_CLOUD_PROJECT_ID or adc_project or ""
+    project_id = settings.GOOGLE_CLOUD_PROJECT or adc_project or ""
     if not project_id:
         logger.warning(
-            "GOOGLE_CLOUD_PROJECT_ID not set — trace export may fail. "
+            "GOOGLE_CLOUD_PROJECT not set — trace export may fail. "
             "Pass it as an env var or via Cloud Run --set-env-vars."
         )
 

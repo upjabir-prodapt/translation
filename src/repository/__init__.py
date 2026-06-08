@@ -19,7 +19,7 @@ def get_bigquery_client() -> bigquery.Client:
     """Get cached BigQuery client."""
     from src.config.constants import settings
 
-    return bigquery.Client(project=settings.GOOGLE_CLOUD_PROJECT_ID)
+    return bigquery.Client(project=settings.GOOGLE_CLOUD_PROJECT)
 
 
 # Lazy singleton instances for repositories

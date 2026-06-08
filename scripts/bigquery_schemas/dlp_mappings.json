@@ -1,0 +1,8 @@
+[
+  {"name": "job_id", "type": "STRING", "mode": "REQUIRED"},
+  {"name": "chunk_index", "type": "INT64", "mode": "REQUIRED"},
+  {"name": "token", "type": "STRING", "mode": "REQUIRED"},
+  {"name": "original_value", "type": "STRING", "mode": "REQUIRED"},
+  {"name": "info_type", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "masked_at", "type": "TIMESTAMP", "mode": "NULLABLE"}
+]

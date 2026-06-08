@@ -23,7 +23,7 @@ def repo(mock_bq_client):
         return_value=mock_bq_client,
     ):
         with patch("src.repository.bigquery_repository.settings") as mock_settings:
-            mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
+            mock_settings.GOOGLE_CLOUD_PROJECT = "test-project"
             mock_settings.BIGQUERY_DATASET = "test_dataset"
             mock_settings.BIGQUERY_TABLE = "jobs"
             mock_settings.BIGQUERY_COST_TABLE = "cost"

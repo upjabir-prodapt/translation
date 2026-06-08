@@ -10,7 +10,7 @@ Source priority (first wins):
 Bootstrap variables are always read from the process environment.
 For local dev they live in <repo-root>/.env.
 For Cloud Run they are either set via --set-env-vars (IS_LOCAL, ASSETS_ROOT,
-TEMP_DIR, GOOGLE_CLOUD_PROJECT_ID, GOOGLE_CLOUD_LOCATION) or come from the
+TEMP_DIR, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION) or come from the
 mounted /secrets/.env file.
 
 Escape hatches (checked before IS_LOCAL):
@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     # Bootstrap (always from env)
     # -----------------------------
 
-    GOOGLE_CLOUD_PROJECT_ID: str
+    GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str
     IS_LOCAL: bool = Field(default=True)
 
@@ -146,10 +146,10 @@ class Settings(BaseSettings):
     # -----------------------------
 
     BIGQUERY_DATASET: str
-    BIGQUERY_LOCATION: str = "US"
+    BIGQUERY_LOCATION: str = "europe-west1"
     BIGQUERY_TABLE: str = "translation_jobs"
-    BIGQUERY_COST_TABLE: str = "cost_attribution"
-    BIGQUERY_DLP_TABLE: str = "dlp_tokens"
+    BIGQUERY_COST_TABLE: str = "translation_costs"
+    BIGQUERY_DLP_TABLE: str = "dlp_mappings"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
@@ -373,7 +373,7 @@ class Settings(BaseSettings):
             source = str(CLOUD_RUN_ENV_FILE)
         logger.info(
             f"Settings loaded | IS_LOCAL={self.IS_LOCAL} | source={source}"
-            f" | project={self.GOOGLE_CLOUD_PROJECT_ID} | location={self.GOOGLE_CLOUD_LOCATION}"
+            f" | project={self.GOOGLE_CLOUD_PROJECT} | location={self.GOOGLE_CLOUD_LOCATION}"
             f" | assets_root={self.assets_root_path} | temp_root={self.temp_root_path}"
         )
 

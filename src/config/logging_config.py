@@ -71,7 +71,7 @@ class GcpJsonFormatter(logging.Formatter):
 def setup_logging() -> None:
     """Configure root logger with GcpJsonFormatter writing to stdout."""
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(GcpJsonFormatter(project_id=settings.GOOGLE_CLOUD_PROJECT_ID))
+    handler.setFormatter(GcpJsonFormatter(project_id=settings.GOOGLE_CLOUD_PROJECT))
 
     root = logging.getLogger()
     root.setLevel(settings.LOG_LEVEL)
