@@ -41,6 +41,8 @@ variables:
   # Keep gcloud state off $HOME — shell runners often have a full home partition
   CLOUDSDK_CONFIG: "${CI_PROJECT_DIR}/.cache/gcloud-config"
   CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
+  # Docker login/configure-docker writes ~/.docker/config.json — redirect to build volume
+  DOCKER_CONFIG: "${CI_PROJECT_DIR}/.cache/docker"
   # Do not set TMPDIR here — GitLab Runner uses $CI_PROJECT_DIR/.tmp for artifact downloads
   CI_WORK_TMP: "${CI_PROJECT_DIR}/.ci-work"
 
@@ -100,6 +102,16 @@ variables:
       if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$min_kb" ]; then
         echo "ERROR - less than 512 MiB free on ${mount}; ask infra to clean /app/builds on $(hostname -s 2>/dev/null || hostname)"
         return 1
+      fi
+    }
+
+    check_home_disk_space() {
+      local home="${HOME:-/home/devopsadmin}"
+      local avail_kb min_kb=10240
+      avail_kb="$(df -Pk "$home" 2>/dev/null | awk 'NR==2 {print $4}')"
+      echo "Home volume: $(df -h "$home" 2>/dev/null | awk 'NR==2 {print $2 " total, " $3 " used, " $4 " avail (" $5 " used)"}')"
+      if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$min_kb" ]; then
+        echo "WARNING - less than 10 MiB free on ${home}; using DOCKER_CONFIG under CI_PROJECT_DIR"
       fi
     }
 
@@ -234,7 +246,7 @@ variables:
     - .tools/google-cloud-sdk/
     policy: pull-push
   after_script:
-  - rm -rf "${CI_PROJECT_DIR}/.cache/gcloud-config" workload_identity.jwt credentials.json 2>/dev/null || true
+  - rm -rf "${CI_PROJECT_DIR}/.cache/gcloud-config" "${CI_PROJECT_DIR}/.cache/docker" workload_identity.jwt credentials.json 2>/dev/null || true
 
 ".ensure_uv":
   before_script:
@@ -522,13 +534,17 @@ build-and-push:
   when: manual
   script:
   - |
+    export DOCKER_CONFIG="${DOCKER_CONFIG:-${CI_PROJECT_DIR}/.cache/docker}"
+    mkdir -p "$DOCKER_CONFIG"
+    check_home_disk_space
+
     if ! docker info >/dev/null 2>&1; then
       echo "ERROR - docker daemon not reachable on shell runner; check docker service and group membership"
       exit 1
     fi
 
     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-    gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+    # oauth2accesstoken login is enough for push; avoid gcloud configure-docker writing to a full $HOME/.docker
     gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin \
       "https://${GCP_REGION}-docker.pkg.dev"
 
