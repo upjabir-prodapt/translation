@@ -18,8 +18,16 @@ from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
-# x-app-auth token scheme
-app_auth_scheme = APIKeyHeader(name="x-app-auth", auto_error=False)
+# x-app-auth token scheme (shown as "XAppAuth" in Swagger Authorize)
+app_auth_scheme = APIKeyHeader(
+    name="x-app-auth",
+    scheme_name="XAppAuth",
+    auto_error=False,
+    description=(
+        "JWT from POST /api/v1/auth/token. "
+        "Enter `Bearer <access_token>` or paste the token alone."
+    ),
+)
 
 
 class AuthenticatedUser(BaseModel):
@@ -87,18 +95,25 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-def verify_token(
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
-) -> dict[str, Any]:
-    """Verify bearer token and return JWT payload."""
-    if not api_key or not api_key.startswith("Bearer "):
+def _extract_bearer_token(header_value: str | None) -> str:
+    """Parse JWT from x-app-auth (Bearer prefix optional for Swagger UI)."""
+    if not header_value or not header_value.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = api_key[7:]
-    return decode_and_verify_token(token)
+    value = header_value.strip()
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def verify_token(
+    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+) -> dict[str, Any]:
+    """Verify bearer token and return JWT payload."""
+    return decode_and_verify_token(_extract_bearer_token(api_key))
 
 
 def get_current_user(
