@@ -38,6 +38,9 @@ variables:
   # pre-commit hook envs use virtualenv; keep wheel/app-data off the shared runner $HOME
   XDG_CACHE_HOME: "${CI_PROJECT_DIR}/.cache/xdg"
   VIRTUALENV_OVERRIDE_APP_DATA: "${CI_PROJECT_DIR}/.cache/virtualenv-app-data"
+  # Keep gcloud state off $HOME — shell runners often have a full home partition
+  CLOUDSDK_CONFIG: "${CI_PROJECT_DIR}/.cache/gcloud-config"
+  CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
   # Do not set TMPDIR here — GitLab Runner uses $CI_PROJECT_DIR/.tmp for artifact downloads
   CI_WORK_TMP: "${CI_PROJECT_DIR}/.ci-work"
 
@@ -89,12 +92,28 @@ variables:
       fi
     }
 
+    check_build_disk_space() {
+      local mount="${CI_PROJECT_DIR:-.}"
+      local avail_kb min_kb=524288
+      avail_kb="$(df -Pk "$mount" 2>/dev/null | awk 'NR==2 {print $4}')"
+      echo "Build volume: $(df -h "$mount" 2>/dev/null | awk 'NR==2 {print $2 " total, " $3 " used, " $4 " avail (" $5 " used)"}')"
+      if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$min_kb" ]; then
+        echo "ERROR - less than 512 MiB free on ${mount}; ask infra to clean /app/builds on $(hostname -s 2>/dev/null || hostname)"
+        return 1
+      fi
+    }
+
 ".ensure_gcloud":
   before_script:
   - !reference [".proxy", before_script]
   - !reference [".runner_shell", before_script]
   - |
     set -e
+    export CLOUDSDK_CONFIG="${CLOUDSDK_CONFIG:-${CI_PROJECT_DIR}/.cache/gcloud-config}"
+    export CLOUDSDK_CORE_DISABLE_PROMPTS="${CLOUDSDK_CORE_DISABLE_PROMPTS:-1}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$CLOUDSDK_CONFIG" "$TMPDIR"
+    check_build_disk_space
 
     if ! command -v gcloud >/dev/null 2>&1; then
       for candidate in \
@@ -207,13 +226,15 @@ variables:
       \"credential_source\": { \"file\": \"workload_identity.jwt\" },
       \"service_account_impersonation_url\": \"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT}:generateAccessToken\"
     }" > credentials.json
-  - gcloud auth login --quiet --cred-file=credentials.json
+  - gcloud auth login --cred-file=credentials.json --quiet
   - gcloud config set project "$GCP_PROJECT_ID"
   cache:
     key: gcloud-sdk-$CI_COMMIT_REF_SLUG
     paths:
     - .tools/google-cloud-sdk/
     policy: pull-push
+  after_script:
+  - rm -rf "${CI_PROJECT_DIR}/.cache/gcloud-config" workload_identity.jwt credentials.json 2>/dev/null || true
 
 ".ensure_uv":
   before_script:
