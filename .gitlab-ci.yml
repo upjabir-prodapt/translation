@@ -1,31 +1,360 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
 include:
 - template: Security/SAST.gitlab-ci.yml
 - template: Security/Secret-Detection.gitlab-ci.yml
 - template: Security/Dependency-Scanning.gitlab-ci.yml
+
 workflow:
   rules:
   - if: $CI_COMMIT_BRANCH == "sandbox"
   - if: $CI_COMMIT_BRANCH == "dev"
   - if: $CI_COMMIT_BRANCH == "prod"
+
 stages:
 - lint
 - test
 - build
 - deploy
+- promote
+
 variables:
-  WORKLOAD_IDENTITY_PROJECT_NUMBER: '297743845367'
-  WORKLOAD_IDENTITY_POOL: gitlab-pool
-  WORKLOAD_IDENTITY_PROVIDER: gitlab-provider
-  SERVICE_ACCOUNT: gitlab-deployer@aicoesandox.iam.gserviceaccount.com
   IMAGE_TAG: "$CI_PIPELINE_IID"
-  DOCKER_TLS_CERTDIR: "/certs"
+  # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY
+  # WIF: WORKLOAD_IDENTITY_PROJECT_NUMBER, WORKLOAD_IDENTITY_POOL, WORKLOAD_IDENTITY_PROVIDER
+  #      SERVICE_ACCOUNT, GCP_PROJECT_ID
+  # Per-environment: GCP_REGION, ARTIFACT_REPO, IMAGE_NAME, CLOUD_RUN_SERVICE,
+  #                  CLOUD_RUN_NETWORK, CLOUD_RUN_SUBNET, CLOUD_RUN_SA,
+  #                  APP_CONFIG_SECRET_NAME, APP_CONFIG_SECRET_VERSION,
+  #                  GCS_BUCKET_NAME, ASSETS_MOUNT_PATH, GCS_ASSETS_DIR
+  GCLOUD_USER_INSTALL_DIR: "${CI_PROJECT_DIR}/.tools/google-cloud-sdk"
+  GCLOUD_ARCHIVE_URL: "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz"
+  UV_INSTALL_DIR: "${CI_PROJECT_DIR}/.tools/uv"
+  UV_VERSION: "0.6.14"
+  # Shell runner tag: Shell1 (shell executor on amsgit02)
+  # Avoid ~/.cache/* and ~/.local/share/uv/python under $HOME — home partition is often full
+  UV_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/uv"
+  UV_PYTHON_INSTALL_DIR: "${CI_PROJECT_DIR}/.cache/uv/python"
+  PRE_COMMIT_HOME: "${CI_PROJECT_DIR}/.cache/pre-commit"
+  PIP_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/pip"
+  # Do not set TMPDIR here — GitLab Runner uses $CI_PROJECT_DIR/.tmp for artifact downloads
+  CI_WORK_TMP: "${CI_PROJECT_DIR}/.ci-work"
+
+".shell_runner":
+  tags:
+  - Shell1
+
+".proxy":
+  before_script:
+  - |
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="${HTTPS_PROXY:-$HTTP_PROXY}"
+    export HTTP_PROXY="$HTTP_PROXY"
+    export HTTPS_PROXY="${HTTPS_PROXY:-$HTTP_PROXY}"
+    echo "Proxy configured (HTTP_PROXY=$HTTP_PROXY)"
+
+".runner_shell":
+  before_script:
+  - |
+    gcloud_yum_dist() {
+      GCLOUD_RPM_DIST="el8"
+      if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        case "${VERSION_ID%%.*}" in
+          9|39) GCLOUD_RPM_DIST="el9" ;;
+          8)    GCLOUD_RPM_DIST="el8" ;;
+          7)    GCLOUD_RPM_DIST="el7" ;;
+        esac
+        case "$ID" in
+          amzn)
+            case "${VERSION_ID%%.*}" in
+              2023) GCLOUD_RPM_DIST="el9" ;;
+              2)    GCLOUD_RPM_DIST="el7" ;;
+            esac
+            ;;
+        esac
+      fi
+      echo "$GCLOUD_RPM_DIST"
+    }
+
+    shell_run_root() {
+      if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+      elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        sudo -n "$@"
+      else
+        return 1
+      fi
+    }
+
+".ensure_gcloud":
+  before_script:
+  - !reference [".proxy", before_script]
+  - !reference [".runner_shell", before_script]
+  - |
+    set -e
+
+    if ! command -v gcloud >/dev/null 2>&1; then
+      for candidate in \
+        /usr/bin/gcloud \
+        /usr/local/bin/gcloud \
+        /opt/google-cloud-sdk/bin/gcloud \
+        /app/google-cloud-sdk/bin/gcloud \
+        /usr/lib/google-cloud-sdk/bin/gcloud \
+        /usr/libexec/google-cloud-sdk/bin/gcloud; do
+        if [ -x "$candidate" ]; then
+          export PATH="$(dirname "$candidate"):$PATH"
+          break
+        fi
+      done
+      if [ -n "${GCLOUD_SDK_ROOT:-}" ] && [ -x "${GCLOUD_SDK_ROOT}/bin/gcloud" ]; then
+        export PATH="${GCLOUD_SDK_ROOT}/bin:$PATH"
+      fi
+    fi
+
+    install_gcloud_system() {
+      if command -v apt-get >/dev/null 2>&1; then
+        shell_run_root apt-get update -qq
+        shell_run_root apt-get install -y -qq apt-transport-https ca-certificates gnupg curl
+        curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+          | shell_run_root gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+          | shell_run_root tee /etc/apt/sources.list.d/google-cloud-sdk.list
+        shell_run_root apt-get update -qq
+        shell_run_root apt-get install -y -qq google-cloud-cli
+      elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        PM="dnf"
+        command -v dnf >/dev/null 2>&1 || PM="yum"
+        GCLOUD_RPM_DIST="$(gcloud_yum_dist)"
+        shell_run_root "$PM" install -y curl
+        shell_run_root sh -c "printf '%s\n' \
+          '[google-cloud-cli]' \
+          'name=Google Cloud CLI' \
+          'baseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-${GCLOUD_RPM_DIST}-x86_64' \
+          'enabled=1' 'gpgcheck=1' 'repo_gpgcheck=0' \
+          'gpgkey=https://packages.cloud.google.com/yum/doc/rpm-release-key.gpg' \
+          > /etc/yum.repos.d/google-cloud-sdk.repo"
+        shell_run_root "$PM" install -y google-cloud-cli
+      else
+        echo "ERROR - no apt-get, dnf, or yum; install google-cloud-cli on the runner host"
+        return 1
+      fi
+    }
+
+    install_gcloud_user_local() {
+      if [ -x "${GCLOUD_USER_INSTALL_DIR}/bin/gcloud" ]; then
+        export PATH="${GCLOUD_USER_INSTALL_DIR}/bin:$PATH"
+        echo "Using cached gcloud at ${GCLOUD_USER_INSTALL_DIR}"
+        return 0
+      fi
+      command -v curl >/dev/null 2>&1 || { echo "ERROR - curl required to download Cloud SDK"; return 1; }
+      echo "Installing Google Cloud CLI to ${GCLOUD_USER_INSTALL_DIR} (no sudo)..."
+      tmp="$(mktemp -d)"
+      mkdir -p "$(dirname "$GCLOUD_USER_INSTALL_DIR")"
+      curl -fsSL "$GCLOUD_ARCHIVE_URL" -o "${tmp}/google-cloud-cli.tar.gz"
+      tar -xzf "${tmp}/google-cloud-cli.tar.gz" -C "$tmp"
+      rm -rf "$GCLOUD_USER_INSTALL_DIR"
+      if [ -d "${tmp}/google-cloud-sdk" ]; then
+        mv "${tmp}/google-cloud-sdk" "$GCLOUD_USER_INSTALL_DIR"
+      else
+        echo "ERROR - unexpected Cloud SDK archive layout"
+        rm -rf "$tmp"
+        return 1
+      fi
+      rm -rf "$tmp"
+      export PATH="${GCLOUD_USER_INSTALL_DIR}/bin:$PATH"
+      echo "OK - gcloud installed under ${GCLOUD_USER_INSTALL_DIR}"
+    }
+
+    if ! command -v gcloud >/dev/null 2>&1; then
+      if shell_run_root true 2>/dev/null; then
+        install_gcloud_system
+      else
+        install_gcloud_user_local || {
+          echo "ERROR - could not install gcloud; check proxy and ${GCLOUD_ARCHIVE_URL}"
+          exit 1
+        }
+      fi
+    fi
+
+    if ! command -v gcloud >/dev/null 2>&1; then
+      echo "ERROR - gcloud not available after install attempt"
+      exit 1
+    fi
+    gcloud --version
+    echo "OK - gcloud ready"
+
+".gcp_wif":
+  extends: ".ensure_gcloud"
+  environment:
+    name: "$CI_COMMIT_BRANCH"
+  id_tokens:
+    WORKLOAD_IDENTITY_TOKEN:
+      aud: https://iam.googleapis.com
+  before_script:
+  - !reference [".ensure_gcloud", before_script]
+  - echo "$WORKLOAD_IDENTITY_TOKEN" > workload_identity.jwt
+  - |
+    printf '%s\n' "{
+      \"type\": \"external_account\",
+      \"audience\": \"//iam.googleapis.com/projects/${WORKLOAD_IDENTITY_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WORKLOAD_IDENTITY_POOL}/providers/${WORKLOAD_IDENTITY_PROVIDER}\",
+      \"subject_token_type\": \"urn:ietf:params:oauth:token-type:jwt\",
+      \"token_url\": \"https://sts.googleapis.com/v1/token\",
+      \"credential_source\": { \"file\": \"workload_identity.jwt\" },
+      \"service_account_impersonation_url\": \"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT}:generateAccessToken\"
+    }" > credentials.json
+  - gcloud auth login --cred-file=credentials.json
+  - gcloud config set project "$GCP_PROJECT_ID"
+  cache:
+    key: gcloud-sdk-$CI_COMMIT_REF_SLUG
+    paths:
+    - .tools/google-cloud-sdk/
+    policy: pull-push
+
+".ensure_uv":
+  before_script:
+  - !reference [".proxy", before_script]
+  - |
+    set -e
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
+    export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:${HOME}/.local/bin:${HOME}/.cargo/bin:$PATH"
+
+    # --retry-all-errors requires curl >= 7.82; amsgit02 shell runners ship older curl
+    CURL_RETRY_OPTS="--retry 3 --retry-delay 5"
+    if curl --help 2>&1 | grep -q -- '--retry-all-errors'; then
+      CURL_RETRY_OPTS="$CURL_RETRY_OPTS --retry-all-errors"
+    fi
+
+    if ! command -v uv >/dev/null 2>&1 \
+        && [ ! -x "${UV_INSTALL_DIR}/uv" ] \
+        && [ ! -x "${UV_INSTALL_DIR}/bin/uv" ]; then
+      for candidate in \
+        /usr/local/bin/uv \
+        /usr/bin/uv \
+        "${HOME}/.local/bin/uv" \
+        "${HOME}/.cargo/bin/uv"; do
+        if [ -x "$candidate" ]; then
+          export PATH="$(dirname "$candidate"):$PATH"
+          break
+        fi
+      done
+    fi
+
+    install_uv_astral() {
+      command -v curl >/dev/null 2>&1 || return 1
+      echo "Installing uv to ${UV_INSTALL_DIR} via astral.sh..."
+      mkdir -p "${UV_INSTALL_DIR}"
+      local attempt=1
+      while [ "$attempt" -le 3 ]; do
+        if curl -fsSL $CURL_RETRY_OPTS \
+            https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="${UV_INSTALL_DIR}" UV_NO_MODIFY_PATH=1 sh; then
+          return 0
+        fi
+        echo "astral.sh install attempt ${attempt}/3 failed; retrying..."
+        attempt=$((attempt + 1))
+        sleep 5
+      done
+      return 1
+    }
+
+    install_uv_github() {
+      command -v curl >/dev/null 2>&1 || return 1
+      local version="${UV_VERSION:-0.6.14}"
+      local archive="uv-x86_64-unknown-linux-gnu.tar.gz"
+      local url="https://github.com/astral-sh/uv/releases/download/${version}/${archive}"
+      echo "Installing uv ${version} from GitHub releases..."
+      mkdir -p "${UV_INSTALL_DIR}"
+      local tmp
+      tmp="$(mktemp -d)"
+      if ! curl -fsSL $CURL_RETRY_OPTS "$url" -o "${tmp}/${archive}"; then
+        rm -rf "$tmp"
+        return 1
+      fi
+      tar -xzf "${tmp}/${archive}" -C "${tmp}"
+      install -m 755 "${tmp}/uv" "${UV_INSTALL_DIR}/uv"
+      rm -rf "$tmp"
+    }
+
+    install_uv_pip() {
+      command -v python3 >/dev/null 2>&1 || return 1
+      local version="${UV_VERSION:-0.6.14}"
+      echo "Installing uv ${version} via pip..."
+      python3 -m pip install --user --no-cache-dir "uv==${version}"
+    }
+
+    if ! command -v uv >/dev/null 2>&1 \
+        && [ ! -x "${UV_INSTALL_DIR}/uv" ] \
+        && [ ! -x "${UV_INSTALL_DIR}/bin/uv" ]; then
+      command -v python3 >/dev/null 2>&1 || { echo "ERROR - python3 required on shell runner"; exit 1; }
+      if ! install_uv_astral && ! install_uv_github && ! install_uv_pip; then
+        echo "ERROR - could not install uv (astral.sh, GitHub, and pip all failed)"
+        exit 1
+      fi
+      export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:${HOME}/.local/bin:$PATH"
+    fi
+
+    if ! command -v uv >/dev/null 2>&1; then
+      echo "ERROR - uv not on PATH after install (looked in ${UV_INSTALL_DIR})"
+      ls -la "${UV_INSTALL_DIR}" 2>/dev/null || true
+      exit 1
+    fi
+    uv --version
+    echo "OK - uv ready"
+
+".python_ci_base":
+  extends:
+  - ".ensure_uv"
+  - ".shell_runner"
+
+".python_ci_lint":
+  extends: ".python_ci_base"
+  cache:
+    key: uv-dev-$CI_COMMIT_REF_SLUG
+    paths:
+    - ".venv/"
+    - ".tools/uv/"
+    - ".cache/uv/"
+    - ".cache/pre-commit/"
+    - ".cache/pip/"
+  before_script:
+  - !reference [".ensure_uv", before_script]
+  - |
+    export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
+    # pre-commit/ruff only — skip app deps (pymupdf, transformers, etc.)
+    uv sync --frozen --no-default-groups --only-group dev --no-install-project
+
+".python_ci_test":
+  extends: ".python_ci_base"
+  cache:
+    key: uv-full-$CI_COMMIT_REF_SLUG
+    paths:
+    - ".venv/"
+    - ".tools/uv/"
+    - ".cache/uv/"
+  before_script:
+  - !reference [".ensure_uv", before_script]
+  - |
+    export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$TMPDIR"
+    # Tests import src/ — must install project + dev deps (cannot use --only-group dev)
+    uv sync --frozen
+
+# Security scanners: docker executor runners (template runs /analyzer in analyzer image).
+# App build/test/deploy jobs use Shell1 — do not route DS/SAST/secret jobs to shell tags.
 sast:
   stage: lint
 ".sast-analyzer":
@@ -41,48 +370,90 @@ sast:
   - secret-detection
   - container
   - codequality
-".gcp_wif":
-  id_tokens:
-    WORKLOAD_IDENTITY_TOKEN:
-      aud: https://iam.googleapis.com
-  before_script:
-  - echo "$WORKLOAD_IDENTITY_TOKEN" > workload_identity.jwt
-  - |
-    printf '%s\n' "{
-      \"type\": \"external_account\",
-      \"audience\": \"//iam.googleapis.com/projects/${WORKLOAD_IDENTITY_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WORKLOAD_IDENTITY_POOL}/providers/${WORKLOAD_IDENTITY_PROVIDER}\",
-      \"subject_token_type\": \"urn:ietf:params:oauth:token-type:jwt\",
-      \"token_url\": \"https://sts.googleapis.com/v1/token\",
-      \"credential_source\": { \"file\": \"workload_identity.jwt\" },
-      \"service_account_impersonation_url\": \"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SERVICE_ACCOUNT}:generateAccessToken\"
-    }" > credentials.json
-  - gcloud auth login --cred-file=credentials.json
-  - gcloud config set project "$GCP_PROJECT_ID"
-".python_ci":
-  image: python:3.12
-  tags:
-  - docker1
-  cache:
-    key: uv-$CI_COMMIT_REF_SLUG
-    paths:
-    - ".venv/"
-  before_script:
-  - python -m pip install --upgrade pip uv
-  - uv sync --frozen
+
 pre-commit-lint:
   stage: lint
-  extends: ".python_ci"
+  extends: ".python_ci_lint"
+  variables:
+    GIT_DEPTH: "0"
   script:
-  - uv run pre-commit run --all-files --show-diff-on-failure
+  - |
+    export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export PRE_COMMIT_HOME="${PRE_COMMIT_HOME:-${CI_PROJECT_DIR}/.cache/pre-commit}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/pip}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
+
+    run_pre_commit() {
+      # --no-sync: dev-only venv from before_script; avoid re-installing app deps on lint
+      uv run --no-sync pre-commit run "$@" --show-diff-on-failure
+    }
+
+    if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+      FROM_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA}"
+      echo "Linting files changed in MR (${FROM_REF}..${CI_COMMIT_SHA})..."
+      run_pre_commit --from-ref "$FROM_REF" --to-ref "$CI_COMMIT_SHA"
+    elif [ "${CI_COMMIT_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+      echo "Linting files changed in push (${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA})..."
+      run_pre_commit --from-ref "$CI_COMMIT_BEFORE_SHA" --to-ref "$CI_COMMIT_SHA"
+    else
+      echo "No diff base available; linting all files."
+      run_pre_commit --all-files
+    fi
   rules:
   - if: $CI_COMMIT_BRANCH == "sandbox"
   - if: $CI_COMMIT_BRANCH == "dev"
   - if: $CI_COMMIT_BRANCH == "prod"
-unit-test:
-  stage: test
-  extends: ".python_ci"
+
+env-scope-check:
+  extends:
+  - ".proxy"
+  - ".shell_runner"
+  stage: lint
+  before_script:
+  - !reference [".proxy", before_script]
+  environment:
+    name: "$CI_COMMIT_BRANCH"
+  when: manual
+  allow_failure: true
   script:
   - |
+    required_vars="WORKLOAD_IDENTITY_PROJECT_NUMBER WORKLOAD_IDENTITY_POOL WORKLOAD_IDENTITY_PROVIDER \
+      SERVICE_ACCOUNT GCP_PROJECT_ID GCP_REGION ARTIFACT_REPO IMAGE_NAME \
+      CLOUD_RUN_NETWORK CLOUD_RUN_SUBNET CLOUD_RUN_SA CLOUD_RUN_SERVICE \
+      APP_CONFIG_SECRET_NAME APP_CONFIG_SECRET_VERSION \
+      GCS_BUCKET_NAME ASSETS_MOUNT_PATH GCS_ASSETS_DIR"
+    missing=0
+    for var in $required_vars; do
+      if [ -n "$(printenv "$var")" ]; then
+        echo "OK - $var is set"
+      else
+        echo "MISSING - $var is not set for environment ${CI_COMMIT_BRANCH}"
+        missing=1
+      fi
+    done
+    if [ "$missing" -eq 1 ]; then
+      echo "One or more required environment-scoped variables are missing."
+      exit 1
+    fi
+    echo "All required environment-scoped variables are available."
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+
+unit-test:
+  stage: test
+  extends: ".python_ci_test"
+  script:
+  - |
+    export PATH="${UV_INSTALL_DIR}:${UV_INSTALL_DIR}/bin:$PATH"
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-${CI_PROJECT_DIR}/.cache/uv}"
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${CI_PROJECT_DIR}/.cache/uv/python}"
+    export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$TMPDIR"
     uv run pytest \
       --cov=src \
       --cov-report=xml:coverage.xml \
@@ -105,56 +476,155 @@ unit-test:
   - if: $CI_COMMIT_BRANCH == "sandbox"
   - if: $CI_COMMIT_BRANCH == "dev"
   - if: $CI_COMMIT_BRANCH == "prod"
-# build-and-push:
-#   stage: build
-#   extends: ".gcp_wif"
-#   image: google/cloud-sdk:slim
-#   tags:
-#   - docker1
-#   services:
-#   - docker:24-dind
-#   script:
-#   - apt-get update -qq && apt-get install -y -qq docker.io
-#   - gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin
-#     "https://${GCP_REGION}-docker.pkg.dev"
-#   - |
-#     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-#     docker build -t "$IMAGE_URI" .
-#     docker push "$IMAGE_URI"
-#   rules:
-#   - if: $CI_COMMIT_BRANCH == "sandbox"
-#   - if: $CI_COMMIT_BRANCH == "dev"
-#   - if: $CI_COMMIT_BRANCH == "prod"
-# deploy-cloud-run:
-#   stage: deploy
-#   extends: ".gcp_wif"
-#   image: google/cloud-sdk:slim
-#   tags:
-#   - docker1
-#   needs:
-#   - build-and-push
-#   environment:
-#     name: "$ENV"
-#   when: manual
-#   script:
-#   - |
-#     IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-#     gcloud run deploy "$CLOUD_RUN_SERVICE" \
-#       --quiet \
-#       --image "$IMAGE_URI" \
-#       --platform=managed \
-#       --region="$GCP_REGION" \
-#       --project="$GCP_PROJECT_ID" \
-#       --network="$CLOUD_RUN_NETWORK" \
-#       --subnet="$CLOUD_RUN_SUBNET" \
-#       --service-account="$CLOUD_RUN_SA" \
-#       --min-instances=1 \
-#       --port=8080 \
-#       --memory=4Gi \
-#       --cpu=2 \
-#       --no-cpu-throttling \
-#       --set-secrets="/secrets/.env=sales-agent-service-env:1"
-#   rules:
-#   - if: $CI_COMMIT_BRANCH == "sandbox"
-#   - if: $CI_COMMIT_BRANCH == "dev"
-#   - if: $CI_COMMIT_BRANCH == "prod"
+
+build-and-push:
+  stage: build
+  extends:
+  - ".gcp_wif"
+  - ".shell_runner"
+  needs:
+  - job: unit-test
+    artifacts: false
+  when: manual
+  script:
+  - |
+    if ! docker info >/dev/null 2>&1; then
+      echo "ERROR - docker daemon not reachable on shell runner; check docker service and group membership"
+      exit 1
+    fi
+
+    IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+    gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+    gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin \
+      "https://${GCP_REGION}-docker.pkg.dev"
+
+    PROXY_ARGS=""
+    if [ -n "${HTTP_PROXY:-}" ]; then
+      PROXY_ARGS="--build-arg HTTP_PROXY=${HTTP_PROXY} --build-arg HTTPS_PROXY=${HTTPS_PROXY:-$HTTP_PROXY}"
+      if [ -n "${NO_PROXY:-}" ]; then
+        PROXY_ARGS="${PROXY_ARGS} --build-arg NO_PROXY=${NO_PROXY}"
+      fi
+    fi
+
+    # shellcheck disable=SC2086
+    docker build $PROXY_ARGS -t "$IMAGE_URI" .
+
+    docker push "$IMAGE_URI"
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+
+deploy-cloud-run:
+  stage: deploy
+  extends:
+  - ".gcp_wif"
+  - ".shell_runner"
+  needs:
+  - build-and-push
+  environment:
+    name: "$CI_COMMIT_BRANCH"
+  when: manual
+  script:
+  - |
+    IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+    gcloud beta run deploy "$CLOUD_RUN_SERVICE" \
+      --quiet \
+      --image "$IMAGE_URI" \
+      --platform=managed \
+      --region="$GCP_REGION" \
+      --project="$GCP_PROJECT_ID" \
+      --network="$CLOUD_RUN_NETWORK" \
+      --subnet="$CLOUD_RUN_SUBNET" \
+      --service-account="$CLOUD_RUN_SA" \
+      --min-instances=1 \
+      --concurrency=1 \
+      --port=8000 \
+      --timeout=600 \
+      --memory=4Gi \
+      --cpu=4 \
+      --no-cpu-throttling \
+      --cpu-boost \
+      --add-volume "mount-path=${ASSETS_MOUNT_PATH},type=cloud-storage,bucket=${GCS_BUCKET_NAME},readonly=false,mount-options=only-dir=${GCS_ASSETS_DIR}" \
+      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=/tmp" \
+      --set-secrets="/secrets/.env=${APP_CONFIG_SECRET_NAME}:${APP_CONFIG_SECRET_VERSION}"
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+  - if: $CI_COMMIT_BRANCH == "dev"
+  - if: $CI_COMMIT_BRANCH == "prod"
+
+promote-sandbox-to-dev:
+  extends:
+  - ".proxy"
+  - ".shell_runner"
+  stage: promote
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+  - !reference [".proxy", before_script]
+  when: manual
+  script:
+  - |
+    : "${GITLAB_PUSH_TOKEN:?Set masked+protected variable GITLAB_PUSH_TOKEN (scope: write_repository)}"
+
+    git fetch origin sandbox dev
+    SANDBOX_SHA="$(git rev-parse origin/sandbox)"
+    DEV_SHA="$(git rev-parse origin/dev)"
+    PUSH_URL="https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+
+    if [ "$DEV_SHA" = "$SANDBOX_SHA" ]; then
+      echo "dev already matches sandbox (${SANDBOX_SHA}); nothing to promote."
+      exit 0
+    fi
+
+    if git merge-base --is-ancestor "$DEV_SHA" "$SANDBOX_SHA" 2>/dev/null; then
+      echo "Fast-forwarding dev to sandbox (${SANDBOX_SHA})..."
+      git push "$PUSH_URL" "${SANDBOX_SHA}:refs/heads/dev"
+    elif ! git merge-base "$DEV_SHA" "$SANDBOX_SHA" >/dev/null 2>&1; then
+      echo "Unrelated histories detected; bootstrapping dev from sandbox (${SANDBOX_SHA})."
+      git push --force "$PUSH_URL" "${SANDBOX_SHA}:refs/heads/dev"
+    else
+      echo "Cannot fast-forward dev from sandbox (dev has extra commits)."
+      echo "Please merge/rebase branches manually once, then rerun."
+      exit 1
+    fi
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+
+promote-dev-to-prod:
+  extends:
+  - ".proxy"
+  - ".shell_runner"
+  stage: promote
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+  - !reference [".proxy", before_script]
+  when: manual
+  script:
+  - |
+    : "${GITLAB_PUSH_TOKEN:?Set masked+protected variable GITLAB_PUSH_TOKEN (scope: write_repository)}"
+
+    git fetch origin dev prod
+    DEV_SHA="$(git rev-parse origin/dev)"
+    PROD_SHA="$(git rev-parse origin/prod)"
+    PUSH_URL="https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+
+    if [ "$PROD_SHA" = "$DEV_SHA" ]; then
+      echo "prod already matches dev (${DEV_SHA}); nothing to promote."
+      exit 0
+    fi
+
+    if git merge-base --is-ancestor "$PROD_SHA" "$DEV_SHA" 2>/dev/null; then
+      echo "Fast-forwarding prod to dev (${DEV_SHA})..."
+      git push "$PUSH_URL" "${DEV_SHA}:refs/heads/prod"
+    elif ! git merge-base "$PROD_SHA" "$DEV_SHA" >/dev/null 2>&1; then
+      echo "Unrelated histories detected; bootstrapping prod from dev (${DEV_SHA})."
+      git push --force "$PUSH_URL" "${DEV_SHA}:refs/heads/prod"
+    else
+      echo "Cannot fast-forward prod from dev (prod has extra commits)."
+      echo "Please merge/rebase branches manually once, then rerun."
+      exit 1
+    fi
+  rules:
+  - if: $CI_COMMIT_BRANCH == "dev"

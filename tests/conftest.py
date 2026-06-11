@@ -10,7 +10,7 @@ import os
 
 # Set dummy environment variables to prevent Pydantic validation errors
 # when loading application settings in the test suite without a .env file.
-os.environ.setdefault("GOOGLE_CLOUD_PROJECT_ID", "mock-project-id")
+os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "mock-project-id")
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
 os.environ.setdefault("GCS_BUCKET_NAME", "mock-bucket")
 os.environ.setdefault("BIGQUERY_DATASET", "mock-dataset")
