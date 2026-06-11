@@ -21,6 +21,7 @@ from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.requests import TranslationConfigInput
 from src.api.schemas.responses import JobDetailResponse
 from src.api.schemas.responses import TranslateResponse
+from src.config.constants import settings
 
 router = APIRouter()
 
@@ -41,8 +42,13 @@ async def submit_translation(
 ):
     """Submit a document for translation via multipart upload and bearer auth."""
     content = await file.read()
-    if content is None:
-        raise ValidationError("No content provided", "document.content")
+    if not content:
+        raise ValidationError("Document content is empty", "document.content")
+    if len(content) > settings.MAX_FILE_SIZE:
+        max_mb = settings.MAX_FILE_SIZE // (1024 * 1024)
+        raise ValidationError(
+            f"Document size exceeds {max_mb}MB limit", "document.size"
+        )
     request = TranslateRequest(
         document=DocumentInput(
             content=base64.b64encode(content).decode("utf-8"),

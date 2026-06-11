@@ -1,4 +1,5 @@
 import pytest
+from src.api.services.dlp_service import DlpProvider
 from src.api.services.dlp_service import DlpService
 
 
@@ -9,8 +10,7 @@ def service():
 
 class TestDlpService:
     def test_select_provider(self, service):
-        assert service.select_provider("en") == "google_cloud_dlp"
-        assert service.select_provider("fr") == "vertex_ai_dlp"
+        assert service.select_provider() == DlpProvider.GOOGLE_CLOUD_DLP
 
     def test_iter_chunk_windows(self, service):
         chunks = ["abc", "def", "ghi"]

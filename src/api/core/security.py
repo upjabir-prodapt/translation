@@ -117,17 +117,16 @@ def verify_token(
 
 
 def get_current_user(
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+    payload: dict[str, Any] = Depends(verify_token),  # noqa: B008
 ) -> dict[str, Any]:
     """Backward-compatible dependency returning raw token payload."""
-    return verify_token(api_key)
+    return payload
 
 
 def get_current_user_context(
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+    payload: dict[str, Any] = Depends(verify_token),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    payload = verify_token(api_key)
     return AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),

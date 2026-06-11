@@ -177,3 +177,14 @@ class JobListRequest(BaseModel):
     )
     limit: int = Field(10, ge=1, le=100, description="Maximum number of jobs to return")
     offset: int = Field(0, ge=0, description="Number of jobs to skip")
+
+
+class CreateReviewRequest(BaseModel):
+    """Request model for submitting a translation review."""
+
+    rating: int = Field(
+        ..., ge=1, le=5, description="Rating from 1 (worst) to 5 (best)"
+    )
+    comment: str | None = Field(
+        None, max_length=2000, description="Optional review comment"
+    )

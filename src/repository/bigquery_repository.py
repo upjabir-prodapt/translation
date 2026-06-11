@@ -35,6 +35,12 @@ class BigQueryRepository:
         self.dlp_tokens_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
         )
+        self.dlq_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLQ_TABLE}"
+        )
+        self.reviews_table = (
+            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_REVIEWS_TABLE}"
+        )
 
     def _to_json_string(self, value: Any) -> str | None:
         if value is None:
@@ -222,6 +228,58 @@ class BigQueryRepository:
                     path=self.jobs_table,
                 ) from exc
 
+    async def get_completed_job_by_hash(
+        self,
+        source_hash: str,
+        lang_out: str,
+        domain: str,
+    ) -> dict[str, Any] | None:
+        """Return the most recent completed job matching content hash and translation target."""
+        jobs_table = self._validate_table_name(self.jobs_table)
+        # nosec B608 – table name validated; all values bound via ScalarQueryParameter.
+        query = f"""
+        SELECT *
+        FROM `{jobs_table}`
+        WHERE source_hash = @source_hash
+          AND status = 'completed'
+          AND JSON_VALUE(translation_config, '$.target_language') = @lang_out
+          AND JSON_VALUE(translation_config, '$.domain') = @domain
+        ORDER BY completed_at DESC
+        LIMIT 1
+        """  # noqa: S608  # nosec B608
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("source_hash", "STRING", source_hash),
+                bigquery.ScalarQueryParameter("lang_out", "STRING", lang_out),
+                bigquery.ScalarQueryParameter("domain", "STRING", domain),
+            ]
+        )
+        with tracer_repository.start_as_current_span(
+            "bigquery.get_by_hash",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "db.system": "bigquery",
+                "db.name": self.dataset,
+                "db.sql.table": settings.BIGQUERY_TABLE,
+                "db.operation": "SELECT",
+            },
+        ) as span:
+            try:
+                query_job = await asyncio.to_thread(
+                    self.client.query, query, job_config=job_config
+                )
+                rows = list(await asyncio.to_thread(query_job.result))
+                span.set_attribute("cache_hit", len(rows) > 0)
+                if not rows:
+                    return None
+                return self._deserialize_job_row(rows[0])
+            except GoogleAPIError as exc:
+                raise StorageError(
+                    f"Failed to query translation job by hash: {exc}",
+                    operation="select",
+                    path=self.jobs_table,
+                ) from exc
+
     async def list_translation_jobs(
         self,
         status: str | None = None,
@@ -373,6 +431,163 @@ class BigQueryRepository:
             "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
         }
         await self._insert_rows_json(self.cost_attribution_table, [row])
+
+    async def write_chunk_cost_attribution(
+        self, job_id: str, records: list[dict[str, Any]]
+    ) -> None:
+        """Write per-chunk token usage and cost records for a completed job."""
+        if not records:
+            return
+        rows = [
+            {
+                "job_id": job_id,
+                "chunk_index": int(r["chunk_index"]),
+                "input_tokens": int(r.get("tokens_input", 0) or 0),
+                "output_tokens": int(r.get("tokens_output", 0) or 0),
+                "cost_usd": float(r.get("cost_usd", 0.0) or 0.0),
+                "model_id": r.get("model_id"),
+                "timestamp": r.get("timestamp", datetime.now(UTC).isoformat()),
+            }
+            for r in records
+        ]
+        await self._insert_rows_json(self.cost_attribution_table, rows)
+
+    async def ensure_reviews_table_exists(self) -> None:
+        """Create the translation_reviews table if it does not already exist."""
+        schema = [
+            bigquery.SchemaField("review_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("job_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("rating", "INT64", mode="REQUIRED"),
+            bigquery.SchemaField("comment", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("reviewer_email", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("created_at", "TIMESTAMP", mode="REQUIRED"),
+            bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
+        ]
+        table = bigquery.Table(self.reviews_table, schema=schema)
+        try:
+            await asyncio.to_thread(self.client.create_table, table, exists_ok=True)
+        except GoogleAPIError as exc:
+            raise StorageError(
+                f"Failed to ensure reviews table exists: {exc}",
+                operation="create_table",
+                path=self.reviews_table,
+            ) from exc
+
+    async def upsert_review(self, review_data: dict[str, Any]) -> None:
+        """Insert or update a review row via MERGE (keyed on review_id)."""
+        await self.ensure_reviews_table_exists()
+        reviews_table = self._validate_table_name(self.reviews_table)
+        # nosec B608 – table name validated; all values bound via ScalarQueryParameter.
+        query = f"""
+        MERGE `{reviews_table}` T
+        USING (
+            SELECT
+                @review_id AS review_id,
+                @job_id AS job_id,
+                @rating AS rating,
+                @comment AS comment,
+                @reviewer_email AS reviewer_email,
+                @created_at AS created_at,
+                @updated_at AS updated_at
+        ) S
+        ON T.review_id = S.review_id
+        WHEN MATCHED THEN UPDATE SET
+            rating = S.rating,
+            comment = S.comment,
+            updated_at = S.updated_at
+        WHEN NOT MATCHED THEN
+            INSERT (review_id, job_id, rating, comment, reviewer_email, created_at, updated_at)
+            VALUES (S.review_id, S.job_id, S.rating, S.comment, S.reviewer_email, S.created_at, S.updated_at)
+        """  # noqa: S608  # nosec B608
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "review_id", "STRING", review_data["review_id"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "job_id", "STRING", review_data["job_id"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "rating", "INT64", int(review_data["rating"])
+                ),
+                bigquery.ScalarQueryParameter(
+                    "comment", "STRING", review_data.get("comment")
+                ),
+                bigquery.ScalarQueryParameter(
+                    "reviewer_email", "STRING", review_data["reviewer_email"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "created_at", "TIMESTAMP", review_data["created_at"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "updated_at", "TIMESTAMP", review_data["updated_at"]
+                ),
+            ]
+        )
+        try:
+            query_job = await asyncio.to_thread(
+                self.client.query, query, job_config=job_config
+            )
+            await asyncio.to_thread(query_job.result)
+        except GoogleAPIError as exc:
+            raise StorageError(
+                f"Failed to upsert review: {exc}",
+                operation="upsert",
+                path=self.reviews_table,
+            ) from exc
+
+    async def get_reviews_by_job_id(self, job_id: str) -> list[dict[str, Any]]:
+        """Return all reviews for a given job_id, ordered by created_at desc."""
+        await self.ensure_reviews_table_exists()
+        reviews_table = self._validate_table_name(self.reviews_table)
+        # nosec B608 – table name validated; job_id bound via ScalarQueryParameter.
+        query = f"""
+        SELECT review_id, job_id, rating, comment, reviewer_email, created_at, updated_at
+        FROM `{reviews_table}`
+        WHERE job_id = @job_id
+        ORDER BY created_at DESC
+        """  # noqa: S608  # nosec B608
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("job_id", "STRING", job_id)]
+        )
+        try:
+            query_job = await asyncio.to_thread(
+                self.client.query, query, job_config=job_config
+            )
+            rows = list(await asyncio.to_thread(query_job.result))
+            return [
+                {
+                    "review_id": row.get("review_id"),
+                    "job_id": row.get("job_id"),
+                    "rating": row.get("rating"),
+                    "comment": row.get("comment"),
+                    "reviewer_email": row.get("reviewer_email"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+                for row in rows
+            ]
+        except GoogleAPIError as exc:
+            raise StorageError(
+                f"Failed to fetch reviews: {exc}",
+                operation="select",
+                path=self.reviews_table,
+            ) from exc
+
+    async def write_dlq_entry(self, data: dict[str, Any]) -> None:
+        """Write a dead-letter queue entry for a persistently failing GCS operation."""
+        row = {
+            "job_id": data["job_id"],
+            "error_type": data.get("error_type", "StorageError"),
+            "error_message": str(data.get("error_message", "")),
+            "operation": data.get("operation", "upload"),
+            "path": data.get("path", ""),
+            "attempt_count": int(
+                data.get("attempt_count", settings.GCS_RETRY_MAX_ATTEMPTS)
+            ),
+            "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
+        }
+        await self._insert_rows_json(self.dlq_table, [row])
 
     async def write_job_completion(self, job_data: dict[str, Any]) -> None:
         """Backward-compatible alias for legacy call sites."""

@@ -112,6 +112,48 @@ class TestSubmitTranslation:
         )
         assert resp.status_code == 401
 
+    def test_empty_file_returns_422(self, api_client):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_language": "Spanish", "domain": "commercial"},
+            files={"file": ("empty.pdf", b"", "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_empty_file_does_not_create_bq_job(
+        self, api_client, mock_translation_service
+    ):
+        mock_translation_service.submit_translation.reset_mock()
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_language": "Spanish", "domain": "commercial"},
+            files={"file": ("empty.pdf", b"", "application/pdf")},
+        )
+        assert resp.status_code == 422
+        mock_translation_service.submit_translation.assert_not_called()
+
+    def test_oversized_file_returns_422(self, api_client):
+        oversized = b"x" * (50 * 1024 * 1024 + 1)
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_language": "Spanish", "domain": "commercial"},
+            files={"file": ("big.pdf", oversized, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_oversized_file_does_not_create_bq_job(
+        self, api_client, mock_translation_service
+    ):
+        mock_translation_service.submit_translation.reset_mock()
+        oversized = b"x" * (50 * 1024 * 1024 + 1)
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_language": "Spanish", "domain": "commercial"},
+            files={"file": ("big.pdf", oversized, "application/pdf")},
+        )
+        assert resp.status_code == 422
+        mock_translation_service.submit_translation.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/translate/{job_id}

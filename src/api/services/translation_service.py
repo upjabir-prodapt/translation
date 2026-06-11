@@ -80,9 +80,22 @@ class TranslationService:
                     "page_count": None,
                 }
 
+            source_hash = hashlib.sha256(content).hexdigest()
+
             # Normalize config
             config = self._normalize_config(request)
             config["job_id"] = job_id
+
+            # Return cached result immediately if an identical completed job exists
+            cached_job = await self.bigquery.get_completed_job_by_hash(
+                source_hash=source_hash,
+                lang_out=config["lang_out"],
+                domain=config["domain"],
+            )
+            if cached_job and cached_job.get("result"):
+                return await self._serve_from_cache(
+                    request, job_id, metadata, source_hash, config, cached_job
+                )
 
             # Upload to GCS
             input_gs_uri = await self.storage.upload_input_pdf(
@@ -127,7 +140,7 @@ class TranslationService:
                     "completed_at": None,
                 },
                 "config": config,
-                "source_hash": hashlib.sha256(content).hexdigest(),
+                "source_hash": source_hash,
                 "submitted_at": now,
                 "completed_at": None,
             }
@@ -154,6 +167,58 @@ class TranslationService:
             except Exception:
                 pass
             raise
+
+    async def _serve_from_cache(
+        self,
+        request: TranslateRequest,
+        job_id: str,
+        metadata: dict[str, Any],
+        source_hash: str,
+        config: dict[str, Any],
+        cached_job: dict[str, Any],
+    ) -> TranslateResponse:
+        """Write a pre-completed job record reusing the cached result — no pipeline needed."""
+        now = datetime.now(UTC)
+        job_data = {
+            "job_id": job_id,
+            "status": "completed",
+            "source_document": {
+                "gcs_uri": (cached_job.get("source_document") or {}).get("gcs_uri", ""),
+                "format": request.document.format,
+                "page_count": metadata.get("page_count"),
+                "source_language": config["lang_in"],
+                "original_filename": metadata["filename"],
+                "output_filename": metadata["filename"],
+                "file_size_bytes": metadata["size_bytes"],
+                "checksum": source_hash,
+            },
+            "translation_config": {
+                "source_language": config["lang_in"],
+                "target_language": config["lang_out"],
+                "domain": config["domain"],
+            },
+            "cost_attribution": request.cost_attribution.model_dump(),
+            "processing_options": {
+                "enable_dlp": request.processing_options.enable_dlp,
+                "enable_chunking": request.processing_options.enable_chunking,
+                "priority": request.processing_options.priority,
+            },
+            "error_message": None,
+            "result": cached_job.get("result"),
+            "config": config,
+            "source_hash": source_hash,
+            "submitted_at": now,
+            "completed_at": now,
+        }
+        await self.bigquery.upsert_translation_job(job_data)
+        logger.info(
+            f"Cache hit for job {job_id}: reusing result from {cached_job.get('job_id')}"
+        )
+        return TranslateResponse(
+            job_id=job_id,
+            status="completed",
+            status_url=f"/api/v1/translate/{job_id}",
+        )
 
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""

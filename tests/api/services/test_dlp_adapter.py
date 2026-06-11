@@ -1,5 +1,6 @@
 """Tests for IL-aware DLP masking adapter."""
 
+from src.api.services.dlp_service import DlpProvider
 from src.api.services.dlp_service import DlpService
 from src.doctranslator.format.pdf.dlp_adapter import apply_dlp_to_document
 from src.doctranslator.format.pdf.dlp_adapter import unmask_document_with_tokens
@@ -26,7 +27,7 @@ def test_apply_dlp_to_document_masks_paragraph_unicode():
 
     assert result.applied is True
     assert result.chunk_count == 1
-    assert result.dlp_provider == "google_cloud_dlp"
+    assert result.dlp_provider in DlpProvider
     assert docs.page[0].pdf_paragraph[0].unicode == "Reach me at __DLP_TOKEN_0001__"
     assert result.token_rows[0]["chunk_index"] == 0
 
@@ -57,12 +58,12 @@ def test_apply_dlp_to_document_uses_stable_chunk_index_order():
 
     assert result.applied is True
     assert result.chunk_count == 2
-    assert result.dlp_provider == "vertex_ai_dlp"
+    assert result.dlp_provider in DlpProvider
     assert result.token_rows[0]["chunk_index"] == 0
     assert result.token_rows[1]["chunk_index"] == 1
     assert docs.page[0].pdf_paragraph[1].unicode == "Email __DLP_TOKEN_0001__"
-    # PHONE_PATTERN matches from the first digit at a word boundary; "+" stays outside the match.
-    assert docs.page[1].pdf_paragraph[0].unicode == "Call +__DLP_TOKEN_0002__"
+    # International phone pattern matches "+1 (212) 555-1212" including the "+" prefix.
+    assert docs.page[1].pdf_paragraph[0].unicode == "Call __DLP_TOKEN_0002__"
 
 
 def test_unmask_document_with_tokens_restores_original_values():

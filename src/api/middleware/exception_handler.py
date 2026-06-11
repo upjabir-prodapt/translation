@@ -14,6 +14,7 @@ from src.api.exceptions import ConfigurationError
 from src.api.exceptions import FileProcessingError
 from src.api.exceptions import JobAlreadyCompletedError
 from src.api.exceptions import JobNotFoundError
+from src.api.exceptions import ReviewNotFoundError
 from src.api.exceptions import StorageError
 from src.api.exceptions import TranslationError
 from src.api.exceptions import ValidationError
@@ -100,6 +101,13 @@ def handle_exception(exc: Exception) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"error": {"message": exc.message, "code": "JOB_NOT_FOUND"}},
+        )
+
+    if isinstance(exc, ReviewNotFoundError):
+        logger.warning(f"Review not found: {exc.message}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": {"message": exc.message, "code": "REVIEW_NOT_FOUND"}},
         )
 
     if isinstance(exc, JobAlreadyCompletedError):
