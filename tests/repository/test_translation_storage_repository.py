@@ -15,17 +15,24 @@ def mock_storage_client():
 
 @pytest.fixture
 def repo(mock_storage_client):
+    mock_settings = MagicMock()
+    mock_settings.GCS_BUCKET_NAME = "test-bucket"
+    mock_settings.GCS_TRANSLATION_PREFIX = "translation"
+    mock_settings.GCS_INPUT_FOLDER = "input"
+    mock_settings.GCS_OUTPUT_FOLDER = "output"
+    mock_settings.GCS_ASSETS_PREFIX = "assets"
     with patch(
         "src.repository.storage_repository.storage.Client",
         return_value=mock_storage_client,
     ):
-        with patch("src.repository.storage_repository.settings") as mock_settings:
-            mock_settings.GCS_BUCKET_NAME = "test-bucket"
-            mock_settings.GCS_TRANSLATION_PREFIX = "translation"
-            mock_settings.GCS_INPUT_FOLDER = "input"
-            mock_settings.GCS_OUTPUT_FOLDER = "output"
-            mock_settings.GCS_ASSETS_PREFIX = "assets"
-            return TranslationStorageRepository()
+        with (
+            patch("src.repository.storage_repository.settings", mock_settings),
+            patch(
+                "src.repository.translation_storage_repository.settings",
+                mock_settings,
+            ),
+        ):
+            yield TranslationStorageRepository()
 
 
 class TestTranslationStorageRepository:

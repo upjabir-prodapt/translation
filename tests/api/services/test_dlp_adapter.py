@@ -1,5 +1,6 @@
 """Tests for IL-aware DLP masking adapter."""
 
+import pytest
 from src.api.services.dlp_service import DlpProvider
 from src.api.services.dlp_service import DlpService
 from src.doctranslator.format.pdf.dlp_adapter import apply_dlp_to_document
@@ -7,7 +8,24 @@ from src.doctranslator.format.pdf.dlp_adapter import unmask_document_with_tokens
 from src.doctranslator.format.pdf.document_il import il_version_1
 
 
-def test_apply_dlp_to_document_masks_paragraph_unicode():
+@pytest.fixture
+def dlp_service():
+    """Use regex fallback so tests stay offline and deterministic."""
+    original_client = DlpService._dlp_client
+    original_available = DlpService._dlp_available
+    original_valid = DlpService._valid_info_types
+    DlpService._dlp_client = None
+    DlpService._dlp_available = False
+    DlpService._valid_info_types = None
+    try:
+        yield DlpService()
+    finally:
+        DlpService._dlp_client = original_client
+        DlpService._dlp_available = original_available
+        DlpService._valid_info_types = original_valid
+
+
+def test_apply_dlp_to_document_masks_paragraph_unicode(dlp_service):
     docs = il_version_1.Document(
         page=[
             il_version_1.Page(
@@ -20,7 +38,7 @@ def test_apply_dlp_to_document_masks_paragraph_unicode():
 
     result = apply_dlp_to_document(
         docs=docs,
-        dlp_service=DlpService(),
+        dlp_service=dlp_service,
         job_id="job-1",
         source_language="en",
     )
@@ -32,7 +50,7 @@ def test_apply_dlp_to_document_masks_paragraph_unicode():
     assert result.token_rows[0]["chunk_index"] == 0
 
 
-def test_apply_dlp_to_document_uses_stable_chunk_index_order():
+def test_apply_dlp_to_document_uses_stable_chunk_index_order(dlp_service):
     docs = il_version_1.Document(
         page=[
             il_version_1.Page(
@@ -51,7 +69,7 @@ def test_apply_dlp_to_document_uses_stable_chunk_index_order():
 
     result = apply_dlp_to_document(
         docs=docs,
-        dlp_service=DlpService(),
+        dlp_service=dlp_service,
         job_id="job-2",
         source_language="ja",
     )
