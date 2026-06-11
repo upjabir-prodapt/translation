@@ -19,8 +19,16 @@ from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
-# x-app-auth token scheme
-app_auth_scheme = APIKeyHeader(name="x-app-auth", auto_error=False)
+# x-app-auth token scheme (shown as "XAppAuth" in Swagger Authorize)
+app_auth_scheme = APIKeyHeader(
+    name="x-app-auth",
+    scheme_name="XAppAuth",
+    auto_error=False,
+    description=(
+        "JWT from POST /api/v1/auth/token. "
+        "Enter `Bearer <access_token>` or paste the token alone."
+    ),
+)
 
 
 class AuthenticatedUser(BaseModel):
@@ -88,30 +96,25 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-def verify_token(
-    request: Request,
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
-) -> dict[str, Any]:
-    """Verify bearer token and return JWT payload.
-
-    Locally (IS_LOCAL=true) also accepts the standard Authorization header as a
-    fallback so Swagger UI and curl work without configuring x-app-auth.
-    """
-    token_value = api_key
-    if not token_value and settings.IS_LOCAL:
-        auth_header = request.headers.get("authorization")
-        if auth_header:
-            token_value = auth_header
-
-    if not token_value:
+def _extract_bearer_token(header_value: str | None) -> str:
+    """Parse JWT from x-app-auth (Bearer prefix optional for Swagger UI)."""
+    if not header_value or not header_value.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # Strip "Bearer " prefix if present (Swagger UI sends raw value without it)
-    token = token_value[7:] if token_value.startswith("Bearer ") else token_value
-    return decode_and_verify_token(token)
+    value = header_value.strip()
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def verify_token(
+    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+) -> dict[str, Any]:
+    """Verify bearer token and return JWT payload."""
+    return decode_and_verify_token(_extract_bearer_token(api_key))
 
 
 def get_current_user(

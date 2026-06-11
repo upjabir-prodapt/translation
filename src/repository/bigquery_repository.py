@@ -24,9 +24,7 @@ class BigQueryRepository:
         client: bigquery.Client | None = None,
         dataset: str | None = None,
     ):
-        self.client = client or bigquery.Client(
-            project=settings.GOOGLE_CLOUD_PROJECT
-        )
+        self.client = client or bigquery.Client(project=settings.GOOGLE_CLOUD_PROJECT)
         self.dataset = dataset or settings.BIGQUERY_DATASET
         self.jobs_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_TABLE}"
