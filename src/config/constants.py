@@ -151,6 +151,7 @@ class Settings(BaseSettings):
     BIGQUERY_COST_TABLE: str = "cost_attribution"
     BIGQUERY_DLP_TABLE: str = "dlp_tokens"
     BIGQUERY_DLQ_TABLE: str = "dead_letter_queue"
+    BIGQUERY_REVIEWS_TABLE: str = "translation_reviews"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
@@ -165,6 +166,15 @@ class Settings(BaseSettings):
     QUALITY_EARLY_ACCEPT_THRESHOLD: float = 0.92
     MAX_MODEL_ATTEMPTS: int = 3
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # -----------------------------
+    # Claude / Anthropic (Vertex AI Model Garden)
+    # -----------------------------
+
+    CLAUDE_MODEL: str = "claude-opus-4-7"
+    CLAUDE_INPUT_COST_PER_1K: float = 0.0
+    CLAUDE_OUTPUT_COST_PER_1K: float = 0.0
+    CLAUDE_VERTEX_REGION: str = "global"
 
     # -----------------------------
     # LLM / Translation Performance

@@ -47,6 +47,14 @@ class JobAlreadyCompletedError(BabelDocError):
         super().__init__(message, {"job_id": job_id})
 
 
+class ReviewNotFoundError(BabelDocError):
+    """Raised when a review is not found for a job."""
+
+    def __init__(self, job_id: str):
+        message = f"No review found for job {job_id}"
+        super().__init__(message, {"job_id": job_id})
+
+
 class TranslationError(BabelDocError):
     """Raised when translation fails."""
 

@@ -31,6 +31,7 @@ from src.doctranslator.doctranslator_exception.DocTranslatorException import (
 )
 from src.doctranslator.format.pdf.converter import TranslateConverter
 from src.doctranslator.format.pdf.dlp_adapter import apply_dlp_to_document
+from src.doctranslator.format.pdf.dlp_adapter import strip_leaked_tokens
 from src.doctranslator.format.pdf.dlp_adapter import unmask_document_with_tokens
 from src.doctranslator.format.pdf.document_il import il_version_1
 from src.doctranslator.format.pdf.document_il.backend.pdf_creater import (
@@ -516,6 +517,12 @@ def _unmask_before_pdf_if_enabled(
         token_rows=translation_config.dlp_token_rows,
     )
     logger.info(f"Restored {replaced_count} masked values before PDF generation")
+    leaked = strip_leaked_tokens(docs)
+    if leaked:
+        logger.critical(
+            f"CRITICAL: {leaked} DLP token(s) were not restored and have been stripped from the output. "
+            "Sensitive data may be unrecoverable — review the translation pipeline immediately."
+        )
 
 
 async def async_translate(translation_config: TranslationConfig):

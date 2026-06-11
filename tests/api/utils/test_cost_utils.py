@@ -2,11 +2,12 @@
 
 import io
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import fitz
 import pytest
-
 from src.api.utils.cost_utils import MAX_JOB_COST_USD
 from src.api.utils.cost_utils import compute_chunk_cost
 from src.api.utils.cost_utils import compute_per_chunk_costs
@@ -17,11 +18,13 @@ from src.doctranslator.format.pdf.split_manager import SplitPoint
 # Helpers
 # ---------------------------------------------------------------------------
 
-_INPUT_RATE = 0.30   # $ per 1K input tokens  (e.g. Gemini 1.5 Pro)
+_INPUT_RATE = 0.30  # $ per 1K input tokens  (e.g. Gemini 1.5 Pro)
 _OUTPUT_RATE = 0.60  # $ per 1K output tokens
 
 
-def _make_chunk(chunk_index: int, token_count: int, title: str | None = None) -> SplitPoint:
+def _make_chunk(
+    chunk_index: int, token_count: int, title: str | None = None
+) -> SplitPoint:
     return SplitPoint(
         start_page=chunk_index * 5,
         end_page=chunk_index * 5 + 4,
@@ -71,7 +74,9 @@ class TestComputeChunkCost:
         assert cost_2k == pytest.approx(2 * cost_1k, rel=1e-6)
 
     def test_input_and_output_rates_are_independent(self):
-        cost = compute_chunk_cost(1000, 1000, input_rate_per_1k=1.0, output_rate_per_1k=2.0)
+        cost = compute_chunk_cost(
+            1000, 1000, input_rate_per_1k=1.0, output_rate_per_1k=2.0
+        )
         assert cost == pytest.approx(3.0, rel=1e-6)
 
 
@@ -126,7 +131,7 @@ class TestComputePerChunkCosts:
     def test_chunk_indices_match_split_points(self):
         chunks = _multi_section_chunks()
         records = compute_per_chunk_costs(chunks, 5000, 2000, _INPUT_RATE, _OUTPUT_RATE)
-        for chunk, rec in zip(chunks, records):
+        for chunk, rec in zip(chunks, records, strict=True):
             assert rec["chunk_index"] == chunk.chunk_index
 
     def test_total_input_tokens_distributed_across_chunks(self):
@@ -134,14 +139,18 @@ class TestComputePerChunkCosts:
         records = compute_per_chunk_costs(
             _multi_section_chunks(), total_input, 0, _INPUT_RATE, _OUTPUT_RATE
         )
-        assert sum(r["tokens_input"] for r in records) == pytest.approx(total_input, abs=len(records))
+        assert sum(r["tokens_input"] for r in records) == pytest.approx(
+            total_input, abs=len(records)
+        )
 
     def test_total_output_tokens_distributed_across_chunks(self):
         total_output = 4000
         records = compute_per_chunk_costs(
             _multi_section_chunks(), 0, total_output, _INPUT_RATE, _OUTPUT_RATE
         )
-        assert sum(r["tokens_output"] for r in records) == pytest.approx(total_output, abs=len(records))
+        assert sum(r["tokens_output"] for r in records) == pytest.approx(
+            total_output, abs=len(records)
+        )
 
     def test_larger_chunks_receive_more_tokens(self):
         chunks = [
@@ -161,8 +170,12 @@ class TestComputePerChunkCosts:
     def test_per_chunk_cost_matches_formula(self):
         chunks = [_make_chunk(0, token_count=1000)]
         total_input, total_output = 1000, 500
-        records = compute_per_chunk_costs(chunks, total_input, total_output, _INPUT_RATE, _OUTPUT_RATE)
-        expected = compute_chunk_cost(total_input, total_output, _INPUT_RATE, _OUTPUT_RATE)
+        records = compute_per_chunk_costs(
+            chunks, total_input, total_output, _INPUT_RATE, _OUTPUT_RATE
+        )
+        expected = compute_chunk_cost(
+            total_input, total_output, _INPUT_RATE, _OUTPUT_RATE
+        )
         assert records[0]["cost_usd"] == pytest.approx(expected, rel=1e-4)
 
     def test_single_chunk_absorbs_all_tokens(self):
@@ -189,13 +202,16 @@ class TestComputePerChunkCosts:
 class TestWriteChunkCostAttribution:
     @pytest.mark.asyncio
     async def test_writes_one_row_per_chunk(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         mock_client = MagicMock()
         mock_client.project = "test-project"
         mock_client.insert_rows_json.return_value = []
 
-        with patch("src.repository.bigquery_repository.bigquery.Client", return_value=mock_client):
+        with patch(
+            "src.repository.bigquery_repository.bigquery.Client",
+            return_value=mock_client,
+        ):
             with patch("src.repository.bigquery_repository.settings") as mock_settings:
                 mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
                 mock_settings.BIGQUERY_DATASET = "test_dataset"
@@ -207,9 +223,24 @@ class TestWriteChunkCostAttribution:
 
                 repo = BigQueryRepository()
                 records = [
-                    {"chunk_index": 0, "tokens_input": 1500, "tokens_output": 600, "cost_usd": 0.081},
-                    {"chunk_index": 1, "tokens_input": 2000, "tokens_output": 800, "cost_usd": 0.108},
-                    {"chunk_index": 2, "tokens_input": 2500, "tokens_output": 1000, "cost_usd": 0.135},
+                    {
+                        "chunk_index": 0,
+                        "tokens_input": 1500,
+                        "tokens_output": 600,
+                        "cost_usd": 0.081,
+                    },
+                    {
+                        "chunk_index": 1,
+                        "tokens_input": 2000,
+                        "tokens_output": 800,
+                        "cost_usd": 0.108,
+                    },
+                    {
+                        "chunk_index": 2,
+                        "tokens_input": 2500,
+                        "tokens_output": 1000,
+                        "cost_usd": 0.135,
+                    },
                 ]
                 await repo.write_chunk_cost_attribution("job-abc", records)
 
@@ -219,13 +250,16 @@ class TestWriteChunkCostAttribution:
 
     @pytest.mark.asyncio
     async def test_each_row_has_tokens_input_and_output(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         mock_client = MagicMock()
         mock_client.project = "test-project"
         mock_client.insert_rows_json.return_value = []
 
-        with patch("src.repository.bigquery_repository.bigquery.Client", return_value=mock_client):
+        with patch(
+            "src.repository.bigquery_repository.bigquery.Client",
+            return_value=mock_client,
+        ):
             with patch("src.repository.bigquery_repository.settings") as mock_settings:
                 mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
                 mock_settings.BIGQUERY_DATASET = "test_dataset"
@@ -238,7 +272,14 @@ class TestWriteChunkCostAttribution:
                 repo = BigQueryRepository()
                 await repo.write_chunk_cost_attribution(
                     "job-xyz",
-                    [{"chunk_index": 0, "tokens_input": 1000, "tokens_output": 400, "cost_usd": 0.054}],
+                    [
+                        {
+                            "chunk_index": 0,
+                            "tokens_input": 1000,
+                            "tokens_output": 400,
+                            "cost_usd": 0.054,
+                        }
+                    ],
                 )
 
                 _, rows = mock_client.insert_rows_json.call_args[0]
@@ -251,12 +292,15 @@ class TestWriteChunkCostAttribution:
 
     @pytest.mark.asyncio
     async def test_skips_write_when_records_empty(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         mock_client = MagicMock()
         mock_client.project = "test-project"
 
-        with patch("src.repository.bigquery_repository.bigquery.Client", return_value=mock_client):
+        with patch(
+            "src.repository.bigquery_repository.bigquery.Client",
+            return_value=mock_client,
+        ):
             with patch("src.repository.bigquery_repository.settings") as mock_settings:
                 mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
                 mock_settings.BIGQUERY_DATASET = "test_dataset"
@@ -288,7 +332,8 @@ class TestOrchestratorCostGuardrail:
     @pytest.mark.asyncio
     async def test_cost_attribution_not_written_when_guardrail_raises(self):
         """validate_job_cost raising inside _execute_pipeline prevents write_cost_attribution."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+        from unittest.mock import patch
 
         mock_bq = AsyncMock()
         mock_storage = AsyncMock()
@@ -302,10 +347,14 @@ class TestOrchestratorCostGuardrail:
         with (
             patch(
                 "src.api.services.pipeline_orchestrator.validate_job_cost",
-                side_effect=ValueError("Job cost $15.0000 exceeds the $10.00 guardrail"),
+                side_effect=ValueError(
+                    "Job cost $15.0000 exceeds the $10.00 guardrail"
+                ),
             ),
             patch.object(orchestrator, "_update_status", new_callable=AsyncMock),
-            patch.object(orchestrator, "_execute_pipeline", new_callable=AsyncMock) as mock_exec,
+            patch.object(
+                orchestrator, "_execute_pipeline", new_callable=AsyncMock
+            ) as mock_exec,
         ):
             # _execute_pipeline internally calls validate_job_cost; simulate the same raise
             mock_exec.side_effect = ValueError(
@@ -314,10 +363,19 @@ class TestOrchestratorCostGuardrail:
 
             job_data = {
                 "job_id": "test-job",
-                "translation_config": {"source_language": "en", "target_language": "es", "domain": "commercial"},
+                "translation_config": {
+                    "source_language": "en",
+                    "target_language": "es",
+                    "domain": "commercial",
+                },
                 "source_document": {"gcs_uri": "gs://bucket/input.pdf"},
                 "cost_attribution": {"user_id": "user@example.com"},
-                "config": {"lang_in": "en", "lang_out": "es", "domain": "commercial", "model_list": ["m"]},
+                "config": {
+                    "lang_in": "en",
+                    "lang_out": "es",
+                    "domain": "commercial",
+                    "model_list": ["m"],
+                },
                 "processing_options": {"enable_dlp": False},
             }
 
@@ -326,7 +384,9 @@ class TestOrchestratorCostGuardrail:
             # exits _run_pipeline and then run().  What matters is that cost attribution
             # was never written.
             try:
-                await orchestrator.run(job_id="test-job", job_data=job_data, parent_ctx=None)
+                await orchestrator.run(
+                    job_id="test-job", job_data=job_data, parent_ctx=None
+                )
             except Exception:
                 pass
 
@@ -335,7 +395,8 @@ class TestOrchestratorCostGuardrail:
     @pytest.mark.asyncio
     async def test_validate_job_cost_called_with_computed_cost(self):
         """validate_job_cost receives the estimated_cost_usd value from token_usage."""
-        from unittest.mock import AsyncMock, call, patch
+        from unittest.mock import AsyncMock
+        from unittest.mock import patch
 
         captured_cost = []
 
@@ -356,7 +417,9 @@ class TestOrchestratorCostGuardrail:
                 side_effect=capturing_validator,
             ),
             patch.object(orchestrator, "_update_status", new_callable=AsyncMock),
-            patch.object(orchestrator, "_execute_pipeline", new_callable=AsyncMock) as mock_exec,
+            patch.object(
+                orchestrator, "_execute_pipeline", new_callable=AsyncMock
+            ) as mock_exec,
         ):
             mock_exec.side_effect = ValueError("guardrail")
 
@@ -380,6 +443,7 @@ class TestOrchestratorCostGuardrail:
         # orchestrator code path is wired: if _execute_pipeline is not patched,
         # validate_job_cost would be called.  Structural check below confirms it.
         import inspect
+
         import src.api.services.pipeline_orchestrator as orch_mod
 
         source = inspect.getsource(orch_mod.PipelineOrchestrator._execute_pipeline)
@@ -448,7 +512,7 @@ class TestWritePerChunkCosts:
     async def test_produces_one_record_per_chunk(self, multi_section_pdf_path):
         captured: list = []
 
-        async def capture_write(job_id, records):
+        async def capture_write(_job_id, records):
             captured.extend(records)
 
         mock_bq = AsyncMock()
@@ -474,10 +538,12 @@ class TestWritePerChunkCosts:
         assert len(captured) > 0, "At least one per-chunk record must be written"
 
     @pytest.mark.asyncio
-    async def test_each_record_has_tokens_input_and_output(self, multi_section_pdf_path):
+    async def test_each_record_has_tokens_input_and_output(
+        self, multi_section_pdf_path
+    ):
         captured: list = []
 
-        async def capture_write(job_id, records):
+        async def capture_write(_job_id, records):
             captured.extend(records)
 
         mock_bq = AsyncMock()
@@ -514,7 +580,7 @@ class TestWritePerChunkCosts:
         """Each chunk's cost = compute_chunk_cost(tokens_input, tokens_output, rates)."""
         captured: list = []
 
-        async def capture_write(job_id, records):
+        async def capture_write(_job_id, records):
             captured.extend(records)
 
         mock_bq = AsyncMock()
@@ -549,7 +615,7 @@ class TestWritePerChunkCosts:
         """Sum of per-chunk costs must be within the $10 guardrail."""
         captured: list = []
 
-        async def capture_write(job_id, records):
+        async def capture_write(_job_id, records):
             captured.extend(records)
 
         mock_bq = AsyncMock()
@@ -605,6 +671,7 @@ class TestWritePerChunkCosts:
     async def test_write_per_chunk_costs_wired_in_execute_pipeline(self):
         """_execute_pipeline source code must invoke _write_per_chunk_costs."""
         import inspect
+
         import src.api.services.pipeline_orchestrator as orch_mod
 
         source = inspect.getsource(orch_mod.PipelineOrchestrator._execute_pipeline)

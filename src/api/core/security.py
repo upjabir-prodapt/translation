@@ -9,6 +9,7 @@ from typing import Any
 import jwt
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from fastapi.security import APIKeyHeader
 from jwt import InvalidTokenError
@@ -88,31 +89,42 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
 
 
 def verify_token(
+    request: Request,
     api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
 ) -> dict[str, Any]:
-    """Verify bearer token and return JWT payload."""
-    if not api_key or not api_key.startswith("Bearer "):
+    """Verify bearer token and return JWT payload.
+
+    Locally (IS_LOCAL=true) also accepts the standard Authorization header as a
+    fallback so Swagger UI and curl work without configuring x-app-auth.
+    """
+    token_value = api_key
+    if not token_value and settings.IS_LOCAL:
+        auth_header = request.headers.get("authorization")
+        if auth_header:
+            token_value = auth_header
+
+    if not token_value:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = api_key[7:]
+    # Strip "Bearer " prefix if present (Swagger UI sends raw value without it)
+    token = token_value[7:] if token_value.startswith("Bearer ") else token_value
     return decode_and_verify_token(token)
 
 
 def get_current_user(
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+    payload: dict[str, Any] = Depends(verify_token),  # noqa: B008
 ) -> dict[str, Any]:
     """Backward-compatible dependency returning raw token payload."""
-    return verify_token(api_key)
+    return payload
 
 
 def get_current_user_context(
-    api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
+    payload: dict[str, Any] = Depends(verify_token),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    payload = verify_token(api_key)
     return AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),

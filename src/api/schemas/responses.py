@@ -147,6 +147,26 @@ class HealthResponse(BaseModel):
     uptime_seconds: float = Field(..., description="Service uptime in seconds")
 
 
+class ReviewResponse(BaseModel):
+    """Response model for a single translation review."""
+
+    review_id: str = Field(..., description="Unique review identifier")
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
+    rating: int = Field(..., description="Rating from 1 to 5")
+    comment: str | None = Field(None, description="Optional review comment")
+    reviewer_email: str = Field(..., description="Email of the reviewer")
+    created_at: datetime = Field(..., description="Review creation timestamp")
+    updated_at: datetime = Field(..., description="Review last updated timestamp")
+
+
+class ReviewListResponse(BaseModel):
+    """Response model for listing reviews of a job."""
+
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
+    reviews: list[ReviewResponse] = Field(..., description="List of reviews")
+    total: int = Field(..., description="Total number of reviews for this job")
+
+
 class ErrorResponse(BaseModel):
     """Standard error response."""
 

@@ -9,17 +9,14 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import fitz  # PyMuPDF
 import pytest
-
-from src.doctranslator.format.pdf.split_manager import (
-    PageCountStrategy,
-    SplitManager,
-    SplitPoint,
-    StructureAwareSplitStrategy,
-)
+from src.doctranslator.format.pdf.split_manager import PageCountStrategy
+from src.doctranslator.format.pdf.split_manager import SplitManager
+from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
 
 # ---------------------------------------------------------------------------
 # PDF fixtures
@@ -108,7 +105,9 @@ class TestStructureAwareStrategyNoLLM:
 
     def test_gemini_translator_never_instantiated(self, multi_section_pdf):
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
-        target = "src.doctranslator.translator.translator.GeminiVertexAITranslator.__init__"
+        target = (
+            "src.doctranslator.translator.translator.GeminiVertexAITranslator.__init__"
+        )
         with patch(target) as mock_init:
             strategy.determine_split_points(_config(multi_section_pdf))
         mock_init.assert_not_called()
@@ -122,7 +121,9 @@ class TestStructureAwareStrategyNoLLM:
     def test_returns_multiple_chunks_from_toc(self, multi_section_pdf):
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
         chunks = strategy.determine_split_points(_config(multi_section_pdf))
-        assert len(chunks) > 1, "Multi-section document must produce more than one chunk"
+        assert len(chunks) > 1, (
+            "Multi-section document must produce more than one chunk"
+        )
 
     def test_all_chunks_have_chunk_index_populated(self, multi_section_pdf):
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
@@ -239,9 +240,10 @@ class TestSplitManagerNoLLM:
 
         manager = SplitManager(config)
 
-        with patch("google.genai.Client") as mock_genai, patch(
-            "src.doctranslator.translator.factory.create_translator"
-        ) as mock_ct:
+        with (
+            patch("google.genai.Client") as mock_genai,
+            patch("src.doctranslator.translator.factory.create_translator") as mock_ct,
+        ):
             manager.determine_split_points(config)
 
         mock_genai.assert_not_called()
@@ -296,7 +298,7 @@ class TestChunkingCostIsZero:
         call_log: list[str] = []
 
         def _make_spy(name):
-            def spy(*args, **kwargs):
+            def spy(*_args, **_kwargs):
                 call_log.append(name)
 
             return spy
@@ -314,6 +316,4 @@ class TestChunkingCostIsZero:
         ):
             strategy.determine_split_points(config)
 
-        assert call_log == [], (
-            f"LLM entry points called during chunking: {call_log}"
-        )
+        assert call_log == [], f"LLM entry points called during chunking: {call_log}"

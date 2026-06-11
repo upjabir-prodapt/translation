@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 
 from src.api.services.dlp_service import DlpService
 from src.doctranslator.format.pdf.document_il import il_version_1
+
+logger = logging.getLogger(__name__)
+
+_DLP_TOKEN_RE = re.compile(r"__DLP_TOKEN_\d{4,}__")
 
 
 @dataclass(slots=True)
@@ -103,3 +109,29 @@ def unmask_document_with_tokens(
                 restored = restored.replace(token, original)
         paragraph.unicode = restored
     return replacements
+
+
+def strip_leaked_tokens(docs: il_version_1.Document) -> int:
+    """Remove any DLP tokens that survived unmasking and log each as a critical error.
+
+    Returns the number of leaked tokens stripped. A non-zero return means the
+    unmasking step failed to restore that many placeholders — callers should treat
+    this as a pipeline fault even though the output is now token-free.
+    """
+    leaked = 0
+    for paragraph in _iter_paragraphs(docs):
+        text = paragraph.unicode
+        if not isinstance(text, str) or not text:
+            continue
+        found = _DLP_TOKEN_RE.findall(text)
+        if found:
+            leaked += len(found)
+            for token in found:
+                logger.critical(
+                    "DLP token leaked into translated output and was stripped: token=%r — "
+                    "the original sensitive value could not be restored. "
+                    "Check that dlp_token_rows is populated and the LLM did not alter the token.",
+                    token,
+                )
+            paragraph.unicode = _DLP_TOKEN_RE.sub("", text)
+    return leaked

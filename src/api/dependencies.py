@@ -5,8 +5,10 @@ from typing import Annotated
 from fastapi import Depends
 
 from src.api.handlers.jobs_handler import JobsHandler
+from src.api.handlers.reviews_handler import ReviewsHandler
 from src.api.handlers.translation_handler import TranslationHandler
 from src.api.services.job_service import JobService
+from src.api.services.review_service import ReviewService
 from src.api.services.translation_service import TranslationService
 from src.repository import get_bigquery_repository
 from src.repository.api_storage_repository import get_api_storage_repository
@@ -45,6 +47,18 @@ def get_jobs_handler(
 ) -> JobsHandler:
     """Get jobs request handler instance."""
     return JobsHandler(job_service=job_service)
+
+
+def get_review_service() -> ReviewService:
+    """Get review service instance."""
+    return ReviewService(bigquery=get_bigquery_repository())
+
+
+def get_reviews_handler(
+    review_service: ReviewService = Depends(get_review_service),  # noqa: B008
+) -> ReviewsHandler:
+    """Get reviews request handler instance."""
+    return ReviewsHandler(review_service=review_service)
 
 
 # Type aliases for cleaner code
