@@ -9,7 +9,6 @@ from typing import Any
 import jwt
 from fastapi import Depends
 from fastapi import HTTPException
-from fastapi import Request
 from fastapi import status
 from fastapi.security import APIKeyHeader
 from jwt import InvalidTokenError

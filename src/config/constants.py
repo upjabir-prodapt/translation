@@ -269,7 +269,9 @@ class Settings(BaseSettings):
     # -----------------------------
 
     MAX_FILE_SIZE: int = 5242880  # 5 MB
-    ALLOWED_EXTENSIONS: set[str] = Field(default_factory=lambda: {".pdf", ".docx", ".doc"})
+    ALLOWED_EXTENSIONS: set[str] = Field(
+        default_factory=lambda: {".pdf", ".docx", ".doc"}
+    )
 
     # -----------------------------
     # Logging

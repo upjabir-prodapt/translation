@@ -198,8 +198,12 @@ class TestGetReviews:
         mock_review_service.get_reviews.side_effect = None
         mock_review_service.get_reviews.return_value = _REVIEW_LIST
 
-    def test_returns_404_when_no_reviews_exist(self, review_client, mock_review_service):
-        mock_review_service.get_reviews.side_effect = ReviewNotFoundError("no-reviews-job")
+    def test_returns_404_when_no_reviews_exist(
+        self, review_client, mock_review_service
+    ):
+        mock_review_service.get_reviews.side_effect = ReviewNotFoundError(
+            "no-reviews-job"
+        )
         resp = review_client.get("/api/v1/reviews/no-reviews-job")
         assert resp.status_code == 404
         body = resp.json()
