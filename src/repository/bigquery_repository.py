@@ -442,8 +442,8 @@ class BigQueryRepository:
             {
                 "job_id": job_id,
                 "chunk_index": int(r["chunk_index"]),
-                "tokens_input": int(r.get("tokens_input", 0) or 0),
-                "tokens_output": int(r.get("tokens_output", 0) or 0),
+                "input_tokens": int(r.get("tokens_input", 0) or 0),
+                "output_tokens": int(r.get("tokens_output", 0) or 0),
                 "cost_usd": float(r.get("cost_usd", 0.0) or 0.0),
                 "model_id": r.get("model_id"),
                 "timestamp": r.get("timestamp", datetime.now(UTC).isoformat()),

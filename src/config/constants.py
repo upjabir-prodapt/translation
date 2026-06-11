@@ -151,6 +151,7 @@ class Settings(BaseSettings):
     BIGQUERY_COST_TABLE: str = "translation_costs"
     BIGQUERY_DLP_TABLE: str = "dlp_mappings"
     BIGQUERY_DLQ_TABLE: str = "translation_dlq"
+    BIGQUERY_REVIEWS_TABLE: str = "translation_reviews"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
@@ -307,6 +308,8 @@ class Settings(BaseSettings):
     GCS_RETRY_MULTIPLIER: int = 2
     LANGUAGE_DETECTION_MAX_CHARS: int = 10000
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int = 300000
+    GOOGLE_DLP_ENABLED: bool = True
+    GOOGLE_DLP_MIN_LIKELIHOOD: str = "UNLIKELY"
 
     # -----------------------------
     # Runtime Paths (resolved in setup_directories)

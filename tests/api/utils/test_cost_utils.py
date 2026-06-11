@@ -284,8 +284,8 @@ class TestWriteChunkCostAttribution:
 
                 _, rows = mock_client.insert_rows_json.call_args[0]
                 row = rows[0]
-                assert row["tokens_input"] == 1000
-                assert row["tokens_output"] == 400
+                assert row["input_tokens"] == 1000
+                assert row["output_tokens"] == 400
                 assert row["cost_usd"] == pytest.approx(0.054)
                 assert row["job_id"] == "job-xyz"
                 assert row["chunk_index"] == 0

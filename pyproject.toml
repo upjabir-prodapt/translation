@@ -68,6 +68,7 @@ dependencies = [
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
     "requests>=2.33.0",
+    "google-cloud-dlp>=3.22.0",
 ]
 
 [project.optional-dependencies]
