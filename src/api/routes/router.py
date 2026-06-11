@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from .v1.auth import router as auth_router
 from .v1.health import router as health_router
 from .v1.jobs import router as jobs_router
+from .v1.reviews import router as reviews_router
 from .v1.translate import router as translate_router
 
 # Create main API router
@@ -24,3 +25,7 @@ api_router.include_router(
 )
 
 api_router.include_router(jobs_router, tags=["jobs"], responses=NOT_FOUND_RESPONSE)
+
+api_router.include_router(
+    reviews_router, tags=["reviews"], responses=NOT_FOUND_RESPONSE
+)

@@ -10,26 +10,23 @@ Expected behaviour (from spec):
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from google.api_core.exceptions import (
-    Aborted,
-    DeadlineExceeded,
-    Forbidden,
-    InternalServerError,
-    NotFound,
-    ServiceUnavailable,
-    TooManyRequests,
-)
-
+from google.api_core.exceptions import Aborted
+from google.api_core.exceptions import DeadlineExceeded
+from google.api_core.exceptions import Forbidden
+from google.api_core.exceptions import InternalServerError
+from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import ServiceUnavailable
+from google.api_core.exceptions import TooManyRequests
 from src.config.constants import settings
 from src.config.retry import is_retryable_gcs_exception
 from src.repository.repository_exception import StorageError
-from src.repository.storage_repository import FileType, StorageRepository
-
+from src.repository.storage_repository import FileType
+from src.repository.storage_repository import StorageRepository
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -275,7 +272,9 @@ class TestGcsUploadExhaustsAllAttempts:
             with pytest.raises(StorageError):
                 await repo.upload_file(b"data", "out/file.pdf")
 
-        assert mock_blob.upload_from_string.call_count == settings.GCS_RETRY_MAX_ATTEMPTS
+        assert (
+            mock_blob.upload_from_string.call_count == settings.GCS_RETRY_MAX_ATTEMPTS
+        )
 
     @pytest.mark.asyncio
     async def test_storage_error_contains_blob_path(self):
@@ -410,9 +409,7 @@ class TestPipelineDLQOnGcsFailure:
         mock_storage.download_file.side_effect = storage_error
 
         pipeline_span = MagicMock()
-        with patch(
-            "src.api.services.pipeline_orchestrator.logger"
-        ) as mock_logger:
+        with patch("src.api.services.pipeline_orchestrator.logger") as mock_logger:
             await orchestrator._execute_pipeline(
                 job_id, _job_data(job_id), pipeline_span
             )
@@ -436,9 +433,7 @@ class TestPipelineDLQOnGcsFailure:
         await orchestrator._execute_pipeline(job_id, _job_data(job_id), pipeline_span)
 
         patch_calls = mock_bigquery.patch_translation_job.call_args_list
-        status_calls = [
-            c for c in patch_calls if c[0][1].get("status") == "failed"
-        ]
+        status_calls = [c for c in patch_calls if c[0][1].get("status") == "failed"]
         assert len(status_calls) >= 1, "Job must be marked failed"
 
     @pytest.mark.asyncio
@@ -461,9 +456,7 @@ class TestPipelineDLQOnGcsFailure:
         mock_storage.download_file.side_effect = RuntimeError("pipeline crash")
 
         pipeline_span = MagicMock()
-        with patch(
-            "src.api.services.pipeline_orchestrator.logger"
-        ) as mock_logger:
+        with patch("src.api.services.pipeline_orchestrator.logger") as mock_logger:
             await orchestrator._execute_pipeline(
                 job_id, _job_data(job_id), pipeline_span
             )
@@ -487,7 +480,5 @@ class TestPipelineDLQOnGcsFailure:
 
         # Job still marked failed despite DLQ write failure
         patch_calls = mock_bigquery.patch_translation_job.call_args_list
-        status_calls = [
-            c for c in patch_calls if c[0][1].get("status") == "failed"
-        ]
+        status_calls = [c for c in patch_calls if c[0][1].get("status") == "failed"]
         assert len(status_calls) >= 1

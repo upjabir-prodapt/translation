@@ -137,7 +137,7 @@ class Settings(BaseSettings):
 
     GCS_BUCKET_NAME: str
     GCS_ASSETS_PREFIX: str = "assets"
-    GCS_TRANSLATION_PREFIX: str = "translation"
+    GCS_TRANSLATION_PREFIX: str = "translation-service"
     GCS_INPUT_FOLDER: str = "input"
     GCS_OUTPUT_FOLDER: str = "output"
 
@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     BIGQUERY_TABLE: str = "translation_jobs"
     BIGQUERY_COST_TABLE: str = "translation_costs"
     BIGQUERY_DLP_TABLE: str = "dlp_mappings"
+    BIGQUERY_DLQ_TABLE: str = "translation_dlq"
 
     API_USE_BACKGROUND_PIPELINE: bool = True
 
@@ -157,13 +158,22 @@ class Settings(BaseSettings):
     # Gemini / Judge
     # -----------------------------
 
-    GEMINI_INPUT_COST_PER_1K: float = 0.0
-    GEMINI_OUTPUT_COST_PER_1K: float = 0.0
+    GEMINI_INPUT_COST_PER_1K: float = 0.00125
+    GEMINI_OUTPUT_COST_PER_1K: float = 0.005
     JUDGE_MODEL: str = "gemini-2.5-flash"
     QUALITY_THRESHOLD: float = 0.6
     QUALITY_EARLY_ACCEPT_THRESHOLD: float = 0.92
     MAX_MODEL_ATTEMPTS: int = 3
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # -----------------------------
+    # Claude / Anthropic (Vertex AI Model Garden)
+    # -----------------------------
+
+    CLAUDE_MODEL: str = "claude-opus-4-7"
+    CLAUDE_INPUT_COST_PER_1K: float = 0.0
+    CLAUDE_OUTPUT_COST_PER_1K: float = 0.0
+    CLAUDE_VERTEX_REGION: str = "global"
 
     # -----------------------------
     # LLM / Translation Performance
@@ -220,7 +230,7 @@ class Settings(BaseSettings):
     # Job Config
     # -----------------------------
 
-    JOB_TTL_HOURS: int = 24
+    JOB_TTL_HOURS: int = 720
     MAX_CONCURRENT_JOBS: int = 10
     TEMP_JOBS_ROOT: str = "jobs"
     GCS_GLOSSARIES_PREFIX: str = "glossaries"
@@ -234,7 +244,7 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api/v1"
     STARTUP_WARMUP_ENABLED: bool = True
     STARTUP_WARMUP_STRICT: bool = False
-    STARTUP_BACKGROUND_WARMUP_ENABLED: bool = True
+    STARTUP_BACKGROUND_WARMUP_ENABLED: bool = False
     STARTUP_PREFLIGHT_TIMEOUT_SECONDS: int = 20
     STARTUP_PREFETCH_GLOSSARIES: list[str] = Field(default_factory=list)
     MODEL_SELECTION_CACHE_TTL_SECONDS: int = 300
@@ -258,14 +268,14 @@ class Settings(BaseSettings):
     # File Limits
     # -----------------------------
 
-    MAX_FILE_SIZE: int = 50 * 1024 * 1024
-    ALLOWED_EXTENSIONS: set[str] = Field(default_factory=set)
+    MAX_FILE_SIZE: int = 5242880  # 5 MB
+    ALLOWED_EXTENSIONS: set[str] = Field(default_factory=lambda: {".pdf", ".docx", ".doc"})
 
     # -----------------------------
     # Logging
     # -----------------------------
 
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
 
     # -----------------------------
     # Telemetry / Tracing

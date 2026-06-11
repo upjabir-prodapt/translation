@@ -1,7 +1,6 @@
 """Tests for SplitPoint metadata and chunk validation."""
 
 import pytest
-
 from src.doctranslator.format.pdf.split_manager import MAX_CHUNK_TOKEN_COUNT
 from src.doctranslator.format.pdf.split_manager import SplitPoint
 from src.doctranslator.format.pdf.split_manager import validate_chunk_metadata
@@ -25,11 +24,21 @@ def _make_chunk(
 
 def _multi_section_chunks() -> list[SplitPoint]:
     return [
-        _make_chunk(0, start_page=0, end_page=4, chapter_title="Introduction", token_count=1500),
-        _make_chunk(1, start_page=5, end_page=12, chapter_title="Background", token_count=2400),
-        _make_chunk(2, start_page=13, end_page=20, chapter_title="Methodology", token_count=2400),
-        _make_chunk(3, start_page=21, end_page=28, chapter_title="Results", token_count=2400),
-        _make_chunk(4, start_page=29, end_page=34, chapter_title="Conclusion", token_count=1800),
+        _make_chunk(
+            0, start_page=0, end_page=4, chapter_title="Introduction", token_count=1500
+        ),
+        _make_chunk(
+            1, start_page=5, end_page=12, chapter_title="Background", token_count=2400
+        ),
+        _make_chunk(
+            2, start_page=13, end_page=20, chapter_title="Methodology", token_count=2400
+        ),
+        _make_chunk(
+            3, start_page=21, end_page=28, chapter_title="Results", token_count=2400
+        ),
+        _make_chunk(
+            4, start_page=29, end_page=34, chapter_title="Conclusion", token_count=1800
+        ),
     ]
 
 
@@ -60,7 +69,9 @@ class TestSplitPointMetadataFields:
         assert chunk.token_count == 3000
 
     def test_all_required_fields_populated_for_named_section(self):
-        chunk = _make_chunk(1, start_page=5, chapter_title="Background", token_count=2400)
+        chunk = _make_chunk(
+            1, start_page=5, chapter_title="Background", token_count=2400
+        )
         assert chunk.page_number is not None
         assert chunk.section_header
         assert chunk.chunk_index is not None
@@ -144,7 +155,9 @@ class TestValidateChunkMetadata:
         validate_chunk_metadata([_make_chunk(0, token_count=1500)])
 
     def test_section_header_fallback_does_not_affect_validation(self):
-        chunks = [_make_chunk(i, chapter_title=None, token_count=1000) for i in range(3)]
+        chunks = [
+            _make_chunk(i, chapter_title=None, token_count=1000) for i in range(3)
+        ]
         validate_chunk_metadata(chunks)
         for i, chunk in enumerate(chunks):
             assert chunk.section_header == f"Section {i + 1}"

@@ -18,6 +18,8 @@ from src.config.constants import settings
 from src.config.retry import llm_retry
 from src.config.tracing import set_root_span_attribute
 from src.config.tracing import tracer_llm
+from src.doctranslator.translator.prompts import build_translation_prompt
+from src.doctranslator.translator.providers import LLMProvider
 from src.doctranslator.utils.atomic_integer import AtomicInteger
 
 logger = logging.getLogger(__name__)
@@ -270,58 +272,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         self.cache_hit_prompt_token_count = AtomicInteger()
 
     def prompt(self, text: str) -> str:
-        return (
-            "# Role\n"
-            "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
-            "# Task\n"
-            f"Translate the INPUT below from {self.lang_in} into {self.lang_out}.\n\n"
-            "# Output format (plain text only)\n"
-            "- Reply with nothing except the translated text itself.\n"
-            "- Do not add explanations, notes, alternatives, or apologies—only the translation.\n"
-            "- Preserve line breaks and paragraph boundaries as in the INPUT unless the target language "
-            "requires a minimal, justified adjustment.\n\n"
-            "# Alignment, coverage, and fidelity\n"
-            "A strong translation stays structurally aligned with the source, omits nothing important, "
-            "and hallucinates nothing.\n"
-            "- Alignment: keep lists, numbered steps, table rows, and paragraph chunks in clear one-to-one "
-            "correspondence with the INPUT; do not merge unrelated bullets, drop list items, scramble step order "
-            "when order matters, or turn one coherent source sentence into several unrelated sentences (or the reverse) "
-            "unless normal for "
-            f"{self.lang_out} and the logic of the source is preserved.\n"
-            "- Coverage (avoid omission): translate every substantive phrase, fact, obligation, condition, and "
-            "negation; do not skip clauses, soften requirements, or leave meaning behind.\n"
-            "- Fidelity (avoid hallucination): do not add commentary, disclaimers, hedging, examples, or details "
-            "not in the source; do not invent names, dates, numbers, or causal claims.\n\n"
-            "# Register, headings, and capitalization\n"
-            "- Match the source register (e.g. legal, technical, marketing, UI) and keep tone consistent.\n"
-            "- Preserve intentional capitalization: ALL‑CAPS headings, Title Case section titles, "
-            "sentence case, and small caps patterns—mirror them in the target language when natural; "
-            "if the target language uses different heading conventions, choose one clear style and "
-            "apply it consistently across the segment.\n"
-            "- Keep emphasis patterns implied by capitalization (e.g. acronyms vs. ordinary words) correct.\n\n"
-            "# Terminology and consistency\n"
-            "- Use one stable choice per technical term, product name pattern, and key entity within the segment.\n"
-            "- Prefer established target‑language equivalents for domain terms; do not mix synonyms casually.\n\n"
-            "# What not to translate (copy verbatim)\n"
-            "- Placeholders and markup: e.g. {{1}}, {{v2}}, tokens like <b3>…</b3>, URLs, file paths, "
-            "email addresses, hex/color codes, version strings, and pure numeric or alphanumeric codes.\n"
-            "- Widely recognized trademarks and person names when localization would be wrong; "
-            "otherwise follow normal target‑language usage.\n"
-            "- If a substring is already correct and natural in the target language (e.g. a lone symbol, "
-            "a code, or a no‑translate token), return it unchanged.\n\n"
-            "# Numbers, dates, and units\n"
-            "- Keep mathematical or identifier numbers exact unless the source clearly expects localization.\n"
-            "- For dates, currencies, and units, use the conventional form for "
-            f"{self.lang_out} when unambiguous; otherwise preserve the source form.\n\n"
-            "# Quality bar\n"
-            "- Even when you rephrase idiomatically for "
-            f"{self.lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
-            "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "
-            "do not silently soften or strengthen them.\n\n"
-            "# INPUT\n"
-            f"{text}"
-            "# Output\n"
-        )
+        return build_translation_prompt(text, self.lang_in, self.lang_out)
 
     def _extract_text(self, response) -> str:
         parsed = getattr(response, "parsed", None)
@@ -384,7 +335,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             attributes={
                 _ATTR_LLM_NAME: model,
                 _ATTR_LLM_MODEL: model,
-                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_PROVIDER: LLMProvider.GEMINI_VERTEXAI,
                 _ATTR_LLM_TEMPERATURE: temperature,
                 _ATTR_LLM_PROMPT_CHARS: prompt_chars,
                 _ATTR_LLM_PROMPT_HASH: prompt_hash,
@@ -451,7 +402,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             attributes={
                 _ATTR_LLM_NAME: self.model,
                 _ATTR_LLM_MODEL: self.model,
-                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_PROVIDER: LLMProvider.GEMINI_VERTEXAI,
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
                 _ATTR_LLM_INPUT_CHARS: input_chars,
                 _ATTR_LLM_PROMPT_CHARS: c_len,
@@ -531,7 +482,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             attributes={
                 _ATTR_LLM_NAME: self.model,
                 _ATTR_LLM_MODEL: self.model,
-                _ATTR_LLM_PROVIDER: "google_vertexai",
+                _ATTR_LLM_PROVIDER: LLMProvider.GEMINI_VERTEXAI,
                 _ATTR_LLM_TEMPERATURE: float(self.temperature),
                 _ATTR_LLM_INPUT_CHARS: input_chars,
                 _ATTR_LLM_PROMPT_CHARS: c_len,
@@ -572,6 +523,288 @@ class GeminiVertexAITranslator(BaseTranslator):
             f"latency_s={elapsed:.3f} input_chars={input_chars} "
             f"prompt_chars={c_len} out_chars={o_len} "
             f"{_usage_metadata_summary(response)}",
+        )
+        logger.debug(
+            f"do_llm_translate totals: name={self.name} translator prompt_tokens="
+            f"{self.prompt_token_count.value} completion_tokens="
+            f"{self.completion_token_count.value}",
+        )
+        return out
+
+
+class ClaudeVertexAITranslator(BaseTranslator):
+    """Translator backed by Anthropic Claude via Vertex AI Model Garden."""
+
+    name = LLMProvider.CLAUDE
+
+    def __init__(
+        self,
+        lang_in,
+        lang_out,
+        model,
+        temperature=0.0,
+    ):
+        super().__init__(lang_in, lang_out)
+        try:
+            from anthropic import AnthropicVertex
+        except ImportError as exc:
+            raise ImportError(
+                "anthropic is required for Claude translator. "
+                "Install it with `uv add anthropic[vertex]`."
+            ) from exc
+
+        self.model = model
+        self.temperature = temperature
+        self.client = AnthropicVertex(
+            project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+            region=settings.CLAUDE_VERTEX_REGION,
+        )
+        self.token_count = AtomicInteger()
+        self.prompt_token_count = AtomicInteger()
+        self.completion_token_count = AtomicInteger()
+        self.cache_hit_prompt_token_count = AtomicInteger()
+
+    def prompt(self, text: str) -> str:
+        return build_translation_prompt(text, self.lang_in, self.lang_out)
+
+    def _build_tool_schema(self, response_schema) -> dict:
+        """Convert a Pydantic model class to a Claude tool definition for structured output."""
+        return {
+            "name": "structured_output",
+            "description": "Return the result in the required structured format.",
+            "input_schema": response_schema.model_json_schema(),
+        }
+
+    def _update_token_count(self, usage) -> None:
+        if not usage:
+            return
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        total = input_tokens + output_tokens
+        if total:
+            self.token_count.inc(total)
+        if input_tokens:
+            self.prompt_token_count.inc(input_tokens)
+        if output_tokens:
+            self.completion_token_count.inc(output_tokens)
+        if cache_read:
+            self.cache_hit_prompt_token_count.inc(cache_read)
+
+    def _extract_text(self, response, response_schema=None) -> str:
+        """Extract a JSON string (structured) or plain text from a Claude response."""
+        import json as _json
+
+        if response_schema is not None:
+            for block in response.content:
+                if getattr(block, "type", None) == "tool_use":
+                    return _json.dumps(block.input)
+            logger.warning(
+                f"Claude response missing tool_use block: name={self.name} "
+                f"model={self.model} stop_reason={getattr(response, 'stop_reason', None)}",
+            )
+            return ""
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                return block.text.strip()
+        return ""
+
+    @llm_retry(logger=logger)
+    def _messages_create_with_retry(self, *, contents: str, response_schema=None):
+        prompt_chars = len(contents)
+        prompt_hash = hashlib.sha256(
+            contents.encode("utf-8", errors="replace")
+        ).hexdigest()[:12]
+        prompt_preview = contents[:_MAX_CHARS_PROMPT_PREVIEW].replace("\n", "\\n")
+        temperature = float(self.temperature)
+        schema_name = response_schema.__name__ if response_schema else None
+        logger.debug(
+            f"Claude messages.create: name={self.name} model={self.model} "
+            f"prompt_chars={prompt_chars} prompt_hash={prompt_hash} "
+            f"temperature={temperature} max_tokens={settings.LLM_MAX_OUTPUT_TOKENS} "
+            f"schema={schema_name} prompt_preview={prompt_preview!r}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "claude.messages.create",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.CLAUDE,
+                _ATTR_LLM_TEMPERATURE: temperature,
+                _ATTR_LLM_PROMPT_CHARS: prompt_chars,
+                _ATTR_LLM_PROMPT_HASH: prompt_hash,
+                _ATTR_LLM_PROMPT_PREVIEW: prompt_preview,
+                "llm.max_output_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
+            },
+        ) as span:
+            try:
+                kwargs = {
+                    "model": self.model,
+                    "max_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
+                    "temperature": temperature,
+                    "messages": [{"role": "user", "content": contents}],
+                }
+                if response_schema is not None:
+                    kwargs["tools"] = [self._build_tool_schema(response_schema)]
+                    kwargs["tool_choice"] = {
+                        "type": "tool",
+                        "name": "structured_output",
+                    }
+                response = self.client.messages.create(**kwargs)
+                usage = getattr(response, "usage", None)
+                if usage:
+                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                    span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+                    span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+                    span.set_attribute(
+                        _ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens
+                    )
+            except Exception as exc:
+                span.record_exception(exc)
+                from opentelemetry.trace import Status
+                from opentelemetry.trace import StatusCode
+
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+            finally:
+                elapsed = time.monotonic() - t0
+                span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+                logger.debug(
+                    f"Claude messages.create finished: name={self.name} model={self.model} "
+                    f"latency_s={elapsed:.3f} prompt_hash={prompt_hash}",
+                )
+        return response
+
+    def do_translate(self, text, rate_limit_params: dict = None):
+        import json as _json
+
+        contents = self.prompt(text)
+        c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
+        logger.debug(
+            f"do_translate: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.CLAUDE,
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._messages_create_with_retry(
+                contents=contents,
+                response_schema=TranslationResponse,
+            )
+            self._update_token_count(getattr(response, "usage", None))
+            json_str = self._extract_text(response, TranslationResponse)
+            _usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(_usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(_usage, "output_tokens", 0) or 0)
+            try:
+                out = _json.loads(json_str).get("translated_text", "")
+            except Exception:
+                out = json_str
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
+        elapsed = time.monotonic() - t0
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.model)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_translate empty model output: name={self.name} model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens}",
+        )
+        return out
+
+    def do_llm_translate(
+        self, text, rate_limit_params: dict = None, response_schema=None
+    ):
+        if text is None:
+            logger.debug("do_llm_translate skipped: text is None")
+            return None
+        schema = response_schema if response_schema is not None else TranslationResponse
+        contents = self.prompt(text)
+        c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
+        rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
+        logger.debug(
+            f"do_llm_translate begin: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature} "
+            f"rate_limit_param_keys={rl_keys}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.CLAUDE,
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._messages_create_with_retry(
+                contents=contents,
+                response_schema=schema,
+            )
+            self._update_token_count(getattr(response, "usage", None))
+            out = self._extract_text(response, schema)
+            _usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(_usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(_usage, "output_tokens", 0) or 0)
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
+        elapsed = time.monotonic() - t0
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.model)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_llm_translate empty model output: name={self.name} model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_llm_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens}",
         )
         logger.debug(
             f"do_llm_translate totals: name={self.name} translator prompt_tokens="
