@@ -812,3 +812,304 @@ class ClaudeVertexAITranslator(BaseTranslator):
             f"{self.completion_token_count.value}",
         )
         return out
+
+
+class QwenVertexAITranslator(BaseTranslator):
+    """Translator backed by Qwen via Vertex AI OpenAI-compatible endpoint."""
+
+    name = LLMProvider.QWEN_VERTEXAI
+
+    def __init__(
+        self,
+        lang_in,
+        lang_out,
+        model,
+        temperature=0.0,
+    ):
+        super().__init__(lang_in, lang_out)
+        try:
+            import google.auth
+            import google.auth.transport.requests
+            from openai import OpenAI as _OpenAI  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "google-auth and openai are required for Qwen translator. "
+                "Install with `uv add google-auth openai`."
+            ) from exc
+
+        self.model = model
+        self.temperature = temperature
+        self._creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        self._creds.refresh(google.auth.transport.requests.Request())
+        self.client = self._build_client()
+        self.token_count = AtomicInteger()
+        self.prompt_token_count = AtomicInteger()
+        self.completion_token_count = AtomicInteger()
+        self.cache_hit_prompt_token_count = AtomicInteger()
+
+    def _build_client(self):
+        from openai import OpenAI as _OpenAI
+
+        location = settings.QWEN_VERTEX_LOCATION
+        project_id = settings.GOOGLE_CLOUD_PROJECT_ID
+        return _OpenAI(
+            base_url=(
+                f"https://{location}-aiplatform.googleapis.com/v1/projects/"
+                f"{project_id}/locations/{location}/endpoints/openapi"
+            ),
+            api_key=self._creds.token,
+        )
+
+    def _refresh_client_if_needed(self):
+        import google.auth.transport.requests
+
+        if not self._creds.valid:
+            self._creds.refresh(google.auth.transport.requests.Request())
+            self.client = self._build_client()
+
+    def prompt(self, text: str) -> str:
+        return build_translation_prompt(text, self.lang_in, self.lang_out)
+
+    def _build_tool_schema(self, response_schema) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": "structured_output",
+                "description": "Return the result in the required structured format.",
+                "parameters": response_schema.model_json_schema(),
+            },
+        }
+
+    def _update_token_count(self, usage) -> None:
+        if not usage:
+            return
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total = input_tokens + output_tokens
+        if total:
+            self.token_count.inc(total)
+        if input_tokens:
+            self.prompt_token_count.inc(input_tokens)
+        if output_tokens:
+            self.completion_token_count.inc(output_tokens)
+
+    def _extract_text(self, response, response_schema=None) -> str:
+
+        choice = response.choices[0]
+        msg = choice.message
+        if response_schema is not None:
+            if msg.tool_calls:
+                return msg.tool_calls[0].function.arguments
+            logger.warning(
+                f"Qwen response missing tool_call: name={self.name} "
+                f"model={self.model} finish_reason={choice.finish_reason}",
+            )
+            return ""
+        return (msg.content or "").strip()
+
+    @llm_retry(logger=logger)
+    def _chat_completions_with_retry(self, *, contents: str, response_schema=None):
+        self._refresh_client_if_needed()
+        prompt_chars = len(contents)
+        prompt_hash = hashlib.sha256(
+            contents.encode("utf-8", errors="replace")
+        ).hexdigest()[:12]
+        prompt_preview = contents[:_MAX_CHARS_PROMPT_PREVIEW].replace("\n", "\\n")
+        temperature = float(self.temperature)
+        schema_name = response_schema.__name__ if response_schema else None
+        logger.debug(
+            f"Qwen chat.completions.create: name={self.name} model={self.model} "
+            f"prompt_chars={prompt_chars} prompt_hash={prompt_hash} "
+            f"temperature={temperature} max_tokens={settings.LLM_MAX_OUTPUT_TOKENS} "
+            f"schema={schema_name} prompt_preview={prompt_preview!r}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "qwen.chat.completions.create",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.QWEN_VERTEXAI,
+                _ATTR_LLM_TEMPERATURE: temperature,
+                _ATTR_LLM_PROMPT_CHARS: prompt_chars,
+                _ATTR_LLM_PROMPT_HASH: prompt_hash,
+                _ATTR_LLM_PROMPT_PREVIEW: prompt_preview,
+                "llm.max_output_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
+            },
+        ) as span:
+            try:
+                kwargs = {
+                    "model": self.model,
+                    "max_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
+                    "temperature": temperature,
+                    "messages": [{"role": "user", "content": contents}],
+                }
+                if response_schema is not None:
+                    kwargs["tools"] = [self._build_tool_schema(response_schema)]
+                    kwargs["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": "structured_output"},
+                    }
+                response = self.client.chat.completions.create(**kwargs)
+                usage = getattr(response, "usage", None)
+                if usage:
+                    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                    span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+                    span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+                    span.set_attribute(
+                        _ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens
+                    )
+            except Exception as exc:
+                span.record_exception(exc)
+                from opentelemetry.trace import Status
+                from opentelemetry.trace import StatusCode
+
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+            finally:
+                elapsed = time.monotonic() - t0
+                span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+                logger.debug(
+                    f"Qwen chat.completions.create finished: name={self.name} model={self.model} "
+                    f"latency_s={elapsed:.3f} prompt_hash={prompt_hash}",
+                )
+        return response
+
+    def do_translate(self, text, rate_limit_params: dict = None):
+        import json as _json
+
+        contents = self.prompt(text)
+        c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
+        logger.debug(
+            f"do_translate: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.QWEN_VERTEXAI,
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._chat_completions_with_retry(
+                contents=contents,
+                response_schema=TranslationResponse,
+            )
+            self._update_token_count(getattr(response, "usage", None))
+            json_str = self._extract_text(response, TranslationResponse)
+            _usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(_usage, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(_usage, "completion_tokens", 0) or 0)
+            try:
+                out = _json.loads(json_str).get("translated_text", "")
+            except Exception:
+                out = json_str
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
+        elapsed = time.monotonic() - t0
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.model)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_translate empty model output: name={self.name} model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens}",
+        )
+        return out
+
+    def do_llm_translate(
+        self, text, rate_limit_params: dict = None, response_schema=None
+    ):
+        if text is None:
+            logger.debug("do_llm_translate skipped: text is None")
+            return None
+        schema = response_schema if response_schema is not None else TranslationResponse
+        contents = self.prompt(text)
+        c_len = len(contents)
+        input_chars = len(text) if isinstance(text, str) else 0
+        rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
+        logger.debug(
+            f"do_llm_translate begin: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"input_chars={input_chars} prompt_chars={c_len} "
+            f"temperature={self.temperature} "
+            f"rate_limit_param_keys={rl_keys}",
+        )
+        t0 = time.monotonic()
+        with tracer_llm.start_as_current_span(
+            "llm.translate_batch",
+            kind=SpanKind.CLIENT,
+            attributes={
+                _ATTR_LLM_NAME: self.model,
+                _ATTR_LLM_MODEL: self.model,
+                _ATTR_LLM_PROVIDER: LLMProvider.QWEN_VERTEXAI,
+                _ATTR_LLM_TEMPERATURE: float(self.temperature),
+                _ATTR_LLM_INPUT_CHARS: input_chars,
+                _ATTR_LLM_PROMPT_CHARS: c_len,
+                "translation.source_lang": self.lang_in,
+                "translation.target_lang": self.lang_out,
+            },
+        ) as span:
+            response = self._chat_completions_with_retry(
+                contents=contents,
+                response_schema=schema,
+            )
+            self._update_token_count(getattr(response, "usage", None))
+            out = self._extract_text(response, schema)
+            _usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(_usage, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(_usage, "completion_tokens", 0) or 0)
+            o_len = len(out)
+            span.set_attribute(_ATTR_LLM_INPUT_TOKENS, input_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_TOKENS, output_tokens)
+            span.set_attribute(_ATTR_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
+            span.set_attribute(_ATTR_LLM_OUTPUT_CHARS, o_len)
+        elapsed = time.monotonic() - t0
+        span.set_attribute(_ATTR_LLM_LATENCY_S, round(elapsed, 3))
+        set_root_span_attribute("llm.model", self.model)
+        set_root_span_attribute("llm.name", self.model)
+        if not out.strip() and c_len > 0:
+            prev = contents[:_MAX_CHARS_LOG_PREVIEW].replace("\n", "\\n")
+            logger.warning(
+                f"do_llm_translate empty model output: name={self.name} model={self.model} "
+                f"prompt_chars={c_len} prompt_head={prev!r}",
+            )
+        logger.info(
+            f"do_llm_translate done: name={self.name} model={self.model} "
+            f"{self.lang_in}->{self.lang_out} "
+            f"latency_s={elapsed:.3f} input_chars={input_chars} "
+            f"prompt_chars={c_len} out_chars={o_len} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens}",
+        )
+        logger.debug(
+            f"do_llm_translate totals: name={self.name} translator prompt_tokens="
+            f"{self.prompt_token_count.value} completion_tokens="
+            f"{self.completion_token_count.value}",
+        )
+        return out

@@ -5,6 +5,7 @@ from src.doctranslator.translator.providers import LLMProvider
 from src.doctranslator.translator.translator import BaseTranslator
 from src.doctranslator.translator.translator import ClaudeVertexAITranslator
 from src.doctranslator.translator.translator import GeminiVertexAITranslator
+from src.doctranslator.translator.translator import QwenVertexAITranslator
 from src.doctranslator.translator.translator import set_translate_rate_limiter
 
 
@@ -17,8 +18,12 @@ def _infer_provider(model_name: str) -> LLMProvider:
         return LLMProvider.GEMINI_VERTEXAI
     if normalized.startswith(LLMProvider.CLAUDE) or normalized.startswith("claude"):
         return LLMProvider.CLAUDE
+    if normalized.startswith(LLMProvider.QWEN_VERTEXAI) or normalized.startswith(
+        "qwen"
+    ):
+        return LLMProvider.QWEN_VERTEXAI
     raise ValueError(
-        f"Unsupported model '{model_name}'. Supported prefixes: 'gemini', 'claude'."
+        f"Unsupported model '{model_name}'. Supported prefixes: 'gemini', 'claude', 'qwen'."
     )
 
 
@@ -46,6 +51,14 @@ def create_translator(
             lang_in=lang_in,
             lang_out=lang_out,
             model=settings.CLAUDE_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
+        )
+
+    if provider == LLMProvider.QWEN_VERTEXAI:
+        return QwenVertexAITranslator(
+            lang_in=lang_in,
+            lang_out=lang_out,
+            model=settings.QWEN_MODEL,
             temperature=settings.LLM_TEMPERATURE,
         )
 

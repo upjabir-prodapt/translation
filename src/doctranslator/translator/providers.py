@@ -8,3 +8,4 @@ class LLMProvider(StrEnum):
 
     GEMINI_VERTEXAI = "gemini_vertexai"
     CLAUDE = "claude"
+    QWEN_VERTEXAI = "qwen_vertexai"

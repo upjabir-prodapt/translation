@@ -177,6 +177,15 @@ class Settings(BaseSettings):
     CLAUDE_VERTEX_REGION: str = "global"
 
     # -----------------------------
+    # Qwen (Vertex AI OpenAI-compatible endpoint)
+    # -----------------------------
+
+    QWEN_MODEL: str = "qwen/qwen3-235b-a22b-instruct-maas"
+    QWEN_INPUT_COST_PER_1K: float = 0.0
+    QWEN_OUTPUT_COST_PER_1K: float = 0.0
+    QWEN_VERTEX_LOCATION: str = "us-central1"
+
+    # -----------------------------
     # LLM / Translation Performance
     # -----------------------------
 
