@@ -10,6 +10,7 @@ workflow:
   - if: $CI_COMMIT_BRANCH == "prod"
 
 stages:
+- sync
 - lint
 - test
 - build
@@ -18,7 +19,7 @@ stages:
 
 variables:
   IMAGE_TAG: "$CI_PIPELINE_IID"
-  # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY
+  # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY, AZURE_PAT (Azure DevOps Code Read)
   # WIF: WORKLOAD_IDENTITY_PROJECT_NUMBER, WORKLOAD_IDENTITY_POOL, WORKLOAD_IDENTITY_PROVIDER
   #      SERVICE_ACCOUNT, GCP_PROJECT_ID
   # Per-environment: GCP_REGION, ARTIFACT_REPO, IMAGE_NAME, CLOUD_RUN_SERVICE,
@@ -398,6 +399,55 @@ variables:
 
 # Security scanners: docker executor runners (template runs /analyzer in analyzer image).
 # App build/test/deploy jobs use Shell1 — do not route DS/SAST/secret jobs to shell tags.
+# Pull Azure gitlab-sync-branch into GitLab sandbox (manual). The push triggers a new pipeline
+# that runs lint → test → build → deploy; use promote-* jobs for sandbox → dev → prod.
+sync-from-azure:
+  extends:
+  - ".proxy"
+  - ".shell_runner"
+  stage: sync
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+  - !reference [".proxy", before_script]
+  when: manual
+  script:
+  - |
+    : "${AZURE_PAT:?Set masked+protected variable AZURE_PAT (Azure DevOps Code Read)}"
+    : "${GITLAB_PUSH_TOKEN:?Set masked+protected variable GITLAB_PUSH_TOKEN (scope: write_repository)}"
+
+    AZURE_URL="https://ColtProgrammeOffice:${AZURE_PAT}@dev.azure.com/ColtProgrammeOffice/Google%20Vertex/_git/Translation"
+    PUSH_URL="https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+
+    git remote add azure "$AZURE_URL" 2>/dev/null || git remote set-url azure "$AZURE_URL"
+    git fetch azure gitlab-sync-branch
+    git fetch origin sandbox
+
+    AZURE_SHA="$(git rev-parse azure/gitlab-sync-branch)"
+    SANDBOX_SHA="$(git rev-parse origin/sandbox 2>/dev/null || echo "")"
+
+    if [ -n "$SANDBOX_SHA" ] && [ "$SANDBOX_SHA" = "$AZURE_SHA" ]; then
+      echo "sandbox already matches Azure gitlab-sync-branch (${AZURE_SHA}); nothing to sync."
+      exit 0
+    fi
+
+    if [ -z "$SANDBOX_SHA" ]; then
+      echo "Bootstrapping sandbox from Azure gitlab-sync-branch (${AZURE_SHA})..."
+      git push "$PUSH_URL" "${AZURE_SHA}:refs/heads/sandbox"
+    elif git merge-base --is-ancestor "$SANDBOX_SHA" "$AZURE_SHA" 2>/dev/null; then
+      echo "Fast-forwarding sandbox to Azure gitlab-sync-branch (${AZURE_SHA})..."
+      git push "$PUSH_URL" "${AZURE_SHA}:refs/heads/sandbox"
+    elif ! git merge-base "$SANDBOX_SHA" "$AZURE_SHA" >/dev/null 2>&1; then
+      echo "Unrelated histories detected; bootstrapping sandbox from Azure gitlab-sync-branch (${AZURE_SHA})."
+      git push --force "$PUSH_URL" "${AZURE_SHA}:refs/heads/sandbox"
+    else
+      echo "Cannot fast-forward sandbox from Azure gitlab-sync-branch (sandbox has extra GitLab-only commits)."
+      echo "Resolve manually, then rerun sync."
+      exit 1
+    fi
+  rules:
+  - if: $CI_COMMIT_BRANCH == "sandbox"
+
 sast:
   stage: lint
 ".sast-analyzer":

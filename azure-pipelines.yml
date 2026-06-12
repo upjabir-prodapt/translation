@@ -1,13 +1,13 @@
 trigger:
   branches:
     include:
-      - sandbox-ui
+      - gitlab-sync-branch
 
 pool:
   vmImage: ubuntu-latest
 
 variables:
-  - ${{ if or(eq(variables['Build.SourceBranchName'], 'sandbox'), eq(variables['Build.SourceBranchName'], 'sandbox-ui')) }}:
+  - ${{ if eq(variables['Build.SourceBranchName'], 'gitlab-sync-branch') }}:
       - group: translation-sandbox
   - ${{ if eq(variables['Build.SourceBranchName'], 'dev')}}:
       - group: translation-dev

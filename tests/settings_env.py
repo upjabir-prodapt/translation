@@ -29,8 +29,15 @@ TEST_SETTINGS_ENV: dict[str, str] = {
     "BIGQUERY_DATASET": "mock-dataset",
     # Security
     "JWT_SECRET_KEY": "mock-secret-key-for-testing-only-12345",
-    # Telemetry (disable in tests)
+    # Telemetry (disable export in tests; keep capture vars for Settings validation)
     "TRACE_ENABLED": "false",
+    "OTEL_SERVICE_NAME": "translation_service_test",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://telemetry.googleapis.com/v1/traces",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=translation_service_test",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+    "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "false",
 }
 
 

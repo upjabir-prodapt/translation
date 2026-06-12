@@ -10,7 +10,6 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from opentelemetry import trace
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.middleware.exception_handler import exception_handler_middleware
@@ -21,6 +20,7 @@ from src.api.services.startup_assets_service import create_background_task
 from src.config.constants import settings
 from src.config.logging_config import setup_logging
 from src.config.telemetry import setup_telemetry
+from src.config.telemetry import shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,21 @@ async def lifespan(_app: FastAPI):
     # Startup — ordering is critical: telemetry first, then logging.
     # LoggingInstrumentor (called inside setup_telemetry) must register its
     # record factory before GcpJsonFormatter starts reading otelTraceID/otelSpanID.
-    setup_telemetry(_app, settings)
+    otel_ready = setup_telemetry(_app, settings)
     setup_logging()
+    if settings.TRACE_ENABLED:
+        if otel_ready:
+            logger.info(
+                "[OTEL] OpenTelemetry active — traces export to Cloud Trace "
+                "(endpoint=%s)",
+                settings.OTEL_EXPORTER_OTLP_ENDPOINT,
+            )
+        else:
+            logger.error(
+                "[OTEL] OpenTelemetry failed to initialize — running WITHOUT trace "
+                "export to Cloud Trace. Search logs for '[OTEL] FAILED' for the "
+                "root cause (ADC, project ID, or setup error)."
+            )
     logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
     startup_assets = StartupAssetsService()
     _app.state.startup_preflight_status = None
@@ -81,12 +94,7 @@ async def lifespan(_app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await task
     logger.info("API shutting down")
-    # Flush and shut down the OTel TracerProvider so BatchSpanProcessor drains
-    # all buffered spans before the Cloud Run container is terminated.
-    provider = trace.get_tracer_provider()
-    if hasattr(provider, "shutdown"):
-        provider.shutdown()
-        logger.info("OTel TracerProvider shut down — all spans flushed")
+    shutdown_telemetry(_app)
 
 
 # Create FastAPI app

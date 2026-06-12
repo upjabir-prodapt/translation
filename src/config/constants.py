@@ -295,8 +295,13 @@ class Settings(BaseSettings):
 
     TRACE_ENABLED: bool = True
     TRACE_SAMPLE_RATE: float = 1.0
-    OTEL_EXPORTER_OTLP_ENDPOINT: str = "telemetry.googleapis.com:443"
     OTEL_SERVICE_NAME: str = "translation_service"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "https://telemetry.googleapis.com/v1/traces"
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf"
+    OTEL_RESOURCE_ATTRIBUTES: str = ""
+    OTEL_SEMCONV_STABILITY_OPT_IN: str = "gen_ai_latest_experimental"
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: str = "SPAN_AND_EVENT"
+    OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: bool = False
     APP_VERSION: str = "0.5.23"
 
     # -----------------------------
@@ -355,6 +360,27 @@ class Settings(BaseSettings):
     # --------------------------------------------------
     # Post Initialization
     # --------------------------------------------------
+
+    @model_validator(mode="after")
+    def sync_otel_environment(self) -> "Settings":
+        """Push OTEL / GenAI SDK env vars for auto-instrumentation (read at instrument() time)."""
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = self.OTEL_EXPORTER_OTLP_ENDPOINT
+        os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = self.OTEL_EXPORTER_OTLP_PROTOCOL
+        resource_attrs = self.OTEL_RESOURCE_ATTRIBUTES.strip()
+        if not resource_attrs:
+            resource_attrs = (
+                f"service.name={self.OTEL_SERVICE_NAME},"
+                f"gcp.project_id={self.GOOGLE_CLOUD_PROJECT}"
+            )
+        os.environ["OTEL_RESOURCE_ATTRIBUTES"] = resource_attrs
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = self.OTEL_SEMCONV_STABILITY_OPT_IN
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            self.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+        )
+        os.environ["OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED"] = (
+            "true" if self.OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED else "false"
+        )
+        return self
 
     @model_validator(mode="after")
     def setup_directories(self) -> "Settings":
