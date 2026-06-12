@@ -30,6 +30,7 @@ readonly LOCATION="${BQ_LOCATION:-europe-west1}"
 readonly TABLE_TRANSLATION_JOBS="translation_jobs"
 readonly TABLE_TRANSLATION_COSTS="translation_costs"
 readonly TABLE_DLP_MAPPINGS="dlp_mappings"
+readonly TABLE_TRANSLATION_REVIEWS="translation_reviews"
 
 readonly PROJECT_SANDBOX="${BQ_PROJECT_SANDBOX:-aicoesandox}"
 readonly PROJECT_DEV="${BQ_PROJECT_DEV:-aicoedev}"
@@ -38,6 +39,7 @@ readonly PROJECT_PROD="${BQ_PROJECT_PROD:-aicoeprod}"
 readonly SCHEMA_TRANSLATION_JOBS="${SCHEMA_DIR}/translation_jobs.json"
 readonly SCHEMA_TRANSLATION_COSTS="${SCHEMA_DIR}/translation_costs.json"
 readonly SCHEMA_DLP_MAPPINGS="${SCHEMA_DIR}/dlp_mappings.json"
+readonly SCHEMA_TRANSLATION_REVIEWS="${SCHEMA_DIR}/translation_reviews.json"
 
 DRY_RUN=0
 CUSTOM_PROJECT=""
@@ -77,7 +79,8 @@ require_tools() {
   for schema_file in \
     "$SCHEMA_TRANSLATION_JOBS" \
     "$SCHEMA_TRANSLATION_COSTS" \
-    "$SCHEMA_DLP_MAPPINGS"; do
+    "$SCHEMA_DLP_MAPPINGS" \
+    "$SCHEMA_TRANSLATION_REVIEWS"; do
     [[ -f "$schema_file" ]] || {
       echo "ERROR: Missing schema file: $schema_file" >&2
       exit 1
@@ -266,11 +269,13 @@ provision_project() {
   sync_table "$project" "$dataset" "$TABLE_TRANSLATION_JOBS" "$SCHEMA_TRANSLATION_JOBS" "submitted_at" "status,job_id"
   sync_table "$project" "$dataset" "$TABLE_TRANSLATION_COSTS" "$SCHEMA_TRANSLATION_COSTS" "timestamp"
   sync_table "$project" "$dataset" "$TABLE_DLP_MAPPINGS" "$SCHEMA_DLP_MAPPINGS" "masked_at" "job_id,chunk_index"
+  sync_table "$project" "$dataset" "$TABLE_TRANSLATION_REVIEWS" "$SCHEMA_TRANSLATION_REVIEWS" "created_at" "job_id"
 
   log "Done: ${project}:${dataset}"
   echo "  - ${TABLE_TRANSLATION_JOBS}"
   echo "  - ${TABLE_TRANSLATION_COSTS}"
   echo "  - ${TABLE_DLP_MAPPINGS}"
+  echo "  - ${TABLE_TRANSLATION_REVIEWS}"
 }
 
 main() {

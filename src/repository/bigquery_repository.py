@@ -435,47 +435,23 @@ class BigQueryRepository:
     async def write_chunk_cost_attribution(
         self, job_id: str, records: list[dict[str, Any]]
     ) -> None:
-        """Write per-chunk token usage and cost records for a completed job."""
+        """Insert per-chunk cost attribution rows for one job."""
         if not records:
             return
         rows = [
             {
                 "job_id": job_id,
                 "chunk_index": int(r["chunk_index"]),
-                "input_tokens": int(r.get("tokens_input", 0) or 0),
-                "output_tokens": int(r.get("tokens_output", 0) or 0),
-                "cost_usd": float(r.get("cost_usd", 0.0) or 0.0),
-                "model_id": r.get("model_id"),
-                "timestamp": r.get("timestamp", datetime.now(UTC).isoformat()),
+                "input_tokens": int(r["tokens_input"]),
+                "output_tokens": int(r["tokens_output"]),
+                "cost_usd": float(r["cost_usd"]),
             }
             for r in records
         ]
         await self._insert_rows_json(self.cost_attribution_table, rows)
 
-    async def ensure_reviews_table_exists(self) -> None:
-        """Create the translation_reviews table if it does not already exist."""
-        schema = [
-            bigquery.SchemaField("review_id", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("job_id", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("rating", "INT64", mode="REQUIRED"),
-            bigquery.SchemaField("comment", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("reviewer_email", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("created_at", "TIMESTAMP", mode="REQUIRED"),
-            bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
-        ]
-        table = bigquery.Table(self.reviews_table, schema=schema)
-        try:
-            await asyncio.to_thread(self.client.create_table, table, exists_ok=True)
-        except GoogleAPIError as exc:
-            raise StorageError(
-                f"Failed to ensure reviews table exists: {exc}",
-                operation="create_table",
-                path=self.reviews_table,
-            ) from exc
-
     async def upsert_review(self, review_data: dict[str, Any]) -> None:
         """Insert or update a review row via MERGE (keyed on review_id)."""
-        await self.ensure_reviews_table_exists()
         reviews_table = self._validate_table_name(self.reviews_table)
         # nosec B608 – table name validated; all values bound via ScalarQueryParameter.
         query = f"""
@@ -538,7 +514,6 @@ class BigQueryRepository:
 
     async def get_reviews_by_job_id(self, job_id: str) -> list[dict[str, Any]]:
         """Return all reviews for a given job_id, ordered by created_at desc."""
-        await self.ensure_reviews_table_exists()
         reviews_table = self._validate_table_name(self.reviews_table)
         # nosec B608 – table name validated; job_id bound via ScalarQueryParameter.
         query = f"""

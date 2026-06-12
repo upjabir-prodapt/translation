@@ -159,8 +159,8 @@ class Settings(BaseSettings):
     # Gemini / Judge
     # -----------------------------
 
-    GEMINI_INPUT_COST_PER_1K: float = 0.00125
-    GEMINI_OUTPUT_COST_PER_1K: float = 0.005
+    GEMINI_INPUT_COST_PER_1K: float = 0.0003
+    GEMINI_OUTPUT_COST_PER_1K: float = 0.0025
     JUDGE_MODEL: str = "gemini-2.5-flash"
     QUALITY_THRESHOLD: float = 0.6
     QUALITY_EARLY_ACCEPT_THRESHOLD: float = 0.92

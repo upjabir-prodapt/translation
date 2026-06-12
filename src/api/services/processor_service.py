@@ -71,6 +71,7 @@ class JobProcessor:
     def __init__(self, progress_tracker: Any):
         self.progress_tracker = progress_tracker
         self._doc_layout_model: OnnxModel | None = None
+        self._current_attempt_chunks: int = 0
 
     def _get_doc_layout_model(self) -> OnnxModel:
         if self._doc_layout_model is None:
@@ -281,6 +282,7 @@ class JobProcessor:
     async def _run_single_attempt(
         self, translation_config: TranslationConfig, config: dict[str, Any]
     ) -> dict[str, Any]:
+        self._current_attempt_chunks = 0
         async for event in async_translate(translation_config):
             result = await self._handle_translation_event(event, config)
             if result is not None:
@@ -677,6 +679,9 @@ class JobProcessor:
             overall_progress * self.PROGRESS_TRANSLATION_RANGE
         )
         stage = event.get("stage", "Processing")
+        self._current_attempt_chunks = max(
+            self._current_attempt_chunks, int(event.get("stage_current", 0))
+        )
         await self.progress_tracker.update(
             mapped_progress, f"{stage} ({event.get('overall_progress', 0):.0f}%)"
         )
@@ -703,4 +708,8 @@ class JobProcessor:
             if file_path and Path(file_path).exists():
                 output_files[f"{file_type}_path"] = Path(file_path)
         page_count = result.get("page_count", 0) if isinstance(result, dict) else 0
-        return {**output_files, "page_count": page_count}
+        return {
+            **output_files,
+            "page_count": page_count,
+            "chunks_processed": self._current_attempt_chunks,
+        }

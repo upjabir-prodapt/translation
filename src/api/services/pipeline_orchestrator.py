@@ -27,7 +27,6 @@ from src.config.constants import settings
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
-from src.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import StorageError
@@ -35,6 +34,27 @@ from src.repository.repository_exception import StorageError
 logger = logging.getLogger(__name__)
 
 _OMIT = object()
+
+
+def _extract_model_version(model_id: str) -> str | None:
+    """Extract a human-readable version string from a model ID.
+
+    Examples:
+        "gemini-2.5-flash" -> "2.5 flash"
+        "claude-opus-4-7"  -> "opus 4-7"
+    """
+    if not model_id:
+        return None
+    for prefix in ("gemini-", "claude-"):
+        if model_id.lower().startswith(prefix):
+            return model_id[len(prefix) :].replace("-", " ", 1)
+    return model_id
+
+
+def _attempt_index_to_variant(attempt_index: int) -> str:
+    """Convert a 1-based attempt index to an A/B/C variant label."""
+    idx = max(1, attempt_index) - 1
+    return chr(ord("A") + idx) if idx < 26 else str(attempt_index)
 
 
 class _PipelineProgressTracker:
@@ -133,6 +153,42 @@ class PipelineOrchestrator:
             set_root_span(pipeline_span)
             await self._execute_pipeline(job_id, job_data, pipeline_span)
 
+    async def _write_per_chunk_costs(
+        self,
+        *,
+        job_id: str,
+        local_input_path: Path,
+        token_usage: dict[str, Any],
+        model_id: str,
+        timestamp: str,
+    ) -> None:
+        """Split the source PDF into chunks, compute proportional costs, and persist to BQ.
+
+        Errors are swallowed so a BQ failure never aborts a successful translation.
+        """
+        try:
+            from src.doctranslator.format.pdf.split_manager import (
+                StructureAwareSplitStrategy,
+            )
+
+            class _Cfg:
+                input_file = local_input_path
+
+            chunks = StructureAwareSplitStrategy().determine_split_points(_Cfg())
+            records = compute_per_chunk_costs(
+                chunks,
+                total_input_tokens=int(token_usage.get("prompt_tokens", 0)),
+                total_output_tokens=int(token_usage.get("completion_tokens", 0)),
+                input_rate_per_1k=float(settings.GEMINI_INPUT_COST_PER_1K),
+                output_rate_per_1k=float(settings.GEMINI_OUTPUT_COST_PER_1K),
+            )
+            await self.bigquery.write_chunk_cost_attribution(job_id, records)
+        except Exception:
+            logger.exception(
+                "Per-chunk cost attribution failed for job %s — result unaffected",
+                job_id,
+            )
+
     async def _execute_pipeline(
         self, job_id: str, job_data: dict[str, Any], pipeline_span
     ) -> None:
@@ -218,6 +274,8 @@ class PipelineOrchestrator:
                     preferred_filename=preferred_output_name,
                 )
 
+            quality_rpt = attempt_result.get("quality_report") or {}
+            attempt_idx = int(attempt_result.get("attempt_index") or 1)
             result_payload = {
                 "output_gcs_uri": selected_output_uri,
                 "token_count": int(
@@ -230,24 +288,33 @@ class PipelineOrchestrator:
                 ),
                 "intent": intent,
                 "model_used": attempt_result.get("model_id"),
-                "retry_count": max(0, attempt_result.get("attempt_index")),
+                "model_version": _extract_model_version(
+                    attempt_result.get("model_id") or ""
+                ),
+                "confidence_score": float(quality_rpt.get("final_score", 0.0))
+                if quality_rpt.get("final_score") is not None
+                else None,
+                "ab_variant": _attempt_index_to_variant(attempt_idx),
+                "chunks": int(attempt_result.get("chunks_processed") or 0) or None,
+                "retry_count": max(0, attempt_idx - 1),
                 "quality_report": attempt_result.get("quality_report"),
                 "dlp_provider": attempt_result.get("dlp_provider"),
                 "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode"),
             }
 
-            completed_at = datetime.now(UTC)
-            await self._update_status(
-                job_id,
-                status="completed",
-                result=result_payload,
-                completed_at=completed_at,
-                error_message=None,
-            )
-
             token_usage = attempt_result.get("token_usage") or {}
             total_cost_usd = float(token_usage.get("estimated_cost_usd", 0.0))
             validate_job_cost(total_cost_usd)
+
+            completed_at = datetime.now(UTC)
+
+            await self._write_per_chunk_costs(
+                job_id=job_id,
+                local_input_path=local_input_path,
+                token_usage=token_usage,
+                model_id=str(attempt_result.get("model_id") or ""),
+                timestamp=completed_at.isoformat(),
+            )
 
             await self.bigquery.write_cost_attribution(
                 {
@@ -264,12 +331,12 @@ class PipelineOrchestrator:
                 }
             )
 
-            await self._write_per_chunk_costs(
-                job_id=job_id,
-                local_input_path=local_input_path,
-                token_usage=token_usage,
-                model_id=str(attempt_result.get("model_id") or ""),
-                timestamp=completed_at.isoformat(),
+            await self._update_status(
+                job_id,
+                status="completed",
+                result=result_payload,
+                completed_at=completed_at,
+                error_message=None,
             )
             logger.info(f"Translation pipeline finished for job {job_id}")
 
@@ -345,35 +412,3 @@ class PipelineOrchestrator:
             )
         finally:
             self.temp_workspace_service.cleanup(job_id)
-
-    async def _write_per_chunk_costs(
-        self,
-        *,
-        job_id: str,
-        local_input_path: Path,
-        token_usage: dict[str, Any],
-        model_id: str,
-        timestamp: str,
-    ) -> None:
-        """Compute and persist per-chunk token usage and cost to BigQuery."""
-        try:
-            strategy = StructureAwareSplitStrategy()
-            mock_cfg = type("_Cfg", (), {"input_file": str(local_input_path)})()
-            chunks = strategy.determine_split_points(mock_cfg)
-
-            records = compute_per_chunk_costs(
-                chunks=chunks,
-                total_input_tokens=int(token_usage.get("prompt_tokens", 0)),
-                total_output_tokens=int(token_usage.get("completion_tokens", 0)),
-                input_rate_per_1k=float(settings.GEMINI_INPUT_COST_PER_1K),
-                output_rate_per_1k=float(settings.GEMINI_OUTPUT_COST_PER_1K),
-            )
-            for rec in records:
-                rec["model_id"] = model_id
-                rec["timestamp"] = timestamp
-
-            await self.bigquery.write_chunk_cost_attribution(job_id, records)
-        except Exception:
-            logger.exception(
-                f"Failed to write per-chunk cost attribution for job {job_id}"
-            )
