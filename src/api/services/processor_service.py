@@ -1,13 +1,10 @@
 """Translation processing service for API-only runtime."""
 
-import json
 import logging
 import re
 import uuid
 from collections import Counter
 from collections.abc import Iterator
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +14,7 @@ from langdetect import LangDetectException
 from langdetect import detect_langs
 from opentelemetry.trace import SpanKind
 
-from src.api.services.quality_judge_service import GoogleADKJudgeAgent
-from src.api.services.quality_judge_service import QualityJudgeResult
-from src.api.services.quality_judge_service import extract_attempt_text
+from src.api.services.model_attempt_orchestrator import ModelAttemptOrchestrator
 from src.api.services.task_models import DocTranslatorTranslationConfig
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
@@ -71,6 +66,8 @@ class JobProcessor:
     def __init__(self, progress_tracker: Any):
         self.progress_tracker = progress_tracker
         self._doc_layout_model: OnnxModel | None = None
+        self._current_attempt_chunks: int = 0
+        self._model_orchestrator = ModelAttemptOrchestrator(self)
 
     def _get_doc_layout_model(self) -> OnnxModel:
         if self._doc_layout_model is None:
@@ -100,12 +97,6 @@ class JobProcessor:
             return []
 
     async def translate(self, config: dict[str, Any]) -> dict[str, Any]:
-        output_base_dir = Path(config["output_dir"])
-        output_base_dir.mkdir(parents=True, exist_ok=True)
-        model_list = config.get("model_list", [])
-        if not model_list:
-            raise ValueError("model_list is required for translation")
-
         glossary_filename = config.get("glossary_filename")
         if glossary_filename and not config.get("glossaries"):
             config = dict(config)
@@ -115,272 +106,17 @@ class JobProcessor:
                 lang_out=str(config.get("lang_out", "")),
             )
 
-        max_attempts = min(
-            int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
-            len(model_list),
-        )
-        judge = GoogleADKJudgeAgent(config.get("judge_model"))
-        best_attempt_result: dict[str, Any] | None = None
-        best_attempt_score = -1.0
-        best_attempt_config: dict[str, Any] | None = None
-        best_translation_config: TranslationConfig | None = None
-        best_quality_result: QualityJudgeResult | None = None
-        attempt_reports: list[dict[str, Any]] = []
-
-        for model_index in range(max_attempts):
-            (
-                attempt_result,
-                attempt_config,
-                translation_config,
-                quality_result,
-                attempt_report,
-            ) = await self._execute_attempt(
-                model_index=model_index,
-                model_list=model_list,
-                config=config,
-                output_base_dir=output_base_dir,
-                max_attempts=max_attempts,
-                judge=judge,
-            )
-
-            if not attempt_result or not quality_result or not attempt_report:
-                continue
-
-            attempt_reports.append(attempt_report)
-            final_score = quality_result.final_score
-
-            if final_score > best_attempt_score:
-                best_attempt_score = final_score
-                best_attempt_result = {
-                    **attempt_result,
-                    "attempt_index": attempt_config["attempt_index"],
-                    "model_id": attempt_config["selected_model"],
-                    "quality_report": quality_result.to_dict(),
-                    "token_usage": attempt_report["token_usage"],
-                }
-                best_attempt_config = attempt_config
-                best_translation_config = translation_config
-                best_quality_result = quality_result
-
-            if quality_result.pass_fail:
-                break
-
-        if best_attempt_result is None:
-            raise RuntimeError("All translation attempts failed")
-        if best_translation_config:
-            best_attempt_result["dlp_provider"] = best_translation_config.dlp_provider
-            best_attempt_result["dlp_chunk_mode"] = (
-                best_translation_config.dlp_chunk_mode
-            )
-            best_attempt_result["dlp_token_rows"] = list(
-                best_translation_config.dlp_token_rows
-            )
-        if best_translation_config and best_attempt_config and best_quality_result:
-            cover_page_metadata = self._build_cover_page_metadata(
-                best_translation_config,
-                best_attempt_config,
-                best_quality_result,
-            )
-            self._apply_cover_pages(
-                best_translation_config,
-                best_attempt_result,
-                cover_page_metadata,
-            )
-
-        return best_attempt_result
-
-    async def _execute_attempt(
-        self,
-        *,
-        model_index: int,
-        model_list: list[str],
-        config: dict[str, Any],
-        output_base_dir: Path,
-        max_attempts: int,
-        judge: GoogleADKJudgeAgent,
-    ) -> tuple[
-        dict[str, Any] | None,
-        dict[str, Any],
-        TranslationConfig | None,
-        QualityJudgeResult | None,
-        dict[str, Any] | None,
-    ]:
-        attempt_index = model_index + 1
-        selected_model = model_list[model_index]
-        attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
-        attempt_output_dir.mkdir(parents=True, exist_ok=True)
-        attempt_config = {
-            **config,
-            "selected_model": selected_model,
-            "attempt_index": attempt_index,
-        }
-        logger.info(
-            f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}"
-        )
-        translation_config = self._build_translation_config(
-            attempt_config, attempt_output_dir
-        )
-
-        await self.progress_tracker.update(
-            self.PROGRESS_START,
-            f"Attempt {attempt_index}/{max_attempts}: model={selected_model}",
-        )
-        try:
-            with tracer_pipeline.start_as_current_span(
-                "pipeline.translation",
-                kind=SpanKind.INTERNAL,
-                attributes={
-                    "translation.attempt": attempt_index,
-                    "translation.model": selected_model,
-                },
-            ):
-                attempt_result = await self._run_single_attempt(
-                    translation_config, attempt_config
-                )
-        except Exception as exc:
-            logger.exception(
-                f"Attempt {attempt_index} failed with model {selected_model} with exception: {exc}"
-            )
-            if attempt_index == max_attempts:
-                raise
-            return None, attempt_config, None, None, None
-
-        source_text, translated_text = extract_attempt_text(
-            Path(str(translation_config.working_dir))
-        )
-        with tracer_pipeline.start_as_current_span(
-            "pipeline.quality_judge",
-            kind=SpanKind.INTERNAL,
-            attributes={"translation.attempt": attempt_index},
-        ):
-            quality_result = await self._evaluate_attempt_quality(
-                judge=judge,
-                source_text=source_text,
-                translated_text=translated_text,
-            )
-        token_usage = self._collect_token_usage(translation_config, selected_model)
-        attempt_report = {
-            "attempt_index": attempt_index,
-            "model_id": selected_model,
-            "quality": quality_result.to_dict(),
-            "token_usage": token_usage,
-            "working_dir": str(translation_config.working_dir),
-            "output_dir": str(attempt_output_dir),
-        }
-        self._write_quality_report(
-            Path(str(translation_config.working_dir)), attempt_report
-        )
-        return (
-            attempt_result,
-            attempt_config,
-            translation_config,
-            quality_result,
-            attempt_report,
-        )
+        return await self._model_orchestrator.run_model_chain(config)
 
     async def _run_single_attempt(
         self, translation_config: TranslationConfig, config: dict[str, Any]
     ) -> dict[str, Any]:
+        self._current_attempt_chunks = 0
         async for event in async_translate(translation_config):
             result = await self._handle_translation_event(event, config)
             if result is not None:
                 return result
         raise RuntimeError("Translation completed without finish event")
-
-    async def _evaluate_attempt_quality(
-        self,
-        *,
-        judge: GoogleADKJudgeAgent,
-        source_text: str,
-        translated_text: str,
-    ) -> QualityJudgeResult:
-        if not source_text.strip() or not translated_text.strip():
-            return QualityJudgeResult(
-                alignment_score=0.0,
-                omission_score=0.0,
-                hallucination_score=0.0,
-                final_score=0.0,
-                pass_fail=False,
-                reasons=["Missing source/translated text for quality evaluation."],
-                model=judge.model,
-            )
-        return await judge.evaluate_async(
-            source_text=source_text, translated_text=translated_text
-        )
-
-    def _collect_token_usage(
-        self, translation_config: TranslationConfig, selected_model: str
-    ) -> dict[str, Any]:
-        translator = translation_config.translator
-        prompt_tokens = self._counter_value(
-            getattr(translator, "prompt_token_count", 0)
-        )
-        completion_tokens = self._counter_value(
-            getattr(translator, "completion_token_count", 0)
-        )
-        total_tokens = self._counter_value(getattr(translator, "token_count", 0))
-        cache_hit_tokens = self._counter_value(
-            getattr(translator, "cache_hit_prompt_token_count", 0)
-        )
-        estimated_cost = self._estimate_cost(
-            model_id=selected_model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        return {
-            "model_id": selected_model,
-            "total_tokens": total_tokens,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cache_hit_prompt_tokens": cache_hit_tokens,
-            "estimated_cost_usd": estimated_cost,
-        }
-
-    def _estimate_cost(
-        self, *, model_id: str, prompt_tokens: int, completion_tokens: int
-    ) -> float:
-        normalized = model_id.lower()
-        if normalized.startswith("gemini"):
-            input_rate = settings.GEMINI_INPUT_COST_PER_1K
-            output_rate = settings.GEMINI_OUTPUT_COST_PER_1K
-        return round(
-            (prompt_tokens / 1000.0) * float(input_rate)
-            + (completion_tokens / 1000.0) * float(output_rate),
-            6,
-        )
-
-    def _write_quality_report(
-        self, working_dir: Path, attempt_report: dict[str, Any]
-    ) -> None:
-        try:
-            quality_path = working_dir / "quality_report.json"
-            quality_path.write_text(
-                json.dumps(attempt_report, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            logger.exception(f"Failed to write quality report in {working_dir}")
-
-    def _build_cover_page_metadata(
-        self,
-        translation_config: TranslationConfig,
-        config: dict[str, Any],
-        quality_result: QualityJudgeResult,
-    ) -> TranslationCoverPageMetadata:
-        total_pages = self._get_total_pdf_pages(translation_config.input_file)
-        translated_sections = translation_config.get_translated_sections_summary(
-            total_pages
-        )
-        return TranslationCoverPageMetadata(
-            original_language=translation_config.lang_in,
-            target_language=translation_config.lang_out,
-            model_used=str(config.get("selected_model") or "Unknown"),
-            domain=str(config.get("domain") or "N/A"),
-            translation_date=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            confidence_score=quality_result.final_score,
-            translated_sections=translated_sections,
-            judge_model=quality_result.model,
-        )
 
     def _get_total_pdf_pages(self, input_file: str | Path) -> int:
         try:
@@ -677,6 +413,9 @@ class JobProcessor:
             overall_progress * self.PROGRESS_TRANSLATION_RANGE
         )
         stage = event.get("stage", "Processing")
+        self._current_attempt_chunks = max(
+            self._current_attempt_chunks, int(event.get("stage_current", 0))
+        )
         await self.progress_tracker.update(
             mapped_progress, f"{stage} ({event.get('overall_progress', 0):.0f}%)"
         )
@@ -703,4 +442,8 @@ class JobProcessor:
             if file_path and Path(file_path).exists():
                 output_files[f"{file_type}_path"] = Path(file_path)
         page_count = result.get("page_count", 0) if isinstance(result, dict) else 0
-        return {**output_files, "page_count": page_count}
+        return {
+            **output_files,
+            "page_count": page_count,
+            "chunks_processed": self._current_attempt_chunks,
+        }

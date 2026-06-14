@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -97,14 +96,17 @@ class GoogleADKJudgeAgent:
     def _generate_judge_content_with_retry(
         self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
     ):
-        from opentelemetry.trace import Status
-        from opentelemetry.trace import StatusCode
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_MODEL
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_NAME
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_CHARS
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_HASH
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_PREVIEW
+        from src.doctranslator.translator.instrumentation import ATTR_LLM_TEMPERATURE
+        from src.doctranslator.translator.instrumentation import instrumented_llm_call
+        from src.doctranslator.translator.instrumentation import prompt_fingerprint
+        from src.doctranslator.translator.usage import TokenUsage
 
-        prompt_chars = len(contents)
-        prompt_hash = hashlib.sha256(  # nosec B303 - sha256 used for debug logging identifier only, not for security
-            contents.encode("utf-8", errors="replace")
-        ).hexdigest()[:12]
-        prompt_preview = contents[:300].replace("\n", "\\n")
+        prompt_chars, prompt_hash, prompt_preview = prompt_fingerprint(contents)
         temperature = float(getattr(config, "temperature", 0.0) or 0.0)
         logger.debug(
             f"Judge generate_content: model={model} "
@@ -112,52 +114,31 @@ class GoogleADKJudgeAgent:
             f"temperature={temperature} "
             f"prompt_preview={prompt_preview!r}",
         )
-        t0 = time.monotonic()
-        with tracer_llm.start_as_current_span(
-            "llm.judge.generate_content",
-            kind=SpanKind.CLIENT,
+
+        def _call():
+            return self._client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+
+        return instrumented_llm_call(
+            span_name="llm.judge.generate_content",
             attributes={
-                "llm.name": self.model,
-                "llm.model": model,
+                ATTR_LLM_NAME: self.model,
+                ATTR_LLM_MODEL: model,
                 "llm.provider": "google_vertexai",
-                "llm.temperature": temperature,
-                "llm.prompt_chars": prompt_chars,
-                "llm.prompt_hash": prompt_hash,
-                "llm.prompt_preview": prompt_preview,
+                ATTR_LLM_TEMPERATURE: temperature,
+                ATTR_LLM_PROMPT_CHARS: prompt_chars,
+                ATTR_LLM_PROMPT_HASH: prompt_hash,
+                ATTR_LLM_PROMPT_PREVIEW: prompt_preview,
             },
-        ) as span:
-            try:
-                response = self._client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=config,
-                )
-                usage = getattr(response, "usage_metadata", None)
-                if usage:
-                    input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-                    output_tokens = int(
-                        getattr(usage, "candidates_token_count", 0) or 0
-                    )
-                    total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
-                    cached_tokens = int(
-                        getattr(usage, "cached_content_token_count", 0) or 0
-                    )
-                    span.set_attribute("llm.input_tokens", input_tokens)
-                    span.set_attribute("llm.output_tokens", output_tokens)
-                    span.set_attribute("llm.total_tokens", total_tokens)
-                    span.set_attribute("llm.cached_tokens", cached_tokens)
-            except Exception as exc:
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR, str(exc)))
-                raise
-            finally:
-                elapsed = time.monotonic() - t0
-                span.set_attribute("llm.latency_s", round(elapsed, 3))
-                logger.debug(
-                    f"Judge generate_content finished: model={model} "
-                    f"latency_s={elapsed:.3f} prompt_hash={prompt_hash}",
-                )
-        return response
+            call=_call,
+            usage_fn=lambda resp: TokenUsage.from_gemini_usage(
+                getattr(resp, "usage_metadata", None)
+            ),
+            log_prefix=f"Judge generate_content model={model}",
+        )
 
     def _judge_with_llm(
         self, source_text: str, translated_text: str

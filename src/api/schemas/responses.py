@@ -147,6 +147,15 @@ class HealthResponse(BaseModel):
     uptime_seconds: float = Field(..., description="Service uptime in seconds")
 
 
+class ReviewSubmitResponse(BaseModel):
+    """Response model for review submission (POST /reviews/{job_id})."""
+
+    status: str = Field(..., description="'successfully sent' or 'failed'")
+    review_id: str | None = Field(
+        None, description="Unique review identifier (present on success)"
+    )
+
+
 class ReviewResponse(BaseModel):
     """Response model for a single translation review."""
 

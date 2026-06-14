@@ -1,25 +1,12 @@
 """Factory helpers for selecting translation engines by model."""
 
 from src.config.constants import settings
-from src.doctranslator.translator.providers import LLMProvider
-from src.doctranslator.translator.translator import BaseTranslator
-from src.doctranslator.translator.translator import ClaudeVertexAITranslator
-from src.doctranslator.translator.translator import GeminiVertexAITranslator
-from src.doctranslator.translator.translator import set_translate_rate_limiter
-
-
-def _infer_provider(model_name: str) -> LLMProvider:
-    """Infer the LLMProvider from a model_id string."""
-    normalized = model_name.strip().lower()
-    if normalized.startswith(LLMProvider.GEMINI_VERTEXAI) or normalized.startswith(
-        "gemini"
-    ):
-        return LLMProvider.GEMINI_VERTEXAI
-    if normalized.startswith(LLMProvider.CLAUDE) or normalized.startswith("claude"):
-        return LLMProvider.CLAUDE
-    raise ValueError(
-        f"Unsupported model '{model_name}'. Supported prefixes: 'gemini', 'claude'."
-    )
+from src.doctranslator.translator.base import BaseTranslator
+from src.doctranslator.translator.provider_types import LLMProvider
+from src.doctranslator.translator.providers import ClaudeVertexAITranslator
+from src.doctranslator.translator.providers import GeminiVertexAITranslator
+from src.doctranslator.translator.rate_limiter import set_translate_rate_limiter
+from src.doctranslator.translator.resolver import infer_provider
 
 
 def create_translator(
@@ -31,13 +18,14 @@ def create_translator(
 ) -> BaseTranslator:
     """Create one translator for the given model_id string."""
     set_translate_rate_limiter(max(int(qps), 1))
-    provider = _infer_provider(model_name)
+    provider = infer_provider(model_name)
+    resolved_model = model_name.strip()
 
     if provider == LLMProvider.GEMINI_VERTEXAI:
         return GeminiVertexAITranslator(
             lang_in=lang_in,
             lang_out=lang_out,
-            model=settings.GEMINI_MODEL,
+            model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
         )
 
@@ -45,7 +33,7 @@ def create_translator(
         return ClaudeVertexAITranslator(
             lang_in=lang_in,
             lang_out=lang_out,
-            model=settings.CLAUDE_MODEL,
+            model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
         )
 

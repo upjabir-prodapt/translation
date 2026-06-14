@@ -260,33 +260,32 @@ class TestChunkingCostIsZero:
 
     def test_no_api_calls_means_zero_token_consumption(self, multi_section_pdf):
         """Running chunking should record zero prompt/completion tokens."""
-        from src.api.utils.cost_utils import compute_chunk_cost
+        from src.api.services.llm_cost_service import VertexLLMCostService
 
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
         chunks = strategy.determine_split_points(_config(multi_section_pdf))
 
-        # Chunking itself does not produce LLM tokens
-        chunking_input_tokens = 0
-        chunking_output_tokens = 0
-
-        for chunk in chunks:
-            cost = compute_chunk_cost(
-                chunking_input_tokens,
-                chunking_output_tokens,
-                input_rate_per_1k=0.30,
-                output_rate_per_1k=0.60,
-            )
-            assert cost == 0.0, f"Chunk {chunk.chunk_index} should have zero cost"
+        service = VertexLLMCostService()
+        breakdown = service.calculate_attempt_cost(
+            model_id="gemini-2.5-flash",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+        assert breakdown.total_cost_usd == 0.0
+        assert len(chunks) >= 1
 
     def test_chunking_cost_is_exactly_zero_regardless_of_model_rate(
         self, multi_section_pdf
     ):
-        from src.api.utils.cost_utils import compute_chunk_cost
+        from src.api.services.llm_cost_service import VertexLLMCostService
 
-        # Even with an expensive model rate, zero tokens = zero cost
-        expensive_rate = 100.0
-        cost = compute_chunk_cost(0, 0, expensive_rate, expensive_rate)
-        assert cost == 0.0
+        service = VertexLLMCostService()
+        breakdown = service.calculate_attempt_cost(
+            model_id="gemini-2.5-flash",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+        assert breakdown.total_cost_usd == 0.0
 
     def test_all_llm_entry_points_untouched_during_full_chunking_run(
         self, multi_section_pdf

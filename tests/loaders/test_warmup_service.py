@@ -185,8 +185,11 @@ class TestWarmupService:
 
     @patch("src.loaders.services.warmup_service.async_warmup")
     def test_warmup_sync(self, mock_async_warm):
-        # When no loop is running
+        from tests.async_test_utils import mock_asyncio_run
+
+        # When no loop is running, warmup() delegates to asyncio.run(async_warmup(...))
         with patch("asyncio.get_running_loop", side_effect=RuntimeError):
-            with patch("asyncio.run") as mock_run:
+            with patch("asyncio.run", side_effect=mock_asyncio_run) as mock_run:
                 warmup()
+                mock_async_warm.assert_called_once_with(None)
                 mock_run.assert_called_once()

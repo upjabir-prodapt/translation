@@ -84,9 +84,6 @@ async def test_pipeline_orchestrator_passes_enable_dlp_and_persists_il_tokens(
     orchestrator.glossary_service = SimpleNamespace(
         load_domain_glossary=lambda **_kwargs: []
     )
-    orchestrator.cover_page_service = SimpleNamespace(
-        build=lambda **_kwargs: {"cover": True}
-    )
     orchestrator.assembly_service = SimpleNamespace(
         upload_outputs=AsyncMock(
             return_value={"mono_pdf_path": "gs://bucket/output.pdf"}

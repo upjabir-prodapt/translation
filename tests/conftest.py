@@ -7,15 +7,10 @@ Requirements (add to dev dependencies):
 """
 
 import os
+from pathlib import Path
 
-# Set dummy environment variables to prevent Pydantic validation errors
-# when loading application settings in the test suite without a .env file.
-os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "mock-project-id")
-os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
-os.environ.setdefault("GCS_BUCKET_NAME", "mock-bucket")
-os.environ.setdefault("BIGQUERY_DATASET", "mock-dataset")
-os.environ.setdefault("JWT_SECRET_KEY", "mock-secret-key-for-testing-only-12345")
-os.environ.setdefault("TRACE_ENABLED", "false")
+# Load tests/test.env before any module imports Settings (constants.py loads at import time).
+os.environ.setdefault("DOTENV_PATH", str(Path(__file__).resolve().parent / "test.env"))
 
 import base64
 import io

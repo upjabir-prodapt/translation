@@ -3,82 +3,13 @@
 import io
 from pathlib import Path
 from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import fitz
 import pytest
 from src.api.utils.cost_utils import MAX_JOB_COST_USD
-from src.api.utils.cost_utils import compute_chunk_cost
-from src.api.utils.cost_utils import compute_per_chunk_costs
+from src.api.utils.cost_utils import aggregate_chunk_cost_records
 from src.api.utils.cost_utils import validate_job_cost
-from src.doctranslator.format.pdf.split_manager import SplitPoint
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_INPUT_RATE = 0.30  # $ per 1K input tokens  (e.g. Gemini 1.5 Pro)
-_OUTPUT_RATE = 0.60  # $ per 1K output tokens
-
-
-def _make_chunk(
-    chunk_index: int, token_count: int, title: str | None = None
-) -> SplitPoint:
-    return SplitPoint(
-        start_page=chunk_index * 5,
-        end_page=chunk_index * 5 + 4,
-        chunk_index=chunk_index,
-        token_count=token_count,
-        chapter_title=title,
-    )
-
-
-def _multi_section_chunks() -> list[SplitPoint]:
-    return [
-        _make_chunk(0, 1500, "Introduction"),
-        _make_chunk(1, 2000, "Background"),
-        _make_chunk(2, 2500, "Methodology"),
-        _make_chunk(3, 2000, "Results"),
-        _make_chunk(4, 1500, "Conclusion"),
-    ]
-
-
-# ---------------------------------------------------------------------------
-# compute_chunk_cost — unit tests for the per-chunk cost formula
-# ---------------------------------------------------------------------------
-
-
-class TestComputeChunkCost:
-    def test_cost_formula_with_only_input_tokens(self):
-        # 1000 input tokens at $0.30/1K = $0.30
-        cost = compute_chunk_cost(1000, 0, _INPUT_RATE, _OUTPUT_RATE)
-        assert cost == pytest.approx(0.30, rel=1e-6)
-
-    def test_cost_formula_with_only_output_tokens(self):
-        # 1000 output tokens at $0.60/1K = $0.60
-        cost = compute_chunk_cost(0, 1000, _INPUT_RATE, _OUTPUT_RATE)
-        assert cost == pytest.approx(0.60, rel=1e-6)
-
-    def test_cost_formula_with_both_token_types(self):
-        # 500 input ($0.15) + 500 output ($0.30) = $0.45
-        cost = compute_chunk_cost(500, 500, _INPUT_RATE, _OUTPUT_RATE)
-        assert cost == pytest.approx(0.45, rel=1e-6)
-
-    def test_zero_tokens_yields_zero_cost(self):
-        assert compute_chunk_cost(0, 0, _INPUT_RATE, _OUTPUT_RATE) == 0.0
-
-    def test_cost_scales_linearly_with_token_count(self):
-        cost_1k = compute_chunk_cost(1000, 0, _INPUT_RATE, _OUTPUT_RATE)
-        cost_2k = compute_chunk_cost(2000, 0, _INPUT_RATE, _OUTPUT_RATE)
-        assert cost_2k == pytest.approx(2 * cost_1k, rel=1e-6)
-
-    def test_input_and_output_rates_are_independent(self):
-        cost = compute_chunk_cost(
-            1000, 1000, input_rate_per_1k=1.0, output_rate_per_1k=2.0
-        )
-        assert cost == pytest.approx(3.0, rel=1e-6)
-
 
 # ---------------------------------------------------------------------------
 # validate_job_cost — guardrail tests
@@ -108,211 +39,40 @@ class TestValidateJobCost:
 
 
 # ---------------------------------------------------------------------------
-# compute_per_chunk_costs — proportional distribution tests
+# aggregate_chunk_cost_records — accumulated totals tests
 # ---------------------------------------------------------------------------
 
 
-class TestComputePerChunkCosts:
-    def test_returns_one_record_per_chunk(self):
-        chunks = _multi_section_chunks()
-        records = compute_per_chunk_costs(chunks, 5000, 2000, _INPUT_RATE, _OUTPUT_RATE)
-        assert len(records) == len(chunks)
-
-    def test_each_record_has_required_fields(self):
-        records = compute_per_chunk_costs(
-            _multi_section_chunks(), 5000, 2000, _INPUT_RATE, _OUTPUT_RATE
-        )
-        for rec in records:
-            assert "chunk_index" in rec
-            assert "tokens_input" in rec
-            assert "tokens_output" in rec
-            assert "cost_usd" in rec
-
-    def test_chunk_indices_match_split_points(self):
-        chunks = _multi_section_chunks()
-        records = compute_per_chunk_costs(chunks, 5000, 2000, _INPUT_RATE, _OUTPUT_RATE)
-        for chunk, rec in zip(chunks, records, strict=True):
-            assert rec["chunk_index"] == chunk.chunk_index
-
-    def test_total_input_tokens_distributed_across_chunks(self):
-        total_input = 9500
-        records = compute_per_chunk_costs(
-            _multi_section_chunks(), total_input, 0, _INPUT_RATE, _OUTPUT_RATE
-        )
-        assert sum(r["tokens_input"] for r in records) == pytest.approx(
-            total_input, abs=len(records)
-        )
-
-    def test_total_output_tokens_distributed_across_chunks(self):
-        total_output = 4000
-        records = compute_per_chunk_costs(
-            _multi_section_chunks(), 0, total_output, _INPUT_RATE, _OUTPUT_RATE
-        )
-        assert sum(r["tokens_output"] for r in records) == pytest.approx(
-            total_output, abs=len(records)
-        )
-
-    def test_larger_chunks_receive_more_tokens(self):
-        chunks = [
-            _make_chunk(0, token_count=1000),
-            _make_chunk(1, token_count=3000),
+class TestAggregateChunkCostRecords:
+    def test_sums_tokens_and_cost_across_chunks(self):
+        records = [
+            {
+                "chunk_index": 0,
+                "tokens_input": 1500,
+                "tokens_output": 600,
+                "cost_usd": 0.081,
+            },
+            {
+                "chunk_index": 1,
+                "tokens_input": 2000,
+                "tokens_output": 800,
+                "cost_usd": 0.108,
+            },
+            {
+                "chunk_index": 2,
+                "tokens_input": 2500,
+                "tokens_output": 1000,
+                "cost_usd": 0.135,
+            },
         ]
-        records = compute_per_chunk_costs(chunks, 4000, 0, _INPUT_RATE, _OUTPUT_RATE)
-        assert records[1]["tokens_input"] > records[0]["tokens_input"]
+        totals = aggregate_chunk_cost_records(records)
+        assert totals["input_tokens"] == 6000
+        assert totals["output_tokens"] == 2400
+        assert totals["cost_usd"] == pytest.approx(0.324)
 
-    def test_per_chunk_cost_is_non_negative(self):
-        records = compute_per_chunk_costs(
-            _multi_section_chunks(), 5000, 2000, _INPUT_RATE, _OUTPUT_RATE
-        )
-        for rec in records:
-            assert rec["cost_usd"] >= 0.0
-
-    def test_per_chunk_cost_matches_formula(self):
-        chunks = [_make_chunk(0, token_count=1000)]
-        total_input, total_output = 1000, 500
-        records = compute_per_chunk_costs(
-            chunks, total_input, total_output, _INPUT_RATE, _OUTPUT_RATE
-        )
-        expected = compute_chunk_cost(
-            total_input, total_output, _INPUT_RATE, _OUTPUT_RATE
-        )
-        assert records[0]["cost_usd"] == pytest.approx(expected, rel=1e-4)
-
-    def test_single_chunk_absorbs_all_tokens(self):
-        chunks = [_make_chunk(0, token_count=2000)]
-        records = compute_per_chunk_costs(chunks, 3000, 1500, _INPUT_RATE, _OUTPUT_RATE)
-        assert records[0]["tokens_input"] == 3000
-        assert records[0]["tokens_output"] == 1500
-
-    def test_zero_total_tokens_produces_zero_costs(self):
-        records = compute_per_chunk_costs(
-            _multi_section_chunks(), 0, 0, _INPUT_RATE, _OUTPUT_RATE
-        )
-        for rec in records:
-            assert rec["tokens_input"] == 0
-            assert rec["tokens_output"] == 0
-            assert rec["cost_usd"] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# write_chunk_cost_attribution — BQ repository tests
-# ---------------------------------------------------------------------------
-
-
-class TestWriteChunkCostAttribution:
-    @pytest.mark.asyncio
-    async def test_writes_one_row_per_chunk(self):
-        from unittest.mock import patch
-
-        mock_client = MagicMock()
-        mock_client.project = "test-project"
-        mock_client.insert_rows_json.return_value = []
-
-        with patch(
-            "src.repository.bigquery_repository.bigquery.Client",
-            return_value=mock_client,
-        ):
-            with patch("src.repository.bigquery_repository.settings") as mock_settings:
-                mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
-                mock_settings.BIGQUERY_DATASET = "test_dataset"
-                mock_settings.BIGQUERY_TABLE = "jobs"
-                mock_settings.BIGQUERY_COST_TABLE = "cost"
-                mock_settings.BIGQUERY_DLP_TABLE = "dlp"
-
-                from src.repository.bigquery_repository import BigQueryRepository
-
-                repo = BigQueryRepository()
-                records = [
-                    {
-                        "chunk_index": 0,
-                        "tokens_input": 1500,
-                        "tokens_output": 600,
-                        "cost_usd": 0.081,
-                    },
-                    {
-                        "chunk_index": 1,
-                        "tokens_input": 2000,
-                        "tokens_output": 800,
-                        "cost_usd": 0.108,
-                    },
-                    {
-                        "chunk_index": 2,
-                        "tokens_input": 2500,
-                        "tokens_output": 1000,
-                        "cost_usd": 0.135,
-                    },
-                ]
-                await repo.write_chunk_cost_attribution("job-abc", records)
-
-                mock_client.insert_rows_json.assert_called_once()
-                _, rows = mock_client.insert_rows_json.call_args[0]
-                assert len(rows) == 3
-
-    @pytest.mark.asyncio
-    async def test_each_row_has_tokens_input_and_output(self):
-        from unittest.mock import patch
-
-        mock_client = MagicMock()
-        mock_client.project = "test-project"
-        mock_client.insert_rows_json.return_value = []
-
-        with patch(
-            "src.repository.bigquery_repository.bigquery.Client",
-            return_value=mock_client,
-        ):
-            with patch("src.repository.bigquery_repository.settings") as mock_settings:
-                mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
-                mock_settings.BIGQUERY_DATASET = "test_dataset"
-                mock_settings.BIGQUERY_TABLE = "jobs"
-                mock_settings.BIGQUERY_COST_TABLE = "cost"
-                mock_settings.BIGQUERY_DLP_TABLE = "dlp"
-
-                from src.repository.bigquery_repository import BigQueryRepository
-
-                repo = BigQueryRepository()
-                await repo.write_chunk_cost_attribution(
-                    "job-xyz",
-                    [
-                        {
-                            "chunk_index": 0,
-                            "tokens_input": 1000,
-                            "tokens_output": 400,
-                            "cost_usd": 0.054,
-                        }
-                    ],
-                )
-
-                _, rows = mock_client.insert_rows_json.call_args[0]
-                row = rows[0]
-                assert row["input_tokens"] == 1000
-                assert row["output_tokens"] == 400
-                assert row["cost_usd"] == pytest.approx(0.054)
-                assert row["job_id"] == "job-xyz"
-                assert row["chunk_index"] == 0
-
-    @pytest.mark.asyncio
-    async def test_skips_write_when_records_empty(self):
-        from unittest.mock import patch
-
-        mock_client = MagicMock()
-        mock_client.project = "test-project"
-
-        with patch(
-            "src.repository.bigquery_repository.bigquery.Client",
-            return_value=mock_client,
-        ):
-            with patch("src.repository.bigquery_repository.settings") as mock_settings:
-                mock_settings.GOOGLE_CLOUD_PROJECT_ID = "test-project"
-                mock_settings.BIGQUERY_DATASET = "test_dataset"
-                mock_settings.BIGQUERY_TABLE = "jobs"
-                mock_settings.BIGQUERY_COST_TABLE = "cost"
-                mock_settings.BIGQUERY_DLP_TABLE = "dlp"
-
-                from src.repository.bigquery_repository import BigQueryRepository
-
-                repo = BigQueryRepository()
-                await repo.write_chunk_cost_attribution("job-xyz", [])
-                mock_client.insert_rows_json.assert_not_called()
+    def test_empty_records_return_zero_totals(self):
+        totals = aggregate_chunk_cost_records([])
+        assert totals == {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
 
 # ---------------------------------------------------------------------------
@@ -478,201 +238,129 @@ def multi_section_pdf_path(tmp_path_factory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# _write_per_chunk_costs — orchestrator helper
+# _compute_accumulated_chunk_costs — orchestrator helper
 # ---------------------------------------------------------------------------
 
 
-class TestWritePerChunkCosts:
-    """Verify the orchestrator correctly writes per-chunk cost records to BQ."""
+class TestComputeAccumulatedChunkCosts:
+    """Verify the orchestrator aggregates per-chunk costs into job totals."""
 
     @pytest.mark.asyncio
-    async def test_calls_write_chunk_cost_attribution(self, multi_section_pdf_path):
-        mock_bq = AsyncMock()
-        mock_storage = AsyncMock()
-
+    async def test_returns_accumulated_totals(self, multi_section_pdf_path):
         from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
+        orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
         with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
-            await orchestrator._write_per_chunk_costs(
+            totals = await orchestrator._compute_accumulated_chunk_costs(
                 job_id="job-001",
                 local_input_path=multi_section_pdf_path,
                 token_usage={"prompt_tokens": 6000, "completion_tokens": 2000},
                 model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
             )
 
-        mock_bq.write_chunk_cost_attribution.assert_called_once()
+        assert totals is not None
+        assert totals["input_tokens"] == 6000
+        assert totals["output_tokens"] == 2000
+        assert totals["cost_usd"] > 0.0
 
     @pytest.mark.asyncio
-    async def test_produces_one_record_per_chunk(self, multi_section_pdf_path):
-        captured: list = []
-
-        async def capture_write(_job_id, records):
-            captured.extend(records)
-
-        mock_bq = AsyncMock()
-        mock_bq.write_chunk_cost_attribution.side_effect = capture_write
-        mock_storage = AsyncMock()
-
+    async def test_accumulated_cost_matches_sum_of_chunk_records(
+        self, multi_section_pdf_path
+    ):
         from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
+        orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
         with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
-            await orchestrator._write_per_chunk_costs(
+            totals = await orchestrator._compute_accumulated_chunk_costs(
                 job_id="job-002",
                 local_input_path=multi_section_pdf_path,
                 token_usage={"prompt_tokens": 9000, "completion_tokens": 3000},
                 model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
             )
 
-        assert len(captured) > 0, "At least one per-chunk record must be written"
+        assert totals is not None
+        assert totals["input_tokens"] == 9000
+        assert totals["output_tokens"] == 3000
 
     @pytest.mark.asyncio
-    async def test_each_record_has_tokens_input_and_output(
+    async def test_accumulated_totals_have_non_negative_values(
         self, multi_section_pdf_path
     ):
-        captured: list = []
-
-        async def capture_write(_job_id, records):
-            captured.extend(records)
-
-        mock_bq = AsyncMock()
-        mock_bq.write_chunk_cost_attribution.side_effect = capture_write
-        mock_storage = AsyncMock()
-
         from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
+        orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
         with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
-            await orchestrator._write_per_chunk_costs(
+            totals = await orchestrator._compute_accumulated_chunk_costs(
                 job_id="job-003",
                 local_input_path=multi_section_pdf_path,
                 token_usage={"prompt_tokens": 5000, "completion_tokens": 2000},
                 model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
             )
 
-        for rec in captured:
-            assert "tokens_input" in rec
-            assert "tokens_output" in rec
-            assert "cost_usd" in rec
-            assert "chunk_index" in rec
-            assert rec["tokens_input"] >= 0
-            assert rec["tokens_output"] >= 0
-            assert rec["cost_usd"] >= 0.0
+        assert totals is not None
+        assert totals["input_tokens"] >= 0
+        assert totals["output_tokens"] >= 0
+        assert totals["cost_usd"] >= 0.0
 
     @pytest.mark.asyncio
-    async def test_per_chunk_cost_matches_formula(self, multi_section_pdf_path):
-        """Each chunk's cost = compute_chunk_cost(tokens_input, tokens_output, rates)."""
-        captured: list = []
-
-        async def capture_write(_job_id, records):
-            captured.extend(records)
-
-        mock_bq = AsyncMock()
-        mock_bq.write_chunk_cost_attribution.side_effect = capture_write
-        mock_storage = AsyncMock()
-
+    async def test_total_accumulated_cost_satisfies_guardrail(
+        self, multi_section_pdf_path
+    ):
         from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
-        input_rate, output_rate = 0.30, 0.60
-
-        with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
-            mock_settings.GEMINI_INPUT_COST_PER_1K = input_rate
-            mock_settings.GEMINI_OUTPUT_COST_PER_1K = output_rate
-
-            await orchestrator._write_per_chunk_costs(
-                job_id="job-004",
-                local_input_path=multi_section_pdf_path,
-                token_usage={"prompt_tokens": 4000, "completion_tokens": 1500},
-                model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
-            )
-
-        for rec in captured:
-            expected = compute_chunk_cost(
-                rec["tokens_input"], rec["tokens_output"], input_rate, output_rate
-            )
-            assert rec["cost_usd"] == pytest.approx(expected, rel=1e-4)
-
-    @pytest.mark.asyncio
-    async def test_total_chunk_cost_satisfies_guardrail(self, multi_section_pdf_path):
-        """Sum of per-chunk costs must be within the $10 guardrail."""
-        captured: list = []
-
-        async def capture_write(_job_id, records):
-            captured.extend(records)
-
-        mock_bq = AsyncMock()
-        mock_bq.write_chunk_cost_attribution.side_effect = capture_write
-        mock_storage = AsyncMock()
-
-        from src.api.services.pipeline_orchestrator import PipelineOrchestrator
-
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
+        orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
         with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
-            await orchestrator._write_per_chunk_costs(
+            totals = await orchestrator._compute_accumulated_chunk_costs(
                 job_id="job-005",
                 local_input_path=multi_section_pdf_path,
                 token_usage={"prompt_tokens": 5000, "completion_tokens": 2000},
                 model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
             )
 
-        total = sum(r["cost_usd"] for r in captured)
-        assert total <= MAX_JOB_COST_USD, (
-            f"Total per-chunk cost ${total:.4f} exceeds ${MAX_JOB_COST_USD:.2f} guardrail"
-        )
+        assert totals is not None
+        assert totals["cost_usd"] <= MAX_JOB_COST_USD
 
     @pytest.mark.asyncio
-    async def test_errors_in_chunk_write_do_not_raise(self, multi_section_pdf_path):
-        """BQ write failures must be swallowed so the pipeline result is preserved."""
-        mock_bq = AsyncMock()
-        mock_bq.write_chunk_cost_attribution.side_effect = Exception("BQ unavailable")
-        mock_storage = AsyncMock()
-
+    async def test_errors_in_chunk_computation_propagate(self, multi_section_pdf_path):
+        """Chunk-cost computation failures must propagate."""
         from src.api.services.pipeline_orchestrator import PipelineOrchestrator
 
-        orchestrator = PipelineOrchestrator(bigquery=mock_bq, storage=mock_storage)
+        orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
-        with patch("src.api.services.pipeline_orchestrator.settings") as mock_settings:
-            mock_settings.GEMINI_INPUT_COST_PER_1K = 0.0
-            mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.0
-
-            # Should not raise even if BQ fails
-            await orchestrator._write_per_chunk_costs(
-                job_id="job-006",
-                local_input_path=multi_section_pdf_path,
-                token_usage={"prompt_tokens": 1000, "completion_tokens": 500},
-                model_id="gemini-2.5-flash",
-                timestamp="2026-06-08T10:00:00+00:00",
-            )
+        with patch(
+            "src.api.services.pipeline_orchestrator.get_vertex_llm_cost_service",
+            side_effect=Exception("cost service unavailable"),
+        ):
+            with pytest.raises(Exception, match="cost service unavailable"):
+                await orchestrator._compute_accumulated_chunk_costs(
+                    job_id="job-006",
+                    local_input_path=multi_section_pdf_path,
+                    token_usage={"prompt_tokens": 1000, "completion_tokens": 500},
+                    model_id="gemini-2.5-flash",
+                )
 
     @pytest.mark.asyncio
-    async def test_write_per_chunk_costs_wired_in_execute_pipeline(self):
-        """_execute_pipeline source code must invoke _write_per_chunk_costs."""
+    async def test_compute_accumulated_chunk_costs_wired_in_execute_pipeline(self):
+        """_execute_pipeline source code must invoke _compute_accumulated_chunk_costs."""
         import inspect
 
         import src.api.services.pipeline_orchestrator as orch_mod
 
         source = inspect.getsource(orch_mod.PipelineOrchestrator._execute_pipeline)
-        assert "_write_per_chunk_costs" in source
+        assert "_compute_accumulated_chunk_costs" in source

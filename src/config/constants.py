@@ -1,17 +1,18 @@
 """
 Application Settings - Centralized configuration using Pydantic Settings.
 
+All configuration values are loaded from environment variables (via .env).
+There are no hardcoded defaults on Settings fields — every value must be
+defined in the active .env file.
+
 Source priority (first wins):
   1. Process environment variables
   2. .env file (IS_LOCAL=true  → <repo-root>/.env)
               (IS_LOCAL=false → /secrets/.env, mounted by Cloud Run)
-  3. Field defaults
 
-Bootstrap variables are always read from the process environment.
-For local dev they live in <repo-root>/.env.
-For Cloud Run they are either set via --set-env-vars (IS_LOCAL, ASSETS_ROOT,
-TEMP_DIR, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION) or come from the
-mounted /secrets/.env file.
+Bootstrap path resolution (before .env load):
+  IS_LOCAL may be set in the process environment to choose which .env file to load.
+  If unset, local mode is assumed and <repo-root>/.env is used.
 
 Escape hatches (checked before IS_LOCAL):
   DOTENV_DISABLE=true   – skip loading any .env file (useful in tests/CI)
@@ -115,235 +116,232 @@ def find_project_root(start_path: Path) -> Path:
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from env vars or a mounted .env file."""
+    """Application settings loaded exclusively from env vars and the active .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=_DOTENV_FILE,  # pydantic also reads the file as a fallback
+        env_file=_DOTENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     # -----------------------------
-    # Bootstrap (always from env)
+    # Bootstrap
     # -----------------------------
 
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str
-    IS_LOCAL: bool = Field(default=True)
+    IS_LOCAL: bool
 
     # -----------------------------
     # GCS
     # -----------------------------
 
     GCS_BUCKET_NAME: str
-    GCS_ASSETS_PREFIX: str = "assets"
-    GCS_TRANSLATION_PREFIX: str = "translation-service"
-    GCS_INPUT_FOLDER: str = "input"
-    GCS_OUTPUT_FOLDER: str = "output"
+    GCS_ASSETS_PREFIX: str
+    GCS_TRANSLATION_PREFIX: str
+    GCS_INPUT_FOLDER: str
+    GCS_OUTPUT_FOLDER: str
 
     # -----------------------------
     # BigQuery
     # -----------------------------
 
     BIGQUERY_DATASET: str
-    BIGQUERY_LOCATION: str = "europe-west1"
-    BIGQUERY_TABLE: str = "translation_jobs"
-    BIGQUERY_COST_TABLE: str = "translation_costs"
-    BIGQUERY_DLP_TABLE: str = "dlp_mappings"
-    BIGQUERY_DLQ_TABLE: str = "translation_dlq"
-    BIGQUERY_REVIEWS_TABLE: str = "translation_reviews"
+    BIGQUERY_LOCATION: str
+    BIGQUERY_TABLE: str
+    BIGQUERY_COST_TABLE: str
+    BIGQUERY_DLP_TABLE: str
+    BIGQUERY_REVIEWS_TABLE: str
 
-    API_USE_BACKGROUND_PIPELINE: bool = True
+    API_USE_BACKGROUND_PIPELINE: bool
 
     # -----------------------------
     # Gemini / Judge
     # -----------------------------
 
-    GEMINI_INPUT_COST_PER_1K: float = 0.00125
-    GEMINI_OUTPUT_COST_PER_1K: float = 0.005
-    JUDGE_MODEL: str = "gemini-2.5-flash"
-    QUALITY_THRESHOLD: float = 0.6
-    QUALITY_EARLY_ACCEPT_THRESHOLD: float = 0.92
-    MAX_MODEL_ATTEMPTS: int = 3
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_INPUT_COST_PER_1K: float
+    GEMINI_OUTPUT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_INPUT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_OUTPUT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_CACHE_HIT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_LITE_INPUT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_LITE_OUTPUT_COST_PER_1K: float
+    GEMINI_2_5_FLASH_LITE_CACHE_HIT_COST_PER_1K: float
+    GEMINI_2_5_PRO_SHORT_INPUT_COST_PER_1K: float
+    GEMINI_2_5_PRO_SHORT_OUTPUT_COST_PER_1K: float
+    GEMINI_2_5_PRO_SHORT_CACHE_HIT_COST_PER_1K: float
+    GEMINI_2_5_PRO_LONG_INPUT_COST_PER_1K: float
+    GEMINI_2_5_PRO_LONG_OUTPUT_COST_PER_1K: float
+    GEMINI_2_5_PRO_LONG_CACHE_HIT_COST_PER_1K: float
+    LLM_RATE_CATALOG_OVERRIDE_JSON: str
+    JUDGE_MODEL: str
+    QUALITY_THRESHOLD: float
+    QUALITY_EARLY_ACCEPT_THRESHOLD: float
+    MAX_MODEL_ATTEMPTS: int
+    GEMINI_MODEL: str
 
     # -----------------------------
     # Claude / Anthropic (Vertex AI Model Garden)
     # -----------------------------
 
-    CLAUDE_MODEL: str = "claude-opus-4-7"
-    CLAUDE_INPUT_COST_PER_1K: float = 0.0
-    CLAUDE_OUTPUT_COST_PER_1K: float = 0.0
-    CLAUDE_VERTEX_REGION: str = "global"
+    CLAUDE_MODEL: str
+    CLAUDE_INPUT_COST_PER_1K: float
+    CLAUDE_OUTPUT_COST_PER_1K: float
+    CLAUDE_CACHE_HIT_COST_PER_1K: float
+    CLAUDE_CACHE_WRITE_5M_COST_PER_1K: float
+    CLAUDE_CACHE_WRITE_1H_COST_PER_1K: float
+    CLAUDE_VERTEX_REGION: str
 
     # -----------------------------
     # LLM / Translation Performance
     # -----------------------------
 
-    # Concurrency
-    TRANSLATION_POOL_MAX_WORKERS: int = 12
-    TRANSLATION_MAX_QPS: int = 16
-    TERM_EXTRACTION_POOL_MAX_WORKERS: int = 12
-    SPLIT_PART_MAX_CONCURRENT: int = 2
-    TYPESETTING_MAX_WORKERS: int = 4
+    TRANSLATION_POOL_MAX_WORKERS: int
+    TRANSLATION_MAX_QPS: int
+    TERM_EXTRACTION_POOL_MAX_WORKERS: int
+    SPLIT_PART_MAX_CONCURRENT: int
+    TYPESETTING_MAX_WORKERS: int
 
-    # LLM Context Budget (tokens)
-    LLM_TRANSLATION_BATCH_MAX_TOKENS: int = 4000
-    LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS: int = 40
-    LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS: int = 6000
-    LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS: int = 60
+    LLM_TRANSLATION_BATCH_MAX_TOKENS: int
+    LLM_TRANSLATION_BATCH_MAX_PARAGRAPHS: int
+    LLM_TERM_EXTRACTION_BATCH_MAX_TOKENS: int
+    LLM_TERM_EXTRACTION_BATCH_MAX_PARAGRAPHS: int
 
-    # Language-specific token multipliers
-    LLM_TOKEN_MULTIPLIER_CJK: float = 0.5
-    LLM_TOKEN_MULTIPLIER_DEFAULT: float = 1.0
+    LLM_TOKEN_MULTIPLIER_CJK: float
+    LLM_TOKEN_MULTIPLIER_DEFAULT: float
 
-    # LLM provider/runtime configuration
-    LLM_PROVIDER: str = "gemini_vertexai"
-    LLM_MAX_CONTEXT_LENGTH: int = 1000000
-    LLM_MAX_OUTPUT_TOKENS: int = 8192
-    LLM_TEMPERATURE: float = 0.0
-    LLM_TRANSLATION_MIN_TEXT_LENGTH: int = 5
-    LLM_DISABLE_SAME_TEXT_FALLBACK: bool = False
+    LLM_MAX_CONTEXT_LENGTH: int
+    LLM_MAX_OUTPUT_TOKENS: int
+    LLM_TEMPERATURE: float
+    LLM_TRANSLATION_MIN_TEXT_LENGTH: int
+    LLM_DISABLE_SAME_TEXT_FALLBACK: bool
 
-    # ONNX runtime
-    ONNX_LAYOUT_BATCH_SIZE: int = 4
-    ONNX_INTRA_OP_NUM_THREADS: int = 4
-    ONNX_INTER_OP_NUM_THREADS: int = 1
+    ONNX_LAYOUT_BATCH_SIZE: int
+    ONNX_INTRA_OP_NUM_THREADS: int
+    ONNX_INTER_OP_NUM_THREADS: int
 
     # -----------------------------
     # DocTranslator Assets
     # -----------------------------
 
-    WATERMARK_VERSION: str = "1.0"
-    DOCLAYOUT_MODEL_FILENAME: str = "doclayout_yolo_docstructbench_imgsz1024.onnx"
-    TABLE_DETECTION_MODEL_FILENAME: str = "ch_PP-OCRv4_det_infer.onnx"
-    FONT_METADATA_FILENAME: str = "font_metadata.json"
-    CMAP_METADATA_FILENAME: str = "cmap_metadata.json"
-    FONTS_DIR: str = "fonts"
-    CMAP_DIR: str = "cmap"
-    MODELS_DIR: str = "models"
-    METADATA_DIR: str = "metadata"
-    TIKTOKEN_DIR: str = "tiktoken"
-    GLOSSARIES_DIR: str = "glossaries"
-    MODEL_SELECTION_FILENAME: str = "model_selection.json"
+    WATERMARK_VERSION: str
+    DOCLAYOUT_MODEL_FILENAME: str
+    TABLE_DETECTION_MODEL_FILENAME: str
+    FONT_METADATA_FILENAME: str
+    CMAP_METADATA_FILENAME: str
+    FONTS_DIR: str
+    CMAP_DIR: str
+    MODELS_DIR: str
+    METADATA_DIR: str
+    TIKTOKEN_DIR: str
+    GLOSSARIES_DIR: str
+    MODEL_SELECTION_FILENAME: str
 
     # -----------------------------
     # Job Config
     # -----------------------------
 
-    JOB_TTL_HOURS: int = 720
-    MAX_CONCURRENT_JOBS: int = 10
-    TEMP_JOBS_ROOT: str = "jobs"
-    GCS_GLOSSARIES_PREFIX: str = "glossaries"
+    JOB_TTL_HOURS: int
+    MAX_CONCURRENT_JOBS: int
+    TEMP_JOBS_ROOT: str
+    GCS_GLOSSARIES_PREFIX: str
 
     # -----------------------------
     # API Config
     # -----------------------------
 
-    API_TITLE: str = "DocTranslator Translation API"
-    API_VERSION: str = "1.0.0"
-    API_PREFIX: str = "/api/v1"
-    STARTUP_WARMUP_ENABLED: bool = True
-    STARTUP_WARMUP_STRICT: bool = False
-    STARTUP_BACKGROUND_WARMUP_ENABLED: bool = False
-    STARTUP_PREFLIGHT_TIMEOUT_SECONDS: int = 20
-    STARTUP_PREFETCH_GLOSSARIES: list[str] = Field(default_factory=list)
-    MODEL_SELECTION_CACHE_TTL_SECONDS: int = 300
-    GLOSSARY_CACHE_TTL_SECONDS: int = 1800
-    WARMUP_SYNC_CONCURRENCY: int = 8
-    WARMUP_SYNC_PHASE_PREFIXES: list[str] = Field(
-        default_factory=lambda: ["metadata", "models", "cmap", "fonts", "glossaries"]
-    )
+    API_TITLE: str
+    API_VERSION: str
+    API_PREFIX: str
+    STARTUP_WARMUP_ENABLED: bool
+    STARTUP_WARMUP_STRICT: bool
+    STARTUP_BACKGROUND_WARMUP_ENABLED: bool
+    STARTUP_PREFLIGHT_TIMEOUT_SECONDS: int
+    STARTUP_PREFETCH_GLOSSARIES: list[str]
+    MODEL_SELECTION_CACHE_TTL_SECONDS: int
+    GLOSSARY_CACHE_TTL_SECONDS: int
+    WARMUP_SYNC_CONCURRENCY: int
+    WARMUP_SYNC_PHASE_PREFIXES: list[str]
 
     # -----------------------------
     # Security
     # -----------------------------
 
-    ALLOWED_HOSTS: list[str] = ["*"]
-    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["*"])
-    JWT_SECRET_KEY: str | None = None
-    JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ALLOWED_HOSTS: list[str]
+    CORS_ORIGINS: list[str]
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     # -----------------------------
     # File Limits
     # -----------------------------
 
-    MAX_FILE_SIZE: int = 5242880  # 5 MB
-    ALLOWED_EXTENSIONS: set[str] = Field(
-        default_factory=lambda: {".pdf", ".docx", ".doc"}
-    )
+    MAX_FILE_SIZE: int
+    ALLOWED_EXTENSIONS: set[str]
 
     # -----------------------------
     # Logging
     # -----------------------------
 
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str
 
     # -----------------------------
     # Telemetry / Tracing
     # -----------------------------
 
-    TRACE_ENABLED: bool = True
-    TRACE_SAMPLE_RATE: float = 1.0
-    OTEL_SERVICE_NAME: str = "translation_service"
-    OTEL_EXPORTER_OTLP_ENDPOINT: str = "https://telemetry.googleapis.com/v1/traces"
-    OTEL_EXPORTER_OTLP_PROTOCOL: str = "http/protobuf"
-    OTEL_RESOURCE_ATTRIBUTES: str = ""
-    OTEL_SEMCONV_STABILITY_OPT_IN: str = "gen_ai_latest_experimental"
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: str = "SPAN_AND_EVENT"
-    OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: bool = False
-    APP_VERSION: str = "0.5.23"
+    TRACE_ENABLED: bool
+    TRACE_SAMPLE_RATE: float
+    OTEL_SERVICE_NAME: str
+    OTEL_EXPORTER_OTLP_ENDPOINT: str
+    OTEL_EXPORTER_OTLP_PROTOCOL: str
+    OTEL_RESOURCE_ATTRIBUTES: str
+    OTEL_SEMCONV_STABILITY_OPT_IN: str
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: str
+    OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: bool
+    APP_VERSION: str
 
     # -----------------------------
     # Retry / Detection
     # -----------------------------
 
-    DOWNLOAD_MAX_ATTEMPTS: int = 3
-    DOWNLOAD_RETRY_MIN_SECONDS: int = 2
-    DOWNLOAD_RETRY_MAX_SECONDS: int = 10
-    DOWNLOAD_RETRY_MULTIPLIER: int = 1
-    LLM_RETRY_MAX_ATTEMPTS: int = 3
-    LLM_RETRY_MIN_SECONDS: int = 1
-    LLM_RETRY_MAX_SECONDS: int = 8
-    LLM_RETRY_MULTIPLIER: int = 1
-    GCS_RETRY_MAX_ATTEMPTS: int = 5
-    GCS_RETRY_MIN_SECONDS: int = 10
-    GCS_RETRY_MAX_SECONDS: int = 300
-    GCS_RETRY_MULTIPLIER: int = 2
-    LANGUAGE_DETECTION_MAX_CHARS: int = 10000
-    GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int = 300000
-    GOOGLE_DLP_ENABLED: bool = True
-    GOOGLE_DLP_MIN_LIKELIHOOD: str = "UNLIKELY"
+    DOWNLOAD_MAX_ATTEMPTS: int
+    DOWNLOAD_RETRY_MIN_SECONDS: int
+    DOWNLOAD_RETRY_MAX_SECONDS: int
+    DOWNLOAD_RETRY_MULTIPLIER: int
+    LLM_RETRY_MAX_ATTEMPTS: int
+    LLM_RETRY_MIN_SECONDS: int
+    LLM_RETRY_MAX_SECONDS: int
+    LLM_RETRY_MULTIPLIER: int
+    GCS_RETRY_MAX_ATTEMPTS: int
+    GCS_RETRY_MIN_SECONDS: int
+    GCS_RETRY_MAX_SECONDS: int
+    GCS_RETRY_MULTIPLIER: int
+    LANGUAGE_DETECTION_MAX_CHARS: int
+    GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int
+    GOOGLE_DLP_ENABLED: bool
+    GOOGLE_DLP_MIN_LIKELIHOOD: str
 
     # -----------------------------
-    # Runtime Paths (resolved in setup_directories)
+    # Runtime Paths
     # -----------------------------
 
-    PROJECT_ROOT: Path = find_project_root(Path(__file__).resolve())
-    ASSETS_ROOT: str | None = None
-    TEMP_DIR: Path | None = None
+    ASSETS_ROOT: str
+    TEMP_DIR: str
+
+    PROJECT_ROOT: Path = Field(
+        default_factory=lambda: find_project_root(Path(__file__).resolve())
+    )
 
     @property
     def assets_root_path(self) -> Path:
         """Canonical root for persisted asset cache files."""
-        return (
-            Path(self.ASSETS_ROOT) if self.ASSETS_ROOT else self.PROJECT_ROOT / "assets"
-        )
+        return Path(self.ASSETS_ROOT)
 
     @property
     def temp_root_path(self) -> Path:
         """Canonical root for runtime temporary/job execution files."""
-        if self.TEMP_DIR:
-            path = Path(self.TEMP_DIR)
-        elif self.IS_LOCAL:
-            path = self.PROJECT_ROOT / "tmp"
-        else:
-            import tempfile
-
-            path = Path(tempfile.gettempdir()) / "translation-api"
-
-        # Ensure the directory exists with restricted permissions (owner only)
+        path = Path(self.TEMP_DIR)
         if not path.exists():
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
         return path
@@ -394,8 +392,6 @@ class Settings(BaseSettings):
             self.GLOSSARIES_DIR,
         ):
             (cache_folder / subdir).mkdir(parents=True, exist_ok=True)
-
-        self.TEMP_DIR = temp_dir
 
         self._log_config_sources()
         return self

@@ -9,6 +9,7 @@ from src.api.exceptions import ReviewNotFoundError
 from src.api.schemas.requests import CreateReviewRequest
 from src.api.schemas.responses import ReviewListResponse
 from src.api.schemas.responses import ReviewResponse
+from src.api.schemas.responses import ReviewSubmitResponse
 from src.repository.bigquery_repository import BigQueryRepository
 
 
@@ -23,7 +24,7 @@ class ReviewService:
         job_id: str,
         request: CreateReviewRequest,
         reviewer_email: str,
-    ) -> ReviewResponse:
+    ) -> ReviewSubmitResponse:
         """Submit a review for a translation job.
 
         Creates a new review row. Each reviewer can submit multiple reviews per job;
@@ -34,8 +35,9 @@ class ReviewService:
             raise JobNotFoundError(job_id)
 
         now = datetime.now(UTC)
+        review_id = str(uuid.uuid4())
         review_data = {
-            "review_id": str(uuid.uuid4()),
+            "review_id": review_id,
             "job_id": job_id,
             "rating": request.rating,
             "comment": request.comment,
@@ -43,16 +45,11 @@ class ReviewService:
             "created_at": now,
             "updated_at": now,
         }
-        await self.bigquery.upsert_review(review_data)
-        return ReviewResponse(
-            review_id=review_data["review_id"],
-            job_id=job_id,
-            rating=review_data["rating"],
-            comment=review_data["comment"],
-            reviewer_email=reviewer_email,
-            created_at=now,
-            updated_at=now,
-        )
+        try:
+            await self.bigquery.upsert_review(review_data)
+            return ReviewSubmitResponse(status="successfully sent", review_id=review_id)
+        except Exception:
+            return ReviewSubmitResponse(status="failed", review_id=None)
 
     async def get_reviews(self, job_id: str) -> ReviewListResponse:
         """Fetch all reviews for a translation job."""
