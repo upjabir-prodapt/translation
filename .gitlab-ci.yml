@@ -18,9 +18,6 @@ stages:
 - promote
 
 variables:
-  # Stable checkout path across shell-runner build slots (…/0/ vs …/1/).
-  # pre-commit stores absolute paths in its cache db; varying CI_PROJECT_DIR breaks restores.
-  GIT_CLONE_PATH: "$CI_BUILDS_DIR/$CI_PROJECT_PATH"
   IMAGE_TAG: "$CI_PIPELINE_IID"
   # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY, AZURE_PAT (Azure DevOps Code Read)
   # WIF: WORKLOAD_IDENTITY_PROJECT_NUMBER, WORKLOAD_IDENTITY_POOL, WORKLOAD_IDENTITY_PROVIDER
@@ -364,10 +361,9 @@ variables:
     - ".venv/"
     - ".tools/uv/"
     - ".cache/uv/"
-    - ".cache/pre-commit/"
-    - ".cache/pip/"
-    - ".cache/xdg/"
-    - ".cache/virtualenv-app-data/"
+    # Do not cache pre-commit/xdg/virtualenv-app-data: shell runner slots change
+    # CI_PROJECT_DIR (…/0/ vs …/1/) and pre-commit db.db stores absolute paths.
+    # GIT_CLONE_PATH would fix this but requires runner custom_build_dir (not enabled).
   before_script:
   - !reference [".ensure_uv", before_script]
   - |
@@ -487,6 +483,10 @@ pre-commit-lint:
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
     mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$PRE_COMMIT_HOME" "$PIP_CACHE_DIR" \
       "$XDG_CACHE_HOME" "$VIRTUALENV_OVERRIDE_APP_DATA" "$TMPDIR"
+
+    # Fresh pre-commit home each run — avoids InvalidManifestError when build slot changes.
+    rm -rf "$PRE_COMMIT_HOME"
+    mkdir -p "$PRE_COMMIT_HOME"
 
     run_pre_commit() {
       # --no-sync: dev-only venv from before_script; avoid re-installing app deps on lint
