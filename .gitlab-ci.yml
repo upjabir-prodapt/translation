@@ -18,6 +18,9 @@ stages:
 - promote
 
 variables:
+  # Stable checkout path across shell-runner build slots (…/0/ vs …/1/).
+  # pre-commit stores absolute paths in its cache db; varying CI_PROJECT_DIR breaks restores.
+  GIT_CLONE_PATH: "$CI_BUILDS_DIR/$CI_PROJECT_PATH"
   IMAGE_TAG: "$CI_PIPELINE_IID"
   # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY, AZURE_PAT (Azure DevOps Code Read)
   # WIF: WORKLOAD_IDENTITY_PROJECT_NUMBER, WORKLOAD_IDENTITY_POOL, WORKLOAD_IDENTITY_PROVIDER
@@ -353,7 +356,10 @@ variables:
 ".python_ci_lint":
   extends: ".python_ci_base"
   cache:
-    key: uv-dev-$CI_COMMIT_REF_SLUG
+    key:
+      files:
+      - .pre-commit-config.yaml
+      prefix: uv-dev-v2-$CI_COMMIT_REF_SLUG
     paths:
     - ".venv/"
     - ".tools/uv/"
