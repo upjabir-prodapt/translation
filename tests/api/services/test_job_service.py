@@ -1,11 +1,11 @@
 from unittest.mock import AsyncMock
-from unittest.mock import patch
 
 import pytest
 from src.api.exceptions import JobAlreadyCompletedError
 from src.api.exceptions import JobNotFoundError
 from src.api.schemas.requests import JobCancelRequest
 from src.api.services.job_service import JobService
+from tests.async_test_utils import patch_asyncio_sleep
 
 
 @pytest.fixture
@@ -104,9 +104,7 @@ class TestJobService:
         ]
 
         # Patch sleep to make test fast
-        with patch(
-            "src.api.services.job_service.asyncio.sleep", new_callable=AsyncMock
-        ):
+        with patch_asyncio_sleep("src.api.services.job_service.asyncio.sleep"):
             gen = service.stream_job_progress("job1")
             events = []
             async for event in gen:

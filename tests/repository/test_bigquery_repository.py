@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from google.api_core.exceptions import GoogleAPIError
 from src.repository.bigquery_repository import BigQueryRepository
-from src.repository.repository_exception import StorageError
+from src.repository.repository_exception import BigQueryError
 
 
 @pytest.fixture
@@ -46,18 +46,18 @@ class TestBigQueryRepository:
     @pytest.mark.asyncio
     async def test_insert_rows_json_error(self, repo, mock_bq_client):
         mock_bq_client.insert_rows_json.return_value = [{"error": "fail"}]
-        with pytest.raises(StorageError, match="BigQuery insert errors"):
+        with pytest.raises(BigQueryError, match="BigQuery insert errors"):
             await repo._insert_rows_json("table", [{"row": 1}])
 
     @pytest.mark.asyncio
     async def test_insert_rows_json_google_error(self, repo, mock_bq_client):
         mock_bq_client.insert_rows_json.side_effect = GoogleAPIError("Fail")
-        with pytest.raises(StorageError, match="Failed to write to BigQuery"):
+        with pytest.raises(BigQueryError, match="Failed to write to BigQuery"):
             await repo._insert_rows_json("table", [{"row": 1}])
 
     @pytest.mark.asyncio
     async def test_upsert_translation_job_missing_id(self, repo):
-        with pytest.raises(StorageError, match="job_id is required"):
+        with pytest.raises(BigQueryError, match="job_id is required"):
             await repo.upsert_translation_job({})
 
     @pytest.mark.asyncio

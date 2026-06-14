@@ -2,67 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.doctranslator.format.pdf.split_manager import SplitPoint
-
 MAX_JOB_COST_USD = 10.0
 
 
-def compute_chunk_cost(
-    input_tokens: int,
-    output_tokens: int,
-    input_rate_per_1k: float,
-    output_rate_per_1k: float,
-) -> float:
-    """Return the USD cost for a single chunk given token counts and rates per 1K tokens."""
-    return (input_tokens / 1000) * input_rate_per_1k + (
-        output_tokens / 1000
-    ) * output_rate_per_1k
-
-
-def compute_per_chunk_costs(
-    chunks: list[SplitPoint],
-    total_input_tokens: int,
-    total_output_tokens: int,
-    input_rate_per_1k: float,
-    output_rate_per_1k: float,
-) -> list[dict]:
-    """Distribute total token usage proportionally across chunks by token_count.
-
-    Returns one record per chunk with chunk_index, tokens_input, tokens_output, cost_usd.
-    """
-    total_chunk_tokens = sum(c.token_count for c in chunks)
-    records: list[dict] = []
-    allocated_input = 0
-    allocated_output = 0
-
-    for i, chunk in enumerate(chunks):
-        is_last = i == len(chunks) - 1
-        weight = chunk.token_count / total_chunk_tokens if total_chunk_tokens > 0 else 0
-
-        if is_last:
-            chunk_input = total_input_tokens - allocated_input
-            chunk_output = total_output_tokens - allocated_output
-        else:
-            chunk_input = round(total_input_tokens * weight)
-            chunk_output = round(total_output_tokens * weight)
-            allocated_input += chunk_input
-            allocated_output += chunk_output
-
-        records.append(
-            {
-                "chunk_index": chunk.chunk_index,
-                "tokens_input": chunk_input,
-                "tokens_output": chunk_output,
-                "cost_usd": compute_chunk_cost(
-                    chunk_input, chunk_output, input_rate_per_1k, output_rate_per_1k
-                ),
-            }
-        )
-
-    return records
+def aggregate_chunk_cost_records(records: list[dict]) -> dict[str, float | int]:
+    """Sum per-chunk token and cost records into job-level totals."""
+    return {
+        "input_tokens": sum(int(r.get("tokens_input", 0)) for r in records),
+        "output_tokens": sum(int(r.get("tokens_output", 0)) for r in records),
+        "cost_usd": round(sum(float(r.get("cost_usd", 0.0)) for r in records), 8),
+    }
 
 
 def validate_job_cost(cost_usd: float) -> None:

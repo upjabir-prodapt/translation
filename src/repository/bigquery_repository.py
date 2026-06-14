@@ -13,7 +13,7 @@ from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
 from src.config.tracing import tracer_repository
-from src.repository.repository_exception import StorageError
+from src.repository.repository_exception import BigQueryError
 
 
 class BigQueryRepository:
@@ -35,9 +35,6 @@ class BigQueryRepository:
         self.dlp_tokens_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLP_TABLE}"
         )
-        self.dlq_table = (
-            f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_DLQ_TABLE}"
-        )
         self.reviews_table = (
             f"{self.client.project}.{self.dataset}.{settings.BIGQUERY_REVIEWS_TABLE}"
         )
@@ -54,29 +51,51 @@ class BigQueryRepository:
             raise ValueError("Invalid BigQuery table identifier")
         return table_name
 
+    def _make_bq_error(
+        self,
+        message: str,
+        *,
+        table: str | None = None,
+        query: str | None = None,
+    ) -> BigQueryError:
+        return BigQueryError(
+            message,
+            dataset=self.dataset,
+            table=table,
+            query=query,
+        )
+
+    def _raise_bq_error(
+        self,
+        message: str,
+        *,
+        table: str | None = None,
+        query: str | None = None,
+    ) -> None:
+        raise self._make_bq_error(message, table=table, query=query)
+
     async def _insert_rows_json(self, table: str, rows: list[dict[str, Any]]) -> None:
         try:
             errors = await asyncio.to_thread(self.client.insert_rows_json, table, rows)
             if errors:
-                raise StorageError(
+                self._raise_bq_error(
                     f"BigQuery insert errors: {errors}",
-                    operation="insert",
-                    path=table,
+                    table=table,
                 )
         except GoogleAPIError as exc:
-            raise StorageError(
+            raise self._make_bq_error(
                 f"Failed to write to BigQuery: {exc}",
-                operation="insert",
-                path=table,
+                table=table,
             ) from exc
+        except BigQueryError:
+            raise
 
     async def upsert_translation_job(self, job_data: dict[str, Any]) -> None:
         """Insert or update a translation job row via MERGE."""
         if "job_id" not in job_data:
-            raise StorageError(
+            self._raise_bq_error(
                 f"job_id is required for {settings.BIGQUERY_TABLE} upsert",
-                operation="upsert",
-                path=self.jobs_table,
+                table=self.jobs_table,
             )
 
         submitted_at = job_data.get("submitted_at") or datetime.now(UTC)
@@ -182,10 +201,10 @@ class BigQueryRepository:
                 )
                 await asyncio.to_thread(query_job.result)
             except GoogleAPIError as exc:
-                raise StorageError(
+                raise self._make_bq_error(
                     f"Failed to upsert translation job: {exc}",
-                    operation="upsert",
-                    path=self.jobs_table,
+                    table=self.jobs_table,
+                    query=query,
                 ) from exc
 
     async def get_translation_job(self, job_id: str) -> dict[str, Any] | None:
@@ -222,10 +241,10 @@ class BigQueryRepository:
                 row = rows[0]
                 return self._deserialize_job_row(row)
             except GoogleAPIError as exc:
-                raise StorageError(
+                raise self._make_bq_error(
                     f"Failed to query translation job: {exc}",
-                    operation="select",
-                    path=self.jobs_table,
+                    table=self.jobs_table,
+                    query=query,
                 ) from exc
 
     async def get_completed_job_by_hash(
@@ -274,10 +293,10 @@ class BigQueryRepository:
                     return None
                 return self._deserialize_job_row(rows[0])
             except GoogleAPIError as exc:
-                raise StorageError(
+                raise self._make_bq_error(
                     f"Failed to query translation job by hash: {exc}",
-                    operation="select",
-                    path=self.jobs_table,
+                    table=self.jobs_table,
+                    query=query,
                 ) from exc
 
     async def list_translation_jobs(
@@ -311,10 +330,10 @@ class BigQueryRepository:
             rows = list(await asyncio.to_thread(query_job.result))
             return [self._deserialize_job_row(row) for row in rows]
         except GoogleAPIError as exc:
-            raise StorageError(
+            raise self._make_bq_error(
                 f"Failed to list translation jobs: {exc}",
-                operation="select",
-                path=self.jobs_table,
+                table=self.jobs_table,
+                query=query,
             ) from exc
 
     async def patch_translation_job(self, job_id: str, updates: dict[str, Any]) -> None:
@@ -410,10 +429,10 @@ class BigQueryRepository:
                 for row in rows
             ]
         except GoogleAPIError as exc:
-            raise StorageError(
+            raise self._make_bq_error(
                 f"Failed to read DLP tokens: {exc}",
-                operation="select",
-                path=self.dlp_tokens_table,
+                table=self.dlp_tokens_table,
+                query=query,
             ) from exc
 
     async def write_cost_attribution(self, data: dict[str, Any]) -> None:
@@ -431,24 +450,6 @@ class BigQueryRepository:
             "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
         }
         await self._insert_rows_json(self.cost_attribution_table, [row])
-
-    async def write_chunk_cost_attribution(
-        self, job_id: str, records: list[dict[str, Any]]
-    ) -> None:
-        """Insert per-chunk cost attribution rows for one job."""
-        if not records:
-            return
-        rows = [
-            {
-                "job_id": job_id,
-                "chunk_index": int(r["chunk_index"]),
-                "input_tokens": int(r["tokens_input"]),
-                "output_tokens": int(r["tokens_output"]),
-                "cost_usd": float(r["cost_usd"]),
-            }
-            for r in records
-        ]
-        await self._insert_rows_json(self.cost_attribution_table, rows)
 
     async def upsert_review(self, review_data: dict[str, Any]) -> None:
         """Insert or update a review row via MERGE (keyed on review_id)."""
@@ -506,10 +507,10 @@ class BigQueryRepository:
             )
             await asyncio.to_thread(query_job.result)
         except GoogleAPIError as exc:
-            raise StorageError(
+            raise self._make_bq_error(
                 f"Failed to upsert review: {exc}",
-                operation="upsert",
-                path=self.reviews_table,
+                table=self.reviews_table,
+                query=query,
             ) from exc
 
     async def get_reviews_by_job_id(self, job_id: str) -> list[dict[str, Any]]:
@@ -543,42 +544,8 @@ class BigQueryRepository:
                 for row in rows
             ]
         except GoogleAPIError as exc:
-            raise StorageError(
+            raise self._make_bq_error(
                 f"Failed to fetch reviews: {exc}",
-                operation="select",
-                path=self.reviews_table,
+                table=self.reviews_table,
+                query=query,
             ) from exc
-
-    async def write_dlq_entry(self, data: dict[str, Any]) -> None:
-        """Write a dead-letter queue entry for a persistently failing GCS operation."""
-        row = {
-            "job_id": data["job_id"],
-            "error_type": data.get("error_type", "StorageError"),
-            "error_message": str(data.get("error_message", "")),
-            "operation": data.get("operation", "upload"),
-            "path": data.get("path", ""),
-            "attempt_count": int(
-                data.get("attempt_count", settings.GCS_RETRY_MAX_ATTEMPTS)
-            ),
-            "timestamp": data.get("timestamp", datetime.now(UTC).isoformat()),
-        }
-        await self._insert_rows_json(self.dlq_table, [row])
-
-    async def write_job_completion(self, job_data: dict[str, Any]) -> None:
-        """Backward-compatible alias for legacy call sites."""
-        row = {
-            "job_id": job_data["job_id"],
-            "status": job_data.get("status", "completed"),
-            "source_document": self._to_json_string(job_data.get("source_document")),
-            "translation_config": self._to_json_string(
-                job_data.get("translation_config")
-            ),
-            "cost_attribution": self._to_json_string(job_data.get("cost_attribution")),
-            "result": self._to_json_string(job_data.get("result")),
-            "error_message": job_data.get("error_message"),
-            "source_hash": job_data.get("source_hash"),
-            "submitted_at": job_data.get("submitted_at", datetime.now(UTC)),
-            "completed_at": job_data.get("completed_at", datetime.now(UTC)),
-        }
-        row = {k: v for k, v in row.items() if v is not None}
-        await self._insert_rows_json(self.jobs_table, [row])

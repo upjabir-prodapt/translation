@@ -1,10 +1,10 @@
-"""Functional tests: GCS write failure → exponential-backoff retry → DLQ escalation.
+"""Functional tests: GCS write failure → exponential-backoff retry → failed job status.
 
 Expected behaviour (from spec):
   - Transient GoogleAPIError retried with exponential backoff (min 10s, max 300s, max 5 attempts)
   - Retry succeeds if GCS recovers before 5 attempts are exhausted
-  - After 5 failed attempts: StorageError raised, job marked failed,
-    dead-letter queue entry created, logger.critical alert fired
+  - After 5 failed attempts: StorageError raised, job marked failed in translation_jobs,
+    logger.critical alert fired
   - Non-retryable errors (403 Forbidden, ValueError, FileNotFoundError) are not retried
 """
 
@@ -27,6 +27,7 @@ from src.config.retry import is_retryable_gcs_exception
 from src.repository.repository_exception import StorageError
 from src.repository.storage_repository import FileType
 from src.repository.storage_repository import StorageRepository
+from tests.async_test_utils import patch_asyncio_sleep
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -122,7 +123,7 @@ class TestGcsUploadFirstAttemptSuccess:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.return_value = None
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             result = await repo.upload_file(b"content", "path/file.pdf")
 
         assert result == "gs://test-bucket/path/file.pdf"
@@ -133,7 +134,7 @@ class TestGcsUploadFirstAttemptSuccess:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.return_value = None
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             result = await repo.upload_file(
                 b"content", "path/file.pdf", file_type=FileType.PDF
             )
@@ -150,7 +151,7 @@ class TestGcsUploadFirstAttemptSuccess:
         src = tmp_path / "file.pdf"
         src.write_bytes(b"pdf data")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             result = await repo.upload_file(src, "path/file.pdf")
 
         assert result == "gs://test-bucket/path/file.pdf"
@@ -177,7 +178,7 @@ class TestGcsUploadRetryOnTransientError:
 
         mock_blob.upload_from_string.side_effect = flaky
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             result = await repo.upload_file(b"data", "out/file.pdf")
 
         assert result == "gs://test-bucket/out/file.pdf"
@@ -197,7 +198,7 @@ class TestGcsUploadRetryOnTransientError:
 
         mock_blob.upload_from_string.side_effect = rate_limited
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             await repo.upload_file(b"data", "out/file.pdf")
 
         assert call_count == 2
@@ -216,7 +217,7 @@ class TestGcsUploadRetryOnTransientError:
 
         mock_blob.upload_from_string.side_effect = deadline_fail
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             await repo.upload_file(b"data", "out/file.pdf")
 
         assert call_count == 2
@@ -259,7 +260,7 @@ class TestGcsUploadExhaustsAllAttempts:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.side_effect = ServiceUnavailable("GCS down")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(StorageError, match="Failed to upload file"):
                 await repo.upload_file(b"data", "out/file.pdf")
 
@@ -268,7 +269,7 @@ class TestGcsUploadExhaustsAllAttempts:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.side_effect = ServiceUnavailable("GCS down")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(StorageError):
                 await repo.upload_file(b"data", "out/file.pdf")
 
@@ -281,7 +282,7 @@ class TestGcsUploadExhaustsAllAttempts:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.side_effect = ServiceUnavailable("GCS down")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(StorageError) as exc_info:
                 await repo.upload_file(b"data", "jobs/123/output.pdf")
 
@@ -300,7 +301,7 @@ class TestGcsUploadNonRetryableErrors:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.side_effect = Forbidden("no access")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(StorageError):
                 await repo.upload_file(b"data", "out/file.pdf")
 
@@ -311,7 +312,7 @@ class TestGcsUploadNonRetryableErrors:
         repo, mock_blob = _make_repo()
         mock_blob.upload_from_string.side_effect = NotFound("bucket missing")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(StorageError):
                 await repo.upload_file(b"data", "out/file.pdf")
 
@@ -322,7 +323,7 @@ class TestGcsUploadNonRetryableErrors:
         repo, mock_blob = _make_repo()
         missing_path = tmp_path / "nonexistent.pdf"
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch_asyncio_sleep():
             with pytest.raises(FileNotFoundError):
                 await repo.upload_file(missing_path, "out/file.pdf")
 
@@ -330,19 +331,18 @@ class TestGcsUploadNonRetryableErrors:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline orchestrator: DLQ + alert on persistent GCS failure
+# Pipeline orchestrator: failed job status on persistent GCS failure
 # ---------------------------------------------------------------------------
 
 
-class TestPipelineDLQOnGcsFailure:
-    """Persistent StorageError in pipeline → DLQ entry, critical alert, failed status."""
+class TestPipelineGcsFailureOnJobsTable:
+    """Persistent StorageError in pipeline → critical alert, failed translation_jobs row."""
 
     @pytest.fixture
     def mock_bigquery(self):
         bq = AsyncMock()
         bq.patch_translation_job = AsyncMock()
         bq.get_translation_job = AsyncMock(return_value={"job_id": "test-job-123"})
-        bq.write_dlq_entry = AsyncMock()
         return bq
 
     @pytest.fixture
@@ -356,7 +356,7 @@ class TestPipelineDLQOnGcsFailure:
         return PipelineOrchestrator(bigquery=mock_bigquery, storage=mock_storage)
 
     @pytest.mark.asyncio
-    async def test_dlq_entry_written_on_storage_error(
+    async def test_error_message_written_on_storage_error(
         self, orchestrator, mock_bigquery, mock_storage
     ):
         job_id = "test-job-123"
@@ -373,30 +373,14 @@ class TestPipelineDLQOnGcsFailure:
 
         await orchestrator._execute_pipeline(job_id, _job_data(job_id), pipeline_span)
 
-        mock_bigquery.write_dlq_entry.assert_called_once()
-        dlq_payload = mock_bigquery.write_dlq_entry.call_args[0][0]
-        assert dlq_payload["job_id"] == job_id
-
-    @pytest.mark.asyncio
-    async def test_dlq_entry_contains_error_details(
-        self, orchestrator, mock_bigquery, mock_storage
-    ):
-        job_id = "test-job-456"
-        storage_error = StorageError(
-            "GCS write failed",
-            operation="upload",
-            path="output/test-job-456/out.pdf",
-        )
-        mock_storage.download_file.side_effect = storage_error
-
-        pipeline_span = MagicMock()
-        await orchestrator._execute_pipeline(job_id, _job_data(job_id), pipeline_span)
-
-        payload = mock_bigquery.write_dlq_entry.call_args[0][0]
-        assert payload["error_type"] == "StorageError"
-        assert payload["operation"] == "upload"
-        assert "GCS write failed" in payload["error_message"]
-        assert int(payload["attempt_count"]) == settings.GCS_RETRY_MAX_ATTEMPTS
+        patch_calls = mock_bigquery.patch_translation_job.call_args_list
+        failed_calls = [
+            c
+            for c in patch_calls
+            if c[0][1].get("status") == "failed"
+            and "GCS write failed after 5 attempts" in c[0][1].get("error_message", "")
+        ]
+        assert len(failed_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_logger_critical_fired_on_storage_error(
@@ -415,9 +399,9 @@ class TestPipelineDLQOnGcsFailure:
             )
 
         mock_logger.critical.assert_called_once()
-        critical_message = mock_logger.critical.call_args[0][0]
+        critical_message = " ".join(str(a) for a in mock_logger.critical.call_args[0])
         assert job_id in critical_message
-        assert "dead-letter queue" in critical_message.lower()
+        assert "retry attempts" in critical_message.lower()
 
     @pytest.mark.asyncio
     async def test_job_marked_failed_on_storage_error(
@@ -437,18 +421,6 @@ class TestPipelineDLQOnGcsFailure:
         assert len(status_calls) >= 1, "Job must be marked failed"
 
     @pytest.mark.asyncio
-    async def test_non_storage_error_does_not_write_dlq(
-        self, orchestrator, mock_bigquery, mock_storage
-    ):
-        job_id = "test-job-no-dlq"
-        mock_storage.download_file.side_effect = ValueError("unexpected error")
-
-        pipeline_span = MagicMock()
-        await orchestrator._execute_pipeline(job_id, _job_data(job_id), pipeline_span)
-
-        mock_bigquery.write_dlq_entry.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_non_storage_error_logs_error_not_critical(
         self, orchestrator, mock_bigquery, mock_storage
     ):
@@ -463,22 +435,3 @@ class TestPipelineDLQOnGcsFailure:
 
         mock_logger.error.assert_called()
         mock_logger.critical.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_dlq_write_failure_does_not_suppress_original_error_handling(
-        self, orchestrator, mock_bigquery, mock_storage
-    ):
-        """DLQ write failure must not hide the original failure path."""
-        job_id = "test-job-dlq-fail"
-        storage_error = StorageError("Upload failed", operation="upload", path="x")
-        mock_storage.download_file.side_effect = storage_error
-        mock_bigquery.write_dlq_entry.side_effect = Exception("BQ unavailable")
-
-        pipeline_span = MagicMock()
-        # Should not raise — exception in DLQ write is swallowed
-        await orchestrator._execute_pipeline(job_id, _job_data(job_id), pipeline_span)
-
-        # Job still marked failed despite DLQ write failure
-        patch_calls = mock_bigquery.patch_translation_job.call_args_list
-        status_calls = [c for c in patch_calls if c[0][1].get("status") == "failed"]
-        assert len(status_calls) >= 1
