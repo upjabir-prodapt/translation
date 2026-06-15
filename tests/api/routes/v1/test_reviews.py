@@ -19,6 +19,7 @@ from src.api.exceptions import ReviewNotFoundError
 from src.api.main import app
 from src.api.schemas.responses import ReviewListResponse
 from src.api.schemas.responses import ReviewResponse
+from src.api.schemas.responses import ReviewSubmitResponse
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,11 +43,16 @@ _REVIEW_LIST = ReviewListResponse(
     total=1,
 )
 
+_REVIEW_SUBMIT = ReviewSubmitResponse(
+    status="successfully sent",
+    review_id="rev-001",
+)
+
 
 @pytest.fixture(scope="module")
 def mock_review_service():
     service = AsyncMock()
-    service.create_review.return_value = _REVIEW
+    service.create_review.return_value = _REVIEW_SUBMIT
     service.get_reviews.return_value = _REVIEW_LIST
     return service
 
@@ -89,20 +95,10 @@ class TestCreateReview:
             json={"rating": 5},
         )
         body = resp.json()
+        assert "status" in body
         assert "review_id" in body
-        assert "job_id" in body
-        assert "rating" in body
-        assert "reviewer_email" in body
-        assert "created_at" in body
-        assert "updated_at" in body
-
-    def test_rating_is_returned_correctly(self, review_client):
-        resp = review_client.post(
-            "/api/v1/reviews/test-job-id-001",
-            json={"rating": 4, "comment": "Good translation overall"},
-        )
-        body = resp.json()
-        assert body["rating"] == 4
+        assert body["status"] == "successfully sent"
+        assert body["review_id"] == "rev-001"
 
     def test_rating_below_1_returns_422(self, review_client):
         resp = review_client.post(
@@ -136,7 +132,7 @@ class TestCreateReview:
         assert body["error"]["code"] == "JOB_NOT_FOUND"
         # Reset
         mock_review_service.create_review.side_effect = None
-        mock_review_service.create_review.return_value = _REVIEW
+        mock_review_service.create_review.return_value = _REVIEW_SUBMIT
 
     def test_returns_401_without_auth_token(self):
         with TestClient(app, raise_server_exceptions=False) as client:

@@ -12,14 +12,14 @@ from src.api.dependencies import get_reviews_handler
 from src.api.handlers.reviews_handler import ReviewsHandler
 from src.api.schemas.requests import CreateReviewRequest
 from src.api.schemas.responses import ReviewListResponse
-from src.api.schemas.responses import ReviewResponse
+from src.api.schemas.responses import ReviewSubmitResponse
 
 router = APIRouter(dependencies=[Depends(get_current_user_context)])
 
 
 @router.post(
     "/reviews/{job_id}",
-    response_model=ReviewResponse,
+    response_model=ReviewSubmitResponse,
     status_code=201,
     tags=["reviews"],
 )
