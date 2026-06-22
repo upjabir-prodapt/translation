@@ -272,6 +272,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
+    IAP_AUDIENCE: str = ""
 
     # -----------------------------
     # File Limits
@@ -377,6 +378,8 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be HS256")
         if not self.IS_LOCAL and not self.JWT_SECRET_KEY:
             raise ValueError("JWT_SECRET_KEY is required when IS_LOCAL is false")
+        if not self.IS_LOCAL and not self.IAP_AUDIENCE:
+            raise ValueError("IAP_AUDIENCE is required when IS_LOCAL is false")
 
         cache_folder = self.assets_root_path
         cache_folder.mkdir(parents=True, exist_ok=True)
