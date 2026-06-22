@@ -145,9 +145,13 @@ class CostAttributionInput(BaseModel):
 
 
 class AuthTokenRequest(BaseModel):
-    """Request payload for token issuance."""
+    """Request payload for token issuance (email derived from IAP JWT)."""
 
-    email: str = Field(..., min_length=3, description="User email address")
+    email: str | None = Field(
+        default=None,
+        min_length=3,
+        description="Deprecated — email is taken from verified IAP identity",
+    )
     business_unit: str = Field(..., min_length=1, description="Business unit name")
     organization: str = Field(..., min_length=1, description="Organization name")
 

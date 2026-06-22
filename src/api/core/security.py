@@ -9,6 +9,7 @@ from typing import Any
 import jwt
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from fastapi.security import APIKeyHeader
 from jwt import InvalidTokenError
@@ -124,11 +125,14 @@ def get_current_user(
 
 
 def get_current_user_context(
+    request: Request,
     payload: dict[str, Any] = Depends(verify_token),  # noqa: B008
 ) -> AuthenticatedUser:
     """FastAPI dependency to extract normalized user context from JWT."""
-    return AuthenticatedUser(
+    user = AuthenticatedUser(
         email=str(payload["sub"]),
         business_unit=str(payload["business_unit"]),
         organization=str(payload["organization"]),
     )
+    request.state.user = user
+    return user

@@ -24,6 +24,13 @@ class AuthTokenResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Access token lifetime in seconds")
+    email: str = Field(..., description="Verified user email from IAP identity")
+
+
+class WhoamiResponse(BaseModel):
+    """Response model for IAP identity probe."""
+
+    email: str = Field(..., description="Verified user email from IAP identity")
 
 
 # ---------------------------------------------------------------------------
