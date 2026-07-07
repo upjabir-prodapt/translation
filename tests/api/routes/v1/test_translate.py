@@ -8,19 +8,14 @@ Uses the FastAPI TestClient with mocked service dependencies
 (no real GCP calls). See integration/conftest.py for fixtures.
 """
 
-import uuid
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from datetime import UTC
+from datetime import datetime
 
-import pytest
-from fastapi.testclient import TestClient
-
-from api.dependencies import get_job_service, get_translation_service
-from api.exceptions import JobNotFoundError
-from api.main import app
-from api.schemas.responses import JobDetailResponse, TranslateResponse
 from fixtures.sample_data import TRANSLATE_REQUEST_VALID
 
+from api.exceptions import JobNotFoundError
+from api.schemas.responses import JobDetailResponse
+from api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
 # Health check
@@ -136,7 +131,9 @@ class TestSubmitTranslation:
         resp = api_client.post("/api/v1/translate", json=payload)
         assert resp.status_code == 422
 
-    def test_service_exception_returns_error_response(self, api_client, mock_translation_service):
+    def test_service_exception_returns_error_response(
+        self, api_client, mock_translation_service
+    ):
         """If the service raises, the middleware converts it to an error response."""
         from api.exceptions import ValidationError as APIValidationError
 
@@ -172,10 +169,18 @@ class TestGetTranslationStatus:
     def test_response_has_status(self, api_client):
         resp = api_client.get("/api/v1/translate/test-job-id-001")
         body = resp.json()
-        assert body["status"] in ("queued", "processing", "completed", "failed", "cancelled")
+        assert body["status"] in (
+            "queued",
+            "processing",
+            "completed",
+            "failed",
+            "cancelled",
+        )
 
     def test_returns_404_for_missing_job(self, api_client, mock_job_service):
-        mock_job_service.get_translation_status.side_effect = JobNotFoundError("ghost-job")
+        mock_job_service.get_translation_status.side_effect = JobNotFoundError(
+            "ghost-job"
+        )
         resp = api_client.get("/api/v1/translate/ghost-job")
         assert resp.status_code == 404
         # Reset
@@ -191,12 +196,10 @@ class TestGetTranslationStatus:
 
     def test_completed_job_has_result_field(self, api_client, mock_job_service):
         """When job is completed, result field should be populated."""
-        from api.schemas.responses import (
-            TranslatedDocumentResult,
-            TranslationLabels,
-            TranslationMetadata,
-            TranslationResult,
-        )
+        from api.schemas.responses import TranslatedDocumentResult
+        from api.schemas.responses import TranslationLabels
+        from api.schemas.responses import TranslationMetadata
+        from api.schemas.responses import TranslationResult
 
         now = datetime.now(UTC)
         mock_job_service.get_translation_status.return_value = JobDetailResponse(

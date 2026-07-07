@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 from fastapi import HTTPException
 
-from config.logging import logger
+from config.logging_config import logger
 from worker.core.lifecycle import WorkerLifecycle
 
 router = APIRouter()

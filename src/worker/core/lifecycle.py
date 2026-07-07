@@ -2,7 +2,7 @@
 
 import asyncio
 
-from config.logging import logger
+from config.logging_config import logger
 from loaders import async_warmup
 
 

@@ -6,22 +6,18 @@ and path/cache behaviour. The lru_cache is cleared between relevant tests to
 ensure isolation.
 """
 
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-
-from config.translation_routing import (
-    SUPPORTED_DOMAINS,
-    _extract_model_list,
-    get_language_mapper,
-    normalize_domain,
-    normalize_language,
-    select_model_list,
-)
 from fixtures.sample_data import MODEL_SELECTION_LIST
 
+from config.translation_routing import SUPPORTED_DOMAINS
+from config.translation_routing import _extract_model_list
+from config.translation_routing import get_language_mapper
+from config.translation_routing import normalize_domain
+from config.translation_routing import normalize_language
+from config.translation_routing import select_model_list
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,7 +74,7 @@ class TestNormalizeLanguage:
         "input_val, expected",
         [
             ("  english  ", "en"),  # whitespace stripped
-            ("ENGLISH", "en"),      # case insensitive
+            ("ENGLISH", "en"),  # case insensitive
             ("EN", "en"),
             ("EN-US", "en"),
         ],
@@ -137,7 +133,13 @@ class TestNormalizeDomain:
 
 class TestSupportedDomains:
     def test_contains_all_expected(self):
-        assert SUPPORTED_DOMAINS == {"commercial", "legal", "finance", "hr", "operations"}
+        assert SUPPORTED_DOMAINS == {
+            "commercial",
+            "legal",
+            "finance",
+            "hr",
+            "operations",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +178,7 @@ class TestExtractModelList:
         assert result == ["gpt-4o-mini"]
 
     def test_strips_model_id_whitespace(self):
-        entry = {
-            "model_chain": [{"model_id": "  gpt-4o-mini  ", "priority": 1}]
-        }
+        entry = {"model_chain": [{"model_id": "  gpt-4o-mini  ", "priority": 1}]}
         result = _extract_model_list(entry)
         assert result == ["gpt-4o-mini"]
 

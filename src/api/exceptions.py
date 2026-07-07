@@ -47,6 +47,14 @@ class JobAlreadyCompletedError(BabelDocError):
         super().__init__(message, {"job_id": job_id})
 
 
+class OutputFileExpiredError(BabelDocError):
+    """Raised when a job's output file retention window has passed."""
+
+    def __init__(self, job_id: str):
+        message = f"Output file for job {job_id} has expired"
+        super().__init__(message, {"job_id": job_id})
+
+
 class TranslationError(BabelDocError):
     """Raised when translation fails."""
 

@@ -5,12 +5,11 @@ WorkerAuthMiddleware and RequestLoggingMiddleware are tested via a minimal
 FastAPI app and Starlette TestClient.
 """
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from worker.middleware.auth_logging import RequestLoggingMiddleware, WorkerAuthMiddleware
-
+from worker.middleware.auth_logging import RequestLoggingMiddleware
+from worker.middleware.auth_logging import WorkerAuthMiddleware
 
 # ---------------------------------------------------------------------------
 # Minimal apps
@@ -88,16 +87,22 @@ class TestWorkerAuthMiddleware:
 
 class TestRequestLoggingMiddleware:
     def test_request_passes_through(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=False)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=False
+        )
         resp = client.get("/ping")
         assert resp.status_code == 200
 
     def test_response_body_intact(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=False)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=False
+        )
         resp = client.get("/ping")
         assert resp.json() == {"ok": True}
 
     def test_exception_propagates(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=False)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=False
+        )
         resp = client.get("/error")
         assert resp.status_code == 500

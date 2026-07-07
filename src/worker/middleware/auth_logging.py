@@ -3,7 +3,7 @@
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config.logging import logger
+from config.logging_config import logger
 
 
 class WorkerAuthMiddleware(BaseHTTPMiddleware):

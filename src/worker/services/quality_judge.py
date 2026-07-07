@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 
 try:
     from google import genai

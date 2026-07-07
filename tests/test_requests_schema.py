@@ -5,18 +5,15 @@ Unit tests for api/schemas/requests.py — Pydantic request validation models.
 import base64
 
 import pytest
+from fixtures.sample_data import VALID_PDF_B64
 from pydantic import ValidationError as PydanticValidationError
 
-from api.schemas.requests import (
-    DocumentInput,
-    JobCancelRequest,
-    JobListRequest,
-    ProcessingOptions,
-    TranslateRequest,
-    TranslationConfigInput,
-)
-from fixtures.sample_data import VALID_PDF_B64
-
+from api.schemas.requests import DocumentInput
+from api.schemas.requests import JobCancelRequest
+from api.schemas.requests import JobListRequest
+from api.schemas.requests import ProcessingOptions
+from api.schemas.requests import TranslateRequest
+from api.schemas.requests import TranslationConfigInput
 
 # ---------------------------------------------------------------------------
 # DocumentInput

@@ -7,8 +7,7 @@ External services (GCS, Firestore) are not involved.
 
 import hashlib
 import io
-from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import fitz
 import pytest
@@ -17,7 +16,6 @@ from fastapi import UploadFile
 from api.exceptions import ValidationError
 from api.utils.pdf_validator import PDFValidator
 from config.constants import settings
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,8 +87,15 @@ class TestExtractPdfMetadata:
     def test_returns_expected_keys(self, minimal_pdf_bytes):
         meta = PDFValidator.extract_pdf_metadata(minimal_pdf_bytes)
         expected_keys = {
-            "page_count", "pdf_version", "title", "author",
-            "subject", "creator", "producer", "encrypted", "needs_pass",
+            "page_count",
+            "pdf_version",
+            "title",
+            "author",
+            "subject",
+            "creator",
+            "producer",
+            "encrypted",
+            "needs_pass",
         }
         assert expected_keys.issubset(meta.keys())
 
@@ -222,9 +227,9 @@ class TestValidatePdfFileAsync:
 @pytest.mark.parametrize(
     "bad_bytes",
     [
-        b"\x00" * 10,           # null bytes
+        b"\x00" * 10,  # null bytes
         b"PDF-1.4 but not real",  # fake header
-        b"%PDF\xFF\xFE",          # truncated
+        b"%PDF\xff\xfe",  # truncated
     ],
     ids=["null-bytes", "fake-header", "truncated"],
 )
@@ -243,8 +248,10 @@ class TestFitzFileDataError:
         """validate_pdf_bytes re-raises ValidationError when extract_pdf_metadata
         raises fitz.FileDataError directly (covers lines 40-43)."""
         from unittest.mock import patch
+
         with patch.object(
-            PDFValidator, "extract_pdf_metadata",
+            PDFValidator,
+            "extract_pdf_metadata",
             side_effect=fitz.FileDataError("bad fitz data"),
         ):
             with pytest.raises(ValidationError, match="Invalid or corrupted"):
@@ -254,9 +261,11 @@ class TestFitzFileDataError:
         """validate_pdf_file re-raises ValidationError when extract_pdf_metadata
         raises fitz.FileDataError directly (covers lines 82-85)."""
         from unittest.mock import patch
+
         upload = _make_upload_file(minimal_pdf_bytes, "doc.pdf")
         with patch.object(
-            PDFValidator, "extract_pdf_metadata",
+            PDFValidator,
+            "extract_pdf_metadata",
             side_effect=fitz.FileDataError("bad fitz data"),
         ):
             with pytest.raises(ValidationError, match="Invalid or corrupted"):

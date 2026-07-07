@@ -4,14 +4,13 @@ Unit tests for FirestoreRepository.claim_job() — lines 137-171.
 Uses a fully mocked Firestore async client with a transaction context manager.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from repository.firestore_repository import FirestoreRepository
 from repository.repository_exception import FirestoreError
-
 
 # ---------------------------------------------------------------------------
 # Helpers

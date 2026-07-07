@@ -8,7 +8,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config.logging import logger
+from config.logging_config import logger
 from worker.core.lifecycle import WorkerLifecycle
 from worker.middleware import RequestLoggingMiddleware
 from worker.middleware import WorkerAuthMiddleware

@@ -4,13 +4,13 @@ Unit tests for worker/utils/payload.py — validate_task_payload().
 Uses a mock FastAPI Request to avoid real HTTP connections.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
+import pytest
 from fastapi import HTTPException
 
 from worker.utils.payload import validate_task_payload
-
 
 # ---------------------------------------------------------------------------
 # Helper

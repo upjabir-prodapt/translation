@@ -5,21 +5,18 @@ Tests verify that each exception type produces the correct HTTP status code
 and structured JSON error body.
 """
 
-import pytest
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from fastapi import status
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError as PydanticValidationError
 
-from api.exceptions import (
-    BabelDocError,
-    ConfigurationError,
-    FileProcessingError,
-    JobAlreadyCompletedError,
-    JobNotFoundError,
-    StorageError,
-    TranslationError,
-    ValidationError,
-)
+from api.exceptions import BabelDocError
+from api.exceptions import ConfigurationError
+from api.exceptions import FileProcessingError
+from api.exceptions import JobAlreadyCompletedError
+from api.exceptions import JobNotFoundError
+from api.exceptions import StorageError
+from api.exceptions import TranslationError
+from api.exceptions import ValidationError
 from api.middleware.exception_handler import handle_exception
 
 
@@ -33,6 +30,7 @@ def _code(response) -> str:
 
 def _body(response) -> dict:
     import json
+
     return json.loads(response.body)
 
 
@@ -70,7 +68,11 @@ class TestRequestValidationError:
     def test_returns_422(self):
         # Build a RequestValidationError from a fake pydantic error list
         errors = [
-            {"loc": ("body", "document", "content"), "msg": "field required", "type": "missing"}
+            {
+                "loc": ("body", "document", "content"),
+                "msg": "field required",
+                "type": "missing",
+            }
         ]
         exc = RequestValidationError(errors)
         resp = handle_exception(exc)

@@ -4,18 +4,13 @@ Unit tests for worker/utils/exceptions.py.
 Covers all worker-specific exception classes and their attributes.
 """
 
-import pytest
-
-from worker.utils.exceptions import (
-    FileProcessingError,
-    JobAlreadyCompletedError,
-    JobNotFoundError,
-    StorageError,
-    TranslationError,
-    ValidationError,
-    WorkerError,
-)
-
+from worker.utils.exceptions import FileProcessingError
+from worker.utils.exceptions import JobAlreadyCompletedError
+from worker.utils.exceptions import JobNotFoundError
+from worker.utils.exceptions import StorageError
+from worker.utils.exceptions import TranslationError
+from worker.utils.exceptions import ValidationError
+from worker.utils.exceptions import WorkerError
 
 # ---------------------------------------------------------------------------
 # WorkerError (base)

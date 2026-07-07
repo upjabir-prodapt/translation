@@ -4,7 +4,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import Any
 
-from config.logging import logger
+from config.logging_config import logger
 from repository.firestore_repository import FirestoreRepository
 
 

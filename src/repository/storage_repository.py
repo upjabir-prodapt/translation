@@ -13,7 +13,7 @@ from google.api_core.exceptions import GoogleAPIError
 from google.cloud import storage
 
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 from repository.repository_exception import StorageError
 
 

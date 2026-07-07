@@ -11,20 +11,18 @@ Covers:
 """
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
+from fixtures.sample_data import TRACKING_JSON_EMPTY
+from fixtures.sample_data import TRACKING_JSON_VALID
 
-from worker.services.quality_judge import (
-    GoogleADKJudgeAgent,
-    QualityJudgeResult,
-    _compute_alignment_score,
-    _split_sentences,
-    extract_attempt_text,
-)
-from fixtures.sample_data import TRACKING_JSON_VALID, TRACKING_JSON_EMPTY
-
+from worker.services.quality_judge import GoogleADKJudgeAgent
+from worker.services.quality_judge import QualityJudgeResult
+from worker.services.quality_judge import _compute_alignment_score
+from worker.services.quality_judge import _split_sentences
+from worker.services.quality_judge import extract_attempt_text
 
 # ---------------------------------------------------------------------------
 # _split_sentences
@@ -151,8 +149,13 @@ class TestQualityJudgeResult:
         )
         d = result.to_dict()
         expected_keys = {
-            "alignment_score", "omission_score", "hallucination_score",
-            "final_score", "pass_fail", "reasons", "model",
+            "alignment_score",
+            "omission_score",
+            "hallucination_score",
+            "final_score",
+            "pass_fail",
+            "reasons",
+            "model",
         }
         assert expected_keys == set(d.keys())
 
@@ -167,8 +170,10 @@ class TestGoogleADKJudgeAgentNoLLM:
 
     def _make_agent_no_client(self) -> GoogleADKJudgeAgent:
         """Construct judge with LLM client forcibly set to None."""
-        with patch("worker.services.quality_judge.genai", None), \
-             patch("worker.services.quality_judge.Agent", None):
+        with (
+            patch("worker.services.quality_judge.genai", None),
+            patch("worker.services.quality_judge.Agent", None),
+        ):
             agent = GoogleADKJudgeAgent(model="test-model")
         agent._client = None  # ensure client is None
         return agent
@@ -195,7 +200,10 @@ class TestGoogleADKJudgeAgentNoLLM:
             source_text="Hello.",
             translated_text="Hola.",
         )
-        assert any("unavailable" in r.lower() or "heuristic" in r.lower() for r in result.reasons)
+        assert any(
+            "unavailable" in r.lower() or "heuristic" in r.lower()
+            for r in result.reasons
+        )
 
     def test_pass_fail_determined_by_threshold(self):
         from config.constants import settings
@@ -237,8 +245,10 @@ class TestGoogleADKJudgeAgentNoLLM:
 class TestGoogleADKJudgeAgentWithLLM:
     def _make_agent_with_mock_llm(self, llm_response: dict) -> GoogleADKJudgeAgent:
         """Build agent with a mocked genai client returning specific scores."""
-        with patch("worker.services.quality_judge.genai", None), \
-             patch("worker.services.quality_judge.Agent", None):
+        with (
+            patch("worker.services.quality_judge.genai", None),
+            patch("worker.services.quality_judge.Agent", None),
+        ):
             agent = GoogleADKJudgeAgent(model="gemini-test")
 
         mock_client = MagicMock()
@@ -261,7 +271,11 @@ class TestGoogleADKJudgeAgentWithLLM:
 
     def test_reasons_populated_from_llm(self):
         agent = self._make_agent_with_mock_llm(
-            {"omission_score": 0.8, "hallucination_score": 0.85, "reasons": ["No omissions"]}
+            {
+                "omission_score": 0.8,
+                "hallucination_score": 0.85,
+                "reasons": ["No omissions"],
+            }
         )
         result = agent.evaluate(source_text="Hi.", translated_text="Hola.")
         assert "No omissions" in result.reasons
@@ -277,8 +291,10 @@ class TestGoogleADKJudgeAgentWithLLM:
 
     def test_parse_failure_falls_back_to_heuristic(self):
         """If LLM returns unparseable JSON, fallback heuristic is used."""
-        with patch("worker.services.quality_judge.genai", None), \
-             patch("worker.services.quality_judge.Agent", None):
+        with (
+            patch("worker.services.quality_judge.genai", None),
+            patch("worker.services.quality_judge.Agent", None),
+        ):
             agent = GoogleADKJudgeAgent(model="gemini-test")
 
         mock_client = MagicMock()
@@ -289,7 +305,9 @@ class TestGoogleADKJudgeAgentWithLLM:
 
         result = agent.evaluate(source_text="Hello.", translated_text="Hola.")
         assert isinstance(result, QualityJudgeResult)
-        assert any("fallback" in r.lower() or "parse" in r.lower() for r in result.reasons)
+        assert any(
+            "fallback" in r.lower() or "parse" in r.lower() for r in result.reasons
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +318,7 @@ class TestGoogleADKJudgeAgentWithLLM:
 class TestExtractAttemptText:
     def test_extracts_source_and_translated(self, tmp_path):
         tracking_file = tmp_path / "translate_tracking.json"
-        tracking_file.write_text(
-            json.dumps(TRACKING_JSON_VALID), encoding="utf-8"
-        )
+        tracking_file.write_text(json.dumps(TRACKING_JSON_VALID), encoding="utf-8")
         source, translated = extract_attempt_text(tmp_path)
         assert "Hello world" in source
         assert "Hola mundo" in translated
@@ -314,9 +330,7 @@ class TestExtractAttemptText:
 
     def test_empty_pages_returns_empty_strings(self, tmp_path):
         tracking_file = tmp_path / "translate_tracking.json"
-        tracking_file.write_text(
-            json.dumps(TRACKING_JSON_EMPTY), encoding="utf-8"
-        )
+        tracking_file.write_text(json.dumps(TRACKING_JSON_EMPTY), encoding="utf-8")
         source, translated = extract_attempt_text(tmp_path)
         assert source == ""
         assert translated == ""

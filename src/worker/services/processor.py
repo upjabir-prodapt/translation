@@ -26,7 +26,7 @@ from babeldoc.pdfminer.layout import LTTextContainer
 from babeldoc.translator.factory import create_translator
 from babeldoc.translator.factory import create_translator_from_model_list
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 from loaders.assets import get_doclayout_onnx_model_path
 from worker.models.task_models import BabelDOCTranslationConfig
 from worker.services.progress import ProgressTracker

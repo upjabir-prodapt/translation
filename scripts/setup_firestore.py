@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from google.cloud import firestore
 
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 
 
 def setup_firestore():

@@ -17,6 +17,7 @@ memray*
 *.pdf
 *.docx
 *.json
+!src/config/language_mapper.json
 **/*.pyc
 .venv
 .idea

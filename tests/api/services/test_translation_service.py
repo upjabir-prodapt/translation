@@ -7,21 +7,20 @@ The real PDFValidator runs against in-memory PDFs, so fitz is a real dep.
 
 import base64
 import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import fitz
 import pytest
+from fixtures.sample_data import VALID_PDF_B64
+from pydantic import ValidationError as PydanticValidationError
 
 from api.exceptions import ValidationError
-from api.schemas.requests import (
-    DocumentInput,
-    ProcessingOptions,
-    TranslateRequest,
-    TranslationConfigInput,
-)
+from api.schemas.requests import DocumentInput
+from api.schemas.requests import ProcessingOptions
+from api.schemas.requests import TranslateRequest
+from api.schemas.requests import TranslationConfigInput
 from api.services.translation_service import TranslationService
-from fixtures.sample_data import VALID_PDF_B64, VALID_PDF_BYTES
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,7 +44,9 @@ def _make_request(
     )
 
 
-def _make_service(firestore=None, storage=None, tasks_client=None) -> TranslationService:
+def _make_service(
+    firestore=None, storage=None, tasks_client=None
+) -> TranslationService:
     fs = firestore or AsyncMock()
     st = storage or AsyncMock()
     tc = tasks_client or MagicMock()
@@ -60,7 +61,9 @@ def _make_service(firestore=None, storage=None, tasks_client=None) -> Translatio
 class TestSubmitTranslationPositive:
     async def test_returns_translate_response(self, mock_tasks_client):
         storage = AsyncMock()
-        storage.upload_input_pdf.return_value = "gs://bucket/translation/job/input/doc.pdf"
+        storage.upload_input_pdf.return_value = (
+            "gs://bucket/translation/job/input/doc.pdf"
+        )
         storage.delete_job_files = AsyncMock()
         firestore = AsyncMock()
         service = _make_service(
@@ -171,7 +174,7 @@ class TestSubmitTranslationPositive:
 class TestSubmitTranslationFailures:
     async def test_invalid_base64_raises_validation_error(self):
         """Invalid base64 content raises ValidationError at request schema level."""
-        with pytest.raises(Exception):
+        with pytest.raises(PydanticValidationError):
             # Pydantic will catch this at construction time
             DocumentInput(content="not-valid-base64!!!", filename="doc.pdf")
 
@@ -223,7 +226,9 @@ class TestSubmitTranslationFailures:
         # Cleanup was attempted
         storage.delete_job_files.assert_called_once()
 
-    async def test_firestore_failure_after_upload_triggers_cleanup(self, mock_tasks_client):
+    async def test_firestore_failure_after_upload_triggers_cleanup(
+        self, mock_tasks_client
+    ):
         """If Firestore create_job fails after GCS upload, cleanup is attempted."""
         storage = AsyncMock()
         storage.upload_input_pdf.return_value = "gs://bucket/path"

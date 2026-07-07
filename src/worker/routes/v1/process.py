@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
 
-from config.logging import logger
+from config.logging_config import logger
 from worker.handlers.translation_services import handle_translation_task
 from worker.utils.payload import validate_task_payload
 

@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from api.repository.api_storage_repository import get_api_storage_repository
+from api.services.file_lifecycle_service import FileLifecycleService
 from api.services.job_service import JobService
 from api.services.translation_service import TranslationService
 from repository import get_firestore_repository
@@ -21,10 +22,19 @@ def get_translation_service() -> TranslationService:
     )
 
 
+def get_file_lifecycle_service() -> FileLifecycleService:
+    """Get file lifecycle service instance."""
+    return FileLifecycleService(
+        firestore=get_firestore_repository(), storage=get_api_storage_repository()
+    )
+
+
 def get_job_service() -> JobService:
     """Get job service instance."""
     return JobService(
-        firestore=get_firestore_repository(), storage=get_api_storage_repository()
+        firestore=get_firestore_repository(),
+        storage=get_api_storage_repository(),
+        lifecycle=get_file_lifecycle_service(),
     )
 
 

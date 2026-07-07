@@ -6,8 +6,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from api.core.security import verify_token, get_current_user
-
+from api.core.security import get_current_user
+from api.core.security import verify_token
 
 # ---------------------------------------------------------------------------
 # verify_token
@@ -59,12 +59,14 @@ class TestVerifyToken:
 class TestGetCurrentUser:
     def test_returns_coroutine_when_no_credentials(self):
         import inspect
+
         result = get_current_user(None)
         assert inspect.isawaitable(result)
         result.close()
 
     def test_returns_coroutine_with_credentials(self):
         import inspect
+
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok")
         result = get_current_user(creds)
         assert inspect.isawaitable(result)

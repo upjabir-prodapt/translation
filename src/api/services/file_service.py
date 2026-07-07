@@ -4,7 +4,7 @@ from typing import Any
 
 from api.exceptions import FileProcessingError
 from api.repository.api_storage_repository import APIStorageRepository
-from config.logging import logger
+from config.logging_config import logger
 
 
 class FileService:

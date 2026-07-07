@@ -27,14 +27,15 @@ import io
 import json
 from collections import Counter
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import fitz
 import pytest
 
 from worker.services.processor import JobProcessor
 from worker.services.quality_judge import QualityJudgeResult
-
 
 # ---------------------------------------------------------------------------
 # Construction helper
@@ -52,15 +53,15 @@ def _make_processor(progress_tracker=None) -> JobProcessor:
 
 def _make_quality_result(**kwargs) -> QualityJudgeResult:
     """Return a minimal QualityJudgeResult, overridable via kwargs."""
-    defaults = dict(
-        alignment_score=0.9,
-        omission_score=0.9,
-        hallucination_score=0.9,
-        final_score=0.9,
-        pass_fail=True,
-        reasons=[],
-        model="test-model",
-    )
+    defaults = {
+        "alignment_score": 0.9,
+        "omission_score": 0.9,
+        "hallucination_score": 0.9,
+        "final_score": 0.9,
+        "pass_fail": True,
+        "reasons": [],
+        "model": "test-model",
+    }
     defaults.update(kwargs)
     return QualityJudgeResult(**defaults)
 
@@ -110,12 +111,15 @@ class TestCounterValue:
         result = proc._counter_value(7)
         assert isinstance(result, int)
 
-    @pytest.mark.parametrize("raw,expected", [
-        (1, 1),
-        (100, 100),
-        (0, 0),
-        (None, 0),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            (1, 1),
+            (100, 100),
+            (0, 0),
+            (None, 0),
+        ],
+    )
     def test_parametrized_plain_values(self, raw, expected):
         proc = _make_processor()
         assert proc._counter_value(raw) == expected
@@ -210,12 +214,15 @@ class TestIsDetectableText:
         text = "abcd" + "0" * 20
         assert proc._is_detectable_text(text) is False
 
-    @pytest.mark.parametrize("text,expected", [
-        ("This sentence has plenty of alpha characters in it!", True),
-        ("12345", False),
-        ("", False),
-        ("a" * 20, True),
-    ])
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("This sentence has plenty of alpha characters in it!", True),
+            ("12345", False),
+            ("", False),
+            ("a" * 20, True),
+        ],
+    )
     def test_parametrized(self, text, expected):
         proc = _make_processor()
         assert proc._is_detectable_text(text) == expected
@@ -249,7 +256,10 @@ class TestDetectLanguageForText:
         proc = _make_processor()
         from langdetect import LangDetectException
 
-        with patch("worker.services.processor.detect_langs", side_effect=LangDetectException(0, "error")):
+        with patch(
+            "worker.services.processor.detect_langs",
+            side_effect=LangDetectException(0, "error"),
+        ):
             result = proc._detect_language_for_text("some text here")
         assert result is None
 
@@ -259,7 +269,9 @@ class TestDetectLanguageForText:
         low_conf_candidate.lang = "en"
         low_conf_candidate.prob = 0.50  # below 0.80 threshold
 
-        with patch("worker.services.processor.detect_langs", return_value=[low_conf_candidate]):
+        with patch(
+            "worker.services.processor.detect_langs", return_value=[low_conf_candidate]
+        ):
             result = proc._detect_language_for_text("some text")
         assert result is None
 
@@ -275,7 +287,9 @@ class TestDetectLanguageForText:
         high_conf_candidate.lang = "fr"
         high_conf_candidate.prob = 0.95
 
-        with patch("worker.services.processor.detect_langs", return_value=[high_conf_candidate]):
+        with patch(
+            "worker.services.processor.detect_langs", return_value=[high_conf_candidate]
+        ):
             result = proc._detect_language_for_text("some text")
         assert result == "fr"
 
@@ -322,7 +336,10 @@ class TestDetectLanguageForText:
         bad_candidate.lang = "it"
         bad_candidate.prob = 0.10
 
-        with patch("worker.services.processor.detect_langs", return_value=[good_candidate, bad_candidate]):
+        with patch(
+            "worker.services.processor.detect_langs",
+            return_value=[good_candidate, bad_candidate],
+        ):
             result = proc._detect_language_for_text("some text")
         assert result == "es"
 
@@ -333,20 +350,23 @@ class TestDetectLanguageForText:
 
 
 class TestNormalizeDetectedLanguage:
-    @pytest.mark.parametrize("lang,expected", [
-        ("en", "en"),
-        ("EN", "en"),
-        ("fr", "fr"),
-        ("zh-cn", "zh"),
-        ("zh-tw", "zh"),
-        ("ZH-CN", "zh"),
-        ("ZH-TW", "zh"),
-        ("iw", "he"),
-        ("IW", "he"),
-        ("de", "de"),
-        ("es", "es"),
-        ("  en  ", "en"),   # strips whitespace
-    ])
+    @pytest.mark.parametrize(
+        "lang,expected",
+        [
+            ("en", "en"),
+            ("EN", "en"),
+            ("fr", "fr"),
+            ("zh-cn", "zh"),
+            ("zh-tw", "zh"),
+            ("ZH-CN", "zh"),
+            ("ZH-TW", "zh"),
+            ("iw", "he"),
+            ("IW", "he"),
+            ("de", "de"),
+            ("es", "es"),
+            ("  en  ", "en"),  # strips whitespace
+        ],
+    )
     def test_parametrized_normalization(self, lang, expected):
         proc = _make_processor()
         assert proc._normalize_detected_language(lang) == expected
@@ -440,7 +460,9 @@ class TestEvaluateAttemptQuality:
             translated_text="",
         )
         assert len(result.reasons) > 0
-        assert any("missing" in r.lower() or "source" in r.lower() for r in result.reasons)
+        assert any(
+            "missing" in r.lower() or "source" in r.lower() for r in result.reasons
+        )
 
     def test_stub_uses_judge_model(self):
         proc = _make_processor()
@@ -580,15 +602,18 @@ class TestEstimateCost:
         rounded = round(cost, 6)
         assert cost == rounded
 
-    @pytest.mark.parametrize("model_id,is_gemini", [
-        ("gemini-2.5-flash", True),
-        ("gemini-pro", True),
-        ("GEMINI-ULTRA", True),
-        ("gpt-4o", False),
-        ("gpt-4o-mini", False),
-        ("claude-3-opus", False),
-        ("openai-gpt4", False),
-    ])
+    @pytest.mark.parametrize(
+        "model_id,is_gemini",
+        [
+            ("gemini-2.5-flash", True),
+            ("gemini-pro", True),
+            ("GEMINI-ULTRA", True),
+            ("gpt-4o", False),
+            ("gpt-4o-mini", False),
+            ("claude-3-opus", False),
+            ("openai-gpt4", False),
+        ],
+    )
     def test_model_routing_parametrized(self, model_id, is_gemini):
         proc = _make_processor()
         with patch("worker.services.processor.settings") as mock_settings:
@@ -619,7 +644,11 @@ class TestEstimateCost:
 class TestWriteQualityReport:
     def test_writes_json_file(self, tmp_path):
         proc = _make_processor()
-        report = {"attempt_index": 1, "model_id": "gpt-4o", "quality": {"final_score": 0.9}}
+        report = {
+            "attempt_index": 1,
+            "model_id": "gpt-4o",
+            "quality": {"final_score": 0.9},
+        }
         proc._write_quality_report(tmp_path, report)
 
         quality_path = tmp_path / "quality_report.json"
@@ -627,7 +656,11 @@ class TestWriteQualityReport:
 
     def test_written_content_is_valid_json(self, tmp_path):
         proc = _make_processor()
-        report = {"attempt_index": 1, "model_id": "gpt-4o", "quality": {"final_score": 0.9}}
+        report = {
+            "attempt_index": 1,
+            "model_id": "gpt-4o",
+            "quality": {"final_score": 0.9},
+        }
         proc._write_quality_report(tmp_path, report)
 
         quality_path = tmp_path / "quality_report.json"
@@ -724,7 +757,9 @@ class TestGetTotalPdfPages:
     def test_non_pdf_file_returns_zero(self, tmp_path):
         """A file that pymupdf cannot parse should return 0 via the except branch."""
         proc = _make_processor()
-        with patch("worker.services.processor.pymupdf.open", side_effect=Exception("not a pdf")):
+        with patch(
+            "worker.services.processor.pymupdf.open", side_effect=Exception("not a pdf")
+        ):
             result = proc._get_total_pdf_pages(tmp_path / "fake.pdf")
         assert result == 0
 
@@ -749,13 +784,13 @@ class TestHandleTranslationEvent:
         proc = _make_processor(progress_tracker=pt)
         result = await proc._handle_translation_event({"type": "progress_end"}, {})
         assert result is None
-        pt.update.assert_called_once_with(
-            proc.PROGRESS_FINALIZE, "Finalizing output"
-        )
+        pt.update.assert_called_once_with(proc.PROGRESS_FINALIZE, "Finalizing output")
 
     async def test_progress_update_delegates_to_handler(self):
         proc = _make_processor()
-        with patch.object(proc, "_handle_progress_update", new=AsyncMock()) as mock_handler:
+        with patch.object(
+            proc, "_handle_progress_update", new=AsyncMock()
+        ) as mock_handler:
             event = {"type": "progress_update", "overall_progress": 50}
             result = await proc._handle_translation_event(event, {"config": "data"})
         assert result is None
@@ -764,7 +799,9 @@ class TestHandleTranslationEvent:
     async def test_finish_event_returns_result(self):
         proc = _make_processor()
         expected = {"page_count": 3}
-        with patch.object(proc, "_handle_finish_event", new=AsyncMock(return_value=expected)):
+        with patch.object(
+            proc, "_handle_finish_event", new=AsyncMock(return_value=expected)
+        ):
             event = {"type": "finish", "translate_result": None}
             result = await proc._handle_translation_event(event, {})
         assert result == expected
@@ -798,12 +835,15 @@ class TestHandleTranslationEvent:
         result = await proc._handle_translation_event({}, {})
         assert result is None
 
-    @pytest.mark.parametrize("event_type", [
-        "progress_start",
-        "progress_end",
-        "unknown_xyz",
-        None,
-    ])
+    @pytest.mark.parametrize(
+        "event_type",
+        [
+            "progress_start",
+            "progress_end",
+            "unknown_xyz",
+            None,
+        ],
+    )
     async def test_non_finish_non_error_returns_none(self, event_type):
         proc = _make_processor()
         # Patch progress_tracker so update calls succeed silently
@@ -823,9 +863,7 @@ class TestHandleProgressUpdate:
     async def test_maps_0_percent_to_progress_start(self):
         pt = AsyncMock()
         proc = _make_processor(progress_tracker=pt)
-        await proc._handle_progress_update(
-            {"overall_progress": 0, "stage": "Init"}, {}
-        )
+        await proc._handle_progress_update({"overall_progress": 0, "stage": "Init"}, {})
         # 0.2 + (0.0 * 0.6) = 0.2
         pt.update.assert_called_once()
         args = pt.update.call_args[0]
@@ -884,13 +922,16 @@ class TestHandleProgressUpdate:
         args = pt.update.call_args[0]
         assert args[0] == pytest.approx(0.2)
 
-    @pytest.mark.parametrize("overall,expected_mapped", [
-        (0, 0.2),
-        (25, 0.35),
-        (50, 0.5),
-        (75, 0.65),
-        (100, 0.8),
-    ])
+    @pytest.mark.parametrize(
+        "overall,expected_mapped",
+        [
+            (0, 0.2),
+            (25, 0.35),
+            (50, 0.5),
+            (75, 0.65),
+            (100, 0.8),
+        ],
+    )
     async def test_progress_mapping_parametrized(self, overall, expected_mapped):
         pt = AsyncMock()
         proc = _make_processor(progress_tracker=pt)
@@ -995,7 +1036,9 @@ class TestHandleFinishEvent:
 
     async def test_returns_dict(self):
         proc = _make_processor()
-        result = await proc._handle_finish_event({"translate_result": {"page_count": 1}})
+        result = await proc._handle_finish_event(
+            {"translate_result": {"page_count": 1}}
+        )
         assert isinstance(result, dict)
 
     async def test_always_has_page_count_key(self):
@@ -1233,9 +1276,7 @@ class TestDetectPageLanguages:
 
     def test_detects_language_from_text_container(self):
         proc = _make_processor()
-        long_english_text = (
-            "This is a long English sentence with many alphabetic characters for detection."
-        )
+        long_english_text = "This is a long English sentence with many alphabetic characters for detection."
         container = self._make_lt_text_container(long_english_text)
 
         with patch.object(proc, "_detect_language_for_text", return_value="en"):
@@ -1254,9 +1295,9 @@ class TestDetectPageLanguages:
             result = proc._detect_page_languages([container_a, container_b])
 
         # Should have accumulated counts (sum of text lengths)
-        assert result["en"] == len(
-            proc._normalize_detection_text(text_a)
-        ) + len(proc._normalize_detection_text(text_b))
+        assert result["en"] == len(proc._normalize_detection_text(text_a)) + len(
+            proc._normalize_detection_text(text_b)
+        )
 
     def test_none_detection_not_accumulated(self):
         proc = _make_processor()

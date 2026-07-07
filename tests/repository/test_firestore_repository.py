@@ -7,15 +7,16 @@ Async iteration (for list_jobs / get_jobs_by_status) is handled by a local
 AsyncIterator helper that yields mock document snapshots.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 from google.api_core.exceptions import NotFound
 
 from repository.firestore_repository import FirestoreRepository
 from repository.repository_exception import FirestoreError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,7 +36,7 @@ class _AsyncIter:
         try:
             return next(self._items)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def _make_mock_doc(data: dict) -> MagicMock:
@@ -366,3 +367,60 @@ class TestGetJobsByStatus:
 
         with pytest.raises(FirestoreError):
             await repo.get_jobs_by_status("queued")
+
+
+# ---------------------------------------------------------------------------
+# list_jobs_with_expired_outputs / list_expired_terminal_jobs
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupQueries:
+    async def test_expired_outputs_filters_state_and_expiry(self):
+        doc = _make_mock_doc({"job_id": "j1", "status": "completed"})
+        query = _make_query_mock([doc])
+        collection_ref = MagicMock()
+        collection_ref.where.return_value = query
+        repo = _build_repo(collection_ref=collection_ref)
+
+        now = datetime.now(UTC)
+        result = await repo.list_jobs_with_expired_outputs(now, limit=50)
+
+        assert len(result) == 1
+        collection_ref.where.assert_called_once_with(
+            "file_lifecycle.storage_state", "in", ["available", "delete_pending"]
+        )
+        query.where.assert_called_once_with("file_lifecycle.expires_at", "<=", now)
+        query.limit.assert_called_once_with(50)
+
+    async def test_expired_outputs_error_wrapped(self):
+        collection_ref = MagicMock()
+        collection_ref.where.side_effect = Exception("boom")
+        repo = _build_repo(collection_ref=collection_ref)
+
+        with pytest.raises(FirestoreError):
+            await repo.list_jobs_with_expired_outputs(datetime.now(UTC))
+
+    async def test_expired_terminal_jobs_filters_status_and_ttl(self):
+        doc = _make_mock_doc({"job_id": "j2", "status": "failed"})
+        query = _make_query_mock([doc])
+        collection_ref = MagicMock()
+        collection_ref.where.return_value = query
+        repo = _build_repo(collection_ref=collection_ref)
+
+        now = datetime.now(UTC)
+        result = await repo.list_expired_terminal_jobs(now, limit=25)
+
+        assert len(result) == 1
+        collection_ref.where.assert_called_once_with(
+            "status", "in", ["failed", "cancelled"]
+        )
+        query.where.assert_called_once_with("expire_at", "<=", now)
+        query.limit.assert_called_once_with(25)
+
+    async def test_expired_terminal_jobs_error_wrapped(self):
+        collection_ref = MagicMock()
+        collection_ref.where.side_effect = Exception("boom")
+        repo = _build_repo(collection_ref=collection_ref)
+
+        with pytest.raises(FirestoreError):
+            await repo.list_expired_terminal_jobs(datetime.now(UTC))

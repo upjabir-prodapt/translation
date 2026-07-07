@@ -30,7 +30,14 @@ class TranslatedDocumentResult(BaseModel):
     format: str | None = Field(None, description="Output document format")
     filename: str | None = Field(None, description="Suggested output filename")
     download_url: str | None = Field(
-        None, description="Signed URL to download the translated document"
+        None,
+        description=(
+            "Signed URL to download the translated document "
+            "(null once the output file has expired)"
+        ),
+    )
+    download_expires_at: datetime | None = Field(
+        None, description="Time at which the output file expires and is deleted"
     )
 
 
@@ -121,6 +128,22 @@ class DownloadResponse(BaseModel):
     expires_in: int = Field(..., description="URL expiration time in seconds")
     filename: str = Field(..., description="Suggested filename")
     file_size: int | None = Field(None, description="File size in bytes")
+
+
+class StorageCleanupResponse(BaseModel):
+    """Response model for the internal expired-output cleanup endpoint."""
+
+    expired_outputs_scanned: int = Field(
+        ..., description="Jobs with expired output files found this run"
+    )
+    terminal_jobs_scanned: int = Field(
+        ..., description="Expired failed/cancelled jobs found this run"
+    )
+    files_deleted: int = Field(..., description="GCS objects deleted")
+    jobs_cleaned: int = Field(..., description="Jobs whose files were removed")
+    failures: int = Field(
+        ..., description="Jobs whose deletion failed (retried next run)"
+    )
 
 
 class HealthResponse(BaseModel):

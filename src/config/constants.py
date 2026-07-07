@@ -109,6 +109,14 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_JOBS: int = 10
 
     # -----------------------------
+    # Output File Lifecycle
+    # -----------------------------
+
+    OUTPUT_FILE_TTL_SECONDS: int = 86400
+    DOWNLOAD_URL_TTL_SECONDS: int = 3600
+    CLEANUP_BATCH_SIZE: int = 100
+
+    # -----------------------------
     # API Config
     # -----------------------------
 

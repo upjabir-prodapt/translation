@@ -7,15 +7,16 @@ Async iteration (for list_jobs / get_jobs_by_status) is handled by a local
 AsyncIterator helper that yields mock document snapshots.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 from google.api_core.exceptions import NotFound
 
 from repository.firestore_repository import FirestoreRepository
 from repository.repository_exception import FirestoreError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,7 +36,7 @@ class _AsyncIter:
         try:
             return next(self._items)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def _make_mock_doc(data: dict) -> MagicMock:

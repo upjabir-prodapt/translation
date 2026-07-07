@@ -11,7 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from api.middleware.exception_handler import exception_handler_middleware
 from api.routes.router import api_router
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 
 # Track startup time
 app_start_time = datetime.now(UTC)

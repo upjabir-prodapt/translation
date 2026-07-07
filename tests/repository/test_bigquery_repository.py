@@ -5,16 +5,14 @@ The BigQuery client's insert_rows_json is synchronous and is mocked directly.
 write_job_completion and write_cost_attribution are async wrappers.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
+from fixtures.sample_data import BIGQUERY_JOB_DATA
 from google.api_core.exceptions import GoogleAPIError
 
 from repository.bigquery_repository import BigQueryRepository
 from repository.repository_exception import StorageError
-from fixtures.sample_data import BIGQUERY_JOB_DATA
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,7 +80,9 @@ class TestWriteJobCompletion:
         client.project = "test-project"
         repo = _make_repo(bq_client=client)
         # Set AFTER _make_repo, which unconditionally sets return_value=[].
-        client.insert_rows_json.return_value = [{"errors": [{"reason": "quota exceeded"}]}]
+        client.insert_rows_json.return_value = [
+            {"errors": [{"reason": "quota exceeded"}]}
+        ]
 
         with pytest.raises(StorageError, match="Failed to write"):
             await repo.write_job_completion(BIGQUERY_JOB_DATA)

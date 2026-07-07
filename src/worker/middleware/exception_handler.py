@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from config.logging import logger
+from config.logging_config import logger
 from worker.utils.exceptions import FileProcessingError
 from worker.utils.exceptions import JobAlreadyCompletedError
 from worker.utils.exceptions import JobNotFoundError

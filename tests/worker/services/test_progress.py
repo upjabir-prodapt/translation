@@ -4,14 +4,9 @@ Unit tests for worker/services/progress.py — ProgressTracker.
 Firestore repository is fully mocked; no real GCP connection is made.
 """
 
-import time
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import AsyncMock
 
 from worker.services.progress import ProgressTracker
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,7 +19,9 @@ def _make_tracker(
     min_update_interval: float = 0.0,  # 0 disables rate-limiting in most tests
 ) -> ProgressTracker:
     fs = firestore or AsyncMock()
-    return ProgressTracker(firestore=fs, job_id=job_id, min_update_interval=min_update_interval)
+    return ProgressTracker(
+        firestore=fs, job_id=job_id, min_update_interval=min_update_interval
+    )
 
 
 # ---------------------------------------------------------------------------

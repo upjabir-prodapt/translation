@@ -9,26 +9,24 @@ get_storage_repository, StorageRepository.build_path.
 All GCS client calls are mocked.
 """
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
-from repository.storage_repository import (
-    StorageRepository,
-    StoragePath,
-    download_blob_sync,
-    download_blob_async,
-    upload_blob_sync,
-    upload_blob_async,
-    list_blobs,
-    list_blobs_async,
-    download_from_gcs_sync,
-    download_from_gcs_async,
-    list_gcs_blobs,
-    get_storage_repository,
-)
-
+from repository.storage_repository import StoragePath
+from repository.storage_repository import StorageRepository
+from repository.storage_repository import download_blob_async
+from repository.storage_repository import download_blob_sync
+from repository.storage_repository import download_from_gcs_async
+from repository.storage_repository import download_from_gcs_sync
+from repository.storage_repository import get_storage_repository
+from repository.storage_repository import list_blobs
+from repository.storage_repository import list_blobs_async
+from repository.storage_repository import list_gcs_blobs
+from repository.storage_repository import upload_blob_async
+from repository.storage_repository import upload_blob_sync
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,7 +53,9 @@ class TestBuildPath:
     def test_delegates_to_storage_path(self):
         client, bucket, _ = _make_mock_client()
         repo = StorageRepository(client=client, bucket_name="test-bucket")
-        sp = StoragePath(prefix="translation", job_id="j1", folder="input", filename="doc.pdf")
+        sp = StoragePath(
+            prefix="translation", job_id="j1", folder="input", filename="doc.pdf"
+        )
         result = repo.build_path(sp)
         assert result == "translation/j1/input/doc.pdf"
 
@@ -93,6 +93,7 @@ class TestUploadFilePathNoType:
 class TestDeleteFilesGoogleAPIError:
     async def test_google_api_error_on_delete_blobs_raises_storage_error(self):
         from google.api_core.exceptions import GoogleAPIError
+
         from repository.storage_repository import StorageError
 
         b1 = MagicMock()
@@ -106,6 +107,7 @@ class TestDeleteFilesGoogleAPIError:
 
     async def test_list_files_error_propagates_from_delete_files(self):
         from google.api_core.exceptions import GoogleAPIError
+
         from repository.storage_repository import StorageError
 
         client, bucket, _ = _make_mock_client()
@@ -126,7 +128,9 @@ class TestDownloadBlobSync:
         dest = tmp_path / "file.pdf"
         client, bucket, blob = _make_mock_client()
 
-        result = download_blob_sync("path/file.pdf", dest, client=client, bucket_name="b")
+        result = download_blob_sync(
+            "path/file.pdf", dest, client=client, bucket_name="b"
+        )
         blob.download_to_filename.assert_called_once_with(str(dest))
         assert result == dest
 
@@ -141,7 +145,9 @@ class TestDownloadBlobSync:
         dest = tmp_path / "file.pdf"
         client, bucket, blob = _make_mock_client()
 
-        download_blob_sync("file.pdf", dest, client=client, bucket_name="b", prefix="assets")
+        download_blob_sync(
+            "file.pdf", dest, client=client, bucket_name="b", prefix="assets"
+        )
         blob_path_used = bucket.blob.call_args[0][0]
         assert "assets/file.pdf" == blob_path_used
 
@@ -205,7 +211,9 @@ class TestUploadBlobSync:
         local.write_bytes(b"content")
         client, bucket, blob = _make_mock_client()
 
-        uri = upload_blob_sync(local, "doc.pdf", client=client, bucket_name="b", prefix="jobs/j1")
+        uri = upload_blob_sync(
+            local, "doc.pdf", client=client, bucket_name="b", prefix="jobs/j1"
+        )
         assert uri == "gs://b/jobs/j1/doc.pdf"
 
     def test_with_content_type(self, tmp_path):
@@ -213,7 +221,13 @@ class TestUploadBlobSync:
         local.write_bytes(b"content")
         client, bucket, blob = _make_mock_client()
 
-        upload_blob_sync(local, "doc.pdf", client=client, bucket_name="b", content_type="application/pdf")
+        upload_blob_sync(
+            local,
+            "doc.pdf",
+            client=client,
+            bucket_name="b",
+            content_type="application/pdf",
+        )
         call_kwargs = blob.upload_from_filename.call_args
         assert "application/pdf" in str(call_kwargs)
 
@@ -321,11 +335,14 @@ class TestDownloadFromGcs:
 
     async def test_async_delegates_to_download_blob_async(self, tmp_path):
         dest = tmp_path / "model.onnx"
-        with patch("repository.storage_repository.download_blob_async", new_callable=lambda: lambda *a, **kw: __import__('asyncio').coroutine(lambda: dest)()):
-            # Simpler: just call it and verify it doesn't raise (uses underlying download_blob_sync)
-            pass
-        # Test that download_from_gcs_async is callable and delegates correctly
-        assert callable(download_from_gcs_async)
+        with patch(
+            "repository.storage_repository.download_blob_async",
+            new_callable=AsyncMock,
+        ) as mock_dl:
+            await download_from_gcs_async("models/model.onnx", dest)
+        mock_dl.assert_awaited_once()
+        assert mock_dl.await_args.kwargs["blob_path"] == "models/model.onnx"
+        assert mock_dl.await_args.kwargs["local_path"] == dest
 
 
 # ---------------------------------------------------------------------------

@@ -8,14 +8,11 @@ BabelDOCTranslationConfig (validators), TranslationTask.
 import pytest
 from pydantic import ValidationError
 
-from worker.models.task_models import (
-    BabelDOCTranslationConfig,
-    TaskStatus,
-    TranslationTask,
-    TranslationTaskConfig,
-    WatermarkOutputMode,
-)
-
+from worker.models.task_models import BabelDOCTranslationConfig
+from worker.models.task_models import TaskStatus
+from worker.models.task_models import TranslationTask
+from worker.models.task_models import TranslationTaskConfig
+from worker.models.task_models import WatermarkOutputMode
 
 # ---------------------------------------------------------------------------
 # WatermarkOutputMode
@@ -81,7 +78,7 @@ class TestTranslationTaskConfig:
 
     def test_frozen(self):
         cfg = TranslationTaskConfig(lang_in="auto", lang_out="es")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             cfg.lang_in = "en"  # type: ignore[misc]
 
 
@@ -92,7 +89,7 @@ class TestTranslationTaskConfig:
 
 def _minimal_babel_config(**overrides):
     defaults = {
-        "input_file": "/tmp/doc.pdf",
+        "input_file": "input/doc.pdf",
         "lang_in": "en",
         "lang_out": "es",
         "model_list": ["gpt-4o-mini"],
@@ -154,7 +151,7 @@ class TestBabelDOCTranslationConfig:
 
     def test_frozen(self):
         cfg = _minimal_babel_config()
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             cfg.lang_in = "de"  # type: ignore[misc]
 
     def test_no_dual_default_false(self):
@@ -195,9 +192,7 @@ class TestTranslationTask:
 
     def test_missing_job_id_raises(self):
         with pytest.raises(ValidationError):
-            TranslationTask(
-                config=TranslationTaskConfig(lang_in="auto", lang_out="de")
-            )
+            TranslationTask(config=TranslationTaskConfig(lang_in="auto", lang_out="de"))
 
     def test_missing_config_raises(self):
         with pytest.raises(ValidationError):
@@ -208,5 +203,5 @@ class TestTranslationTask:
             job_id="job-abc",
             config=TranslationTaskConfig(lang_in="auto", lang_out="de"),
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             task.job_id = "other"  # type: ignore[misc]

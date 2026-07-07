@@ -4,20 +4,16 @@ Unit tests for worker/middleware/exception_handler.py — handle_exception().
 The Request object is constructed from mock scope so no network I/O occurs.
 """
 
-import pytest
 from unittest.mock import MagicMock
 
 from worker.middleware.exception_handler import handle_exception
-from worker.utils.exceptions import (
-    FileProcessingError,
-    JobAlreadyCompletedError,
-    JobNotFoundError,
-    StorageError,
-    TranslationError,
-    ValidationError,
-    WorkerError,
-)
-
+from worker.utils.exceptions import FileProcessingError
+from worker.utils.exceptions import JobAlreadyCompletedError
+from worker.utils.exceptions import JobNotFoundError
+from worker.utils.exceptions import StorageError
+from worker.utils.exceptions import TranslationError
+from worker.utils.exceptions import ValidationError
+from worker.utils.exceptions import WorkerError
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -44,6 +40,7 @@ class TestHandleWorkerExceptions:
     def test_validation_error_code(self):
         resp = handle_exception(ValidationError("bad input"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "VALIDATION_ERROR"
 
@@ -54,6 +51,7 @@ class TestHandleWorkerExceptions:
     def test_file_processing_error_code(self):
         resp = handle_exception(FileProcessingError("file broke"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "FILE_ERROR"
 
@@ -64,6 +62,7 @@ class TestHandleWorkerExceptions:
     def test_job_not_found_code(self):
         resp = handle_exception(JobNotFoundError("j1"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "JOB_NOT_FOUND"
 
@@ -74,6 +73,7 @@ class TestHandleWorkerExceptions:
     def test_job_already_completed_code(self):
         resp = handle_exception(JobAlreadyCompletedError("done-job"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "JOB_ALREADY_COMPLETED"
 
@@ -84,6 +84,7 @@ class TestHandleWorkerExceptions:
     def test_translation_error_code(self):
         resp = handle_exception(TranslationError("translate failed"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "TRANSLATION_ERROR"
 
@@ -94,6 +95,7 @@ class TestHandleWorkerExceptions:
     def test_storage_error_code(self):
         resp = handle_exception(StorageError("storage down"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "STORAGE_ERROR"
 
@@ -104,6 +106,7 @@ class TestHandleWorkerExceptions:
     def test_worker_error_base_code(self):
         resp = handle_exception(WorkerError("generic worker error"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "WORKER_ERROR"
 
@@ -121,6 +124,7 @@ class TestHandleBuiltinExceptions:
     def test_value_error_code(self):
         resp = handle_exception(ValueError("bad value"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "VALUE_ERROR"
 
@@ -131,6 +135,7 @@ class TestHandleBuiltinExceptions:
     def test_timeout_error_code(self):
         resp = handle_exception(TimeoutError("timed out"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "TIMEOUT_ERROR"
 
@@ -141,6 +146,7 @@ class TestHandleBuiltinExceptions:
     def test_runtime_error_code(self):
         resp = handle_exception(RuntimeError("runtime failure"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "PROCESSING_ERROR"
 
@@ -151,12 +157,14 @@ class TestHandleBuiltinExceptions:
     def test_unknown_exception_code(self):
         resp = handle_exception(Exception("unexpected"), _make_request())
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["code"] == "INTERNAL_ERROR"
 
     def test_response_contains_task_id_for_unknown(self):
         resp = handle_exception(Exception("oops"), _make_request(task_name="my-task"))
         import json
+
         body = json.loads(resp.body)
         assert body["error"]["task_id"] == "my-task"
 
@@ -170,6 +178,7 @@ class TestExceptionHandlerMiddleware:
     async def test_passes_through_successful_response(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
         from worker.middleware.exception_handler import exception_handler_middleware
 
         app = FastAPI()
@@ -186,6 +195,7 @@ class TestExceptionHandlerMiddleware:
     async def test_catches_unhandled_exception(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
         from worker.middleware.exception_handler import exception_handler_middleware
 
         app = FastAPI()

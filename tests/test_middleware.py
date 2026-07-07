@@ -7,7 +7,6 @@ Uses FastAPI TestClient with a minimal app so dispatch() is exercised end-to-end
 import importlib.util
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -55,22 +54,30 @@ def _app_with_security_middleware() -> FastAPI:
 
 class TestLoggingMiddleware:
     def test_request_passes_through(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.status_code == 200
 
     def test_response_body_intact(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.json() == {"ok": True}
 
     def test_x_process_time_header_present(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert "x-process-time" in resp.headers
 
     def test_x_process_time_is_numeric(self):
-        client = TestClient(_app_with_logging_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_logging_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         val = resp.headers.get("x-process-time", "")
         assert float(val) >= 0.0
@@ -83,27 +90,37 @@ class TestLoggingMiddleware:
 
 class TestSecurityHeadersMiddleware:
     def test_request_passes_through(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_security_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.status_code == 200
 
     def test_x_content_type_options(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_security_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.headers.get("x-content-type-options") == "nosniff"
 
     def test_x_frame_options(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_security_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.headers.get("x-frame-options") == "DENY"
 
     def test_x_xss_protection(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_security_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         assert resp.headers.get("x-xss-protection") == "1; mode=block"
 
     def test_strict_transport_security(self):
-        client = TestClient(_app_with_security_middleware(), raise_server_exceptions=True)
+        client = TestClient(
+            _app_with_security_middleware(), raise_server_exceptions=True
+        )
         resp = client.get("/ping")
         hsts = resp.headers.get("strict-transport-security", "")
         assert "max-age=31536000" in hsts

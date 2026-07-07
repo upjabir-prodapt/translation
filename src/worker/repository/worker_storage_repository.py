@@ -5,7 +5,7 @@ from pathlib import Path
 from google.cloud import storage
 
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 from repository.storage_repository import FileType
 from repository.storage_repository import StorageError
 from repository.storage_repository import StorageRepository

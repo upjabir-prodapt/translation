@@ -7,25 +7,17 @@ Uses FastAPI TestClient with a minimal app built from the health router.
 WorkerLifecycle is mocked so no real GCS warmup occurs.
 
 NOTE: worker.routes.__init__ imports the process router which depends on
-worker.handlers.translation_services (a missing module). We stub it out
-in sys.modules before importing to avoid the ModuleNotFoundError.
+worker.handlers.translation_services (a missing module). tests/conftest.py
+stubs it in sys.modules so this import succeeds.
 """
 
-import sys
-import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-# Stub missing handler module so that worker.routes can be imported
-_fake_handlers = types.ModuleType("worker.handlers.translation_services")
-_fake_handlers.handle_translation_task = AsyncMock(return_value={"success": True})
-sys.modules.setdefault("worker.handlers.translation_services", _fake_handlers)
-
 from worker.routes.v1.health import router as health_router
-
 
 # ---------------------------------------------------------------------------
 # Minimal app with only the health router

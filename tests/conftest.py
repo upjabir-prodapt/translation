@@ -8,13 +8,59 @@ Requirements (add to dev dependencies):
 
 import base64
 import io
+import os
+import sys
+import types
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import fitz  # PyMuPDF
 import pytest
+
+# ---------------------------------------------------------------------------
+# Test environment
+# ---------------------------------------------------------------------------
+# `config.constants` instantiates Settings() at import time, which requires
+# these variables. Set them here (conftest is imported before any test module)
+# so the suite does not depend on a developer's local .env file.
+
+_TEST_ENV = {
+    "GOOGLE_CLOUD_PROJECT_ID": "test-project",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "GCS_BUCKET_NAME": "test-bucket",
+    "GCS_ASSETS_PREFIX": "assets",
+    "FIRESTORE_COLLECTION": "jobs",
+    "BIGQUERY_DATASET": "translation_service",
+    "BIGQUERY_LOCATION": "US",
+    "CLOUD_TASKS_QUEUE": "test-queue",
+    "CLOUD_TASKS_LOCATION": "us-central1",
+    "CLOUD_TASKS_DEADLINE_SECONDS": "3600",
+    "WORKER_URL": "https://worker.test.local",
+    "OPENAI_API_KEY": "test-openai-key",
+    "OPENAI_MODEL": "gpt-4o-mini",
+}
+
+for _key, _value in _TEST_ENV.items():
+    os.environ.setdefault(_key, _value)
+
+
+# ---------------------------------------------------------------------------
+# Stub for the missing worker handler module
+# ---------------------------------------------------------------------------
+# worker.routes.__init__ imports the process router, which depends on
+# worker.handlers.translation_services — a module that does not exist in this
+# repo. Install a stub here (conftest is imported before any test module) so
+# worker routes can be imported at the top of test files. Tests that exercise
+# the handler patch worker.routes.v1.process.handle_translation_task directly.
+
+_fake_handlers = types.ModuleType("worker.handlers.translation_services")
+_fake_handlers.handle_translation_task = AsyncMock(return_value={"success": True})
+sys.modules.setdefault("worker.handlers.translation_services", _fake_handlers)
 
 
 # ---------------------------------------------------------------------------

@@ -4,18 +4,19 @@ Unit tests for api/services/job_service.py — JobService.
 All Firestore and Storage clients are mocked; no real GCP calls are made.
 """
 
-import uuid
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
+from conftest import make_job_doc
 from fastapi import HTTPException
 
-from api.exceptions import JobAlreadyCompletedError, JobNotFoundError
+from api.exceptions import JobAlreadyCompletedError
+from api.exceptions import JobNotFoundError
 from api.schemas.requests import JobCancelRequest
 from api.services.job_service import JobService
-from conftest import make_job_doc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -128,7 +129,10 @@ class TestGetTranslationStatus:
         service = _make_service(firestore=fs, storage=storage)
 
         result = await service.get_translation_status(completed_job_data["job_id"])
-        assert result.result.translated_document.download_url == "https://signed.url/output.pdf"
+        assert (
+            result.result.translated_document.download_url
+            == "https://signed.url/output.pdf"
+        )
 
     async def test_signed_url_failure_does_not_raise(self, completed_job_data):
         """If signed URL generation fails, the result still returns (download_url=None)."""

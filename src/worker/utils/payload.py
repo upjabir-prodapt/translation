@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi import Request
 
-from config.logging import logger
+from config.logging_config import logger
 
 
 async def validate_task_payload(request: Request) -> dict[str, Any]:

@@ -5,12 +5,13 @@ async_warmup (from loaders) is mocked to avoid GCS downloads.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from worker.core.lifecycle import WorkerLifecycle
-
 
 # ---------------------------------------------------------------------------
 # Helpers: reset class state between tests

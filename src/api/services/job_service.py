@@ -11,6 +11,7 @@ from fastapi import status
 
 from api.exceptions import JobAlreadyCompletedError
 from api.exceptions import JobNotFoundError
+from api.exceptions import OutputFileExpiredError
 from api.repository.api_storage_repository import APIStorageRepository
 from api.schemas.requests import JobCancelRequest
 from api.schemas.responses import DownloadResponse
@@ -21,7 +22,9 @@ from api.schemas.responses import TranslatedDocumentResult
 from api.schemas.responses import TranslationLabels
 from api.schemas.responses import TranslationMetadata
 from api.schemas.responses import TranslationResult
-from config.logging import logger
+from api.services.file_lifecycle_service import FileLifecycleService
+from config.constants import settings
+from config.logging_config import logger
 from repository.firestore_repository import FirestoreRepository
 
 
@@ -32,9 +35,13 @@ class JobService:
         self,
         firestore: FirestoreRepository | None = None,
         storage: APIStorageRepository | None = None,
+        lifecycle: FileLifecycleService | None = None,
     ):
         self.firestore = firestore or FirestoreRepository()
         self.storage = storage or APIStorageRepository()
+        self.lifecycle = lifecycle or FileLifecycleService(
+            firestore=self.firestore, storage=self.storage
+        )
 
     async def get_job_status(self, job_id: str) -> JobStatusResponse:
         """Get the current status of a job."""
@@ -77,16 +84,11 @@ class JobService:
             translation_cfg = job_data.get("translation_config", {}) or {}
             processing = job_data.get("processing", {}) or {}
 
-            # Build download URL from GCS URI
-            download_url: str | None = None
-            output_gcs_uri = raw_result.get("output_gcs_uri")
-            if output_gcs_uri:
-                try:
-                    download_url = await self.storage.generate_signed_url(
-                        blob_path=output_gcs_uri, expires_in=3600
-                    )
-                except Exception:
-                    logger.warning(f"Could not generate download URL for job {job_id}")
+            # Build download URL from GCS URI (only while the output file is
+            # within its retention window)
+            download_url, download_expires_at = await self._build_download_url(
+                job_id, job_data, raw_result.get("output_gcs_uri")
+            )
 
             # Determine output filename
             output_filename = (
@@ -98,6 +100,7 @@ class JobService:
                 format=source_doc.get("format", "pdf"),
                 filename=output_filename,
                 download_url=download_url,
+                download_expires_at=download_expires_at,
             )
 
             metadata = TranslationMetadata(
@@ -133,6 +136,39 @@ class JobService:
             completed_at=completed_at,
             result=result,
         )
+
+    async def _build_download_url(
+        self, job_id: str, job_data: dict[str, Any], output_gcs_uri: str | None
+    ) -> tuple[str | None, datetime | None]:
+        """Generate a signed URL for the output file if it has not expired.
+
+        Returns (download_url, file_expiry). The URL is None once the
+        retention window has passed or if URL generation fails.
+        """
+        if not output_gcs_uri:
+            return None, None
+
+        lifecycle = await self.lifecycle.ensure_lifecycle(job_id, job_data)
+        download_expires_at = lifecycle.get("expires_at")
+        if not self.lifecycle.is_available(lifecycle):
+            return None, download_expires_at
+
+        # Cap URL lifetime to the remaining retention window so no signed URL
+        # outlives the file
+        expires_in = min(
+            settings.DOWNLOAD_URL_TTL_SECONDS,
+            self.lifecycle.remaining_ttl_seconds(lifecycle),
+        )
+        try:
+            download_url = await self.storage.generate_signed_url(
+                blob_path=output_gcs_uri, expires_in=expires_in
+            )
+        except Exception:
+            logger.warning(f"Could not generate download URL for job {job_id}")
+            return None, download_expires_at
+
+        await self.lifecycle.record_url_issued(job_id, lifecycle)
+        return download_url, download_expires_at
 
     async def list_jobs(
         self, status: str | None = None, limit: int = 10, offset: int = 0
@@ -209,6 +245,11 @@ class JobService:
                 detail="Job is not completed yet",
             )
 
+        # Reject downloads once the output retention window has passed
+        lifecycle = await self.lifecycle.ensure_lifecycle(job_id, job_data)
+        if not self.lifecycle.is_available(lifecycle):
+            raise OutputFileExpiredError(job_id)
+
         # Get output URIs
         output_uris = job_data.get("output_gs_uris", {})
 
@@ -218,19 +259,25 @@ class JobService:
                 detail=f"Output file {file_type} not found",
             )
 
-        # Generate signed URL
+        # Generate signed URL, capped to the remaining retention window so no
+        # signed URL outlives the file
+        expires_in = min(
+            settings.DOWNLOAD_URL_TTL_SECONDS,
+            self.lifecycle.remaining_ttl_seconds(lifecycle),
+        )
         gcs_uri = output_uris[file_type]
         download_url = await self.storage.generate_signed_url(
             blob_path=gcs_uri,
-            expires_in=3600,  # 1 hour
+            expires_in=expires_in,
         )
+        await self.lifecycle.record_url_issued(job_id, lifecycle)
 
         # Get file info
         file_info = await self.storage.get_file_info(gcs_uri)
 
         return DownloadResponse(
             download_url=download_url,
-            expires_in=3600,
+            expires_in=expires_in,
             filename=f"{job_id}_{file_type}.pdf",
             file_size=file_info["size"],
         )

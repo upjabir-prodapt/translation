@@ -8,20 +8,15 @@ Integration tests for job management endpoints:
 Uses FastAPI TestClient with mocked service layer. See integration/conftest.py.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from datetime import UTC
+from datetime import datetime
+
 from fastapi import HTTPException
 
-import pytest
-
-from api.exceptions import JobAlreadyCompletedError, JobNotFoundError
-from api.schemas.responses import (
-    DownloadResponse,
-    JobDetailResponse,
-    JobListResponse,
-    JobStatusResponse,
-)
-
+from api.exceptions import JobAlreadyCompletedError
+from api.exceptions import JobNotFoundError
+from api.schemas.responses import DownloadResponse
+from api.schemas.responses import JobStatusResponse
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/jobs/{job_id}

@@ -5,20 +5,15 @@ All GCS client calls are mocked. asyncio.to_thread is exercised as normal
 since the mock methods are synchronous MagicMocks, which run fine in threads.
 """
 
-import io
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from google.api_core.exceptions import GoogleAPIError
 
 from repository.repository_exception import StorageError
-from repository.storage_repository import (
-    FileType,
-    StoragePath,
-    StorageRepository,
-)
-
+from repository.storage_repository import FileType
+from repository.storage_repository import StoragePath
+from repository.storage_repository import StorageRepository
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -11,10 +11,11 @@ from api.exceptions import ConfigurationError
 from api.exceptions import FileProcessingError
 from api.exceptions import JobAlreadyCompletedError
 from api.exceptions import JobNotFoundError
+from api.exceptions import OutputFileExpiredError
 from api.exceptions import StorageError
 from api.exceptions import TranslationError
 from api.exceptions import ValidationError
-from config.logging import logger
+from config.logging_config import logger
 
 
 async def exception_handler_middleware(request: Request, call_next):
@@ -92,6 +93,13 @@ def handle_exception(exc: Exception) -> JSONResponse:
             content={
                 "error": {"message": exc.message, "code": "JOB_ALREADY_COMPLETED"}
             },
+        )
+
+    if isinstance(exc, OutputFileExpiredError):
+        logger.warning(f"Output file expired: {exc.message}")
+        return JSONResponse(
+            status_code=status.HTTP_410_GONE,
+            content={"error": {"message": exc.message, "code": "OUTPUT_FILE_EXPIRED"}},
         )
 
     if isinstance(exc, StorageError):

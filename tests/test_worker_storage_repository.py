@@ -4,14 +4,12 @@ Unit tests for worker/repository/worker_storage_repository.py.
 All GCS calls are mocked — no real GCP connection.
 """
 
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from repository.repository_exception import StorageError
 from worker.repository.worker_storage_repository import WorkerStorageRepository
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -282,9 +280,9 @@ class TestDownloadGlossary:
 
 class TestGetWorkerStorageRepository:
     def test_returns_instance_with_client(self):
+        from worker.repository.worker_storage_repository import WorkerStorageRepository
         from worker.repository.worker_storage_repository import (
             get_worker_storage_repository,
-            WorkerStorageRepository,
         )
 
         client = MagicMock()
@@ -293,7 +291,9 @@ class TestGetWorkerStorageRepository:
         assert isinstance(repo, WorkerStorageRepository)
 
     def test_uses_provided_bucket_name(self):
-        from worker.repository.worker_storage_repository import get_worker_storage_repository
+        from worker.repository.worker_storage_repository import (
+            get_worker_storage_repository,
+        )
 
         client = MagicMock()
         client.bucket.return_value = MagicMock()

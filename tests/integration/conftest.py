@@ -6,22 +6,20 @@ The real FastAPI app (api.main.app) is used, but the service-layer dependencies
 """
 
 import uuid
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from api.dependencies import get_job_service, get_translation_service
+from api.dependencies import get_job_service
+from api.dependencies import get_translation_service
 from api.main import app
-from api.schemas.responses import (
-    JobDetailResponse,
-    JobListResponse,
-    JobStatusResponse,
-    TranslateResponse,
-)
-from conftest import make_job_doc
-
+from api.schemas.responses import JobDetailResponse
+from api.schemas.responses import JobListResponse
+from api.schemas.responses import JobStatusResponse
+from api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
 # Service mocks

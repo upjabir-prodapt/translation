@@ -4,17 +4,35 @@ Unit tests for api/services/job_service.py — JobService.
 All Firestore and Storage clients are mocked; no real GCP calls are made.
 """
 
-import uuid
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
+from conftest import make_job_doc
 from fastapi import HTTPException
 
-from api.exceptions import JobAlreadyCompletedError, JobNotFoundError
+from api.exceptions import JobAlreadyCompletedError
+from api.exceptions import JobNotFoundError
+from api.exceptions import OutputFileExpiredError
 from api.schemas.requests import JobCancelRequest
 from api.services.job_service import JobService
-from conftest import make_job_doc
+
+
+def _expired_lifecycle() -> dict:
+    now = datetime.now(UTC)
+    return {
+        "storage_state": "available",
+        "available_at": now - timedelta(days=2),
+        "expires_at": now - timedelta(days=1),
+        "deleted_at": None,
+        "url_issue_count": 1,
+        "last_url_issued_at": None,
+        "delete_attempts": 0,
+        "last_delete_error": None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +146,10 @@ class TestGetTranslationStatus:
         service = _make_service(firestore=fs, storage=storage)
 
         result = await service.get_translation_status(completed_job_data["job_id"])
-        assert result.result.translated_document.download_url == "https://signed.url/output.pdf"
+        assert (
+            result.result.translated_document.download_url
+            == "https://signed.url/output.pdf"
+        )
 
     async def test_signed_url_failure_does_not_raise(self, completed_job_data):
         """If signed URL generation fails, the result still returns (download_url=None)."""
@@ -163,6 +184,34 @@ class TestGetTranslationStatus:
 
         result = await service.get_translation_status(completed_job_data["job_id"])
         assert result.result.translated_document.filename == "doc_es.pdf"
+
+    async def test_expired_output_has_no_download_url(self, completed_job_data):
+        """After the retention window, the result carries no download URL."""
+        completed_job_data["file_lifecycle"] = _expired_lifecycle()
+        fs = AsyncMock()
+        fs.get_job.return_value = completed_job_data
+        storage = AsyncMock()
+        service = _make_service(firestore=fs, storage=storage)
+
+        result = await service.get_translation_status(completed_job_data["job_id"])
+
+        assert result.result.translated_document.download_url is None
+        assert result.result.translated_document.download_expires_at is not None
+        storage.generate_signed_url.assert_not_called()
+
+    async def test_download_expires_at_reported_while_available(
+        self, completed_job_data
+    ):
+        fs = AsyncMock()
+        fs.get_job.return_value = completed_job_data
+        storage = AsyncMock()
+        storage.generate_signed_url.return_value = "https://url"
+        service = _make_service(firestore=fs, storage=storage)
+
+        result = await service.get_translation_status(completed_job_data["job_id"])
+        doc = result.result.translated_document
+        assert doc.download_url == "https://url"
+        assert doc.download_expires_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +383,65 @@ class TestGetDownloadUrl:
         assert result.download_url == "https://signed.url/mono.pdf"
         assert result.expires_in == 3600
         assert result.file_size == 204800
+
+    async def test_raises_410_when_output_expired(self, completed_job_data):
+        completed_job_data["file_lifecycle"] = _expired_lifecycle()
+        fs = AsyncMock()
+        fs.get_job.return_value = completed_job_data
+        service = _make_service(firestore=fs)
+
+        with pytest.raises(OutputFileExpiredError):
+            await service.get_download_url(completed_job_data["job_id"], "mono")
+
+    async def test_url_expiry_capped_to_remaining_ttl(self, completed_job_data):
+        """A signed URL must never outlive the file's retention window."""
+        jid = completed_job_data["job_id"]
+        now = datetime.now(UTC)
+        completed_job_data["output_gs_uris"] = {
+            "mono": f"gs://bucket/translation/{jid}/output/mono.pdf"
+        }
+        completed_job_data["file_lifecycle"] = {
+            "storage_state": "available",
+            "available_at": now - timedelta(hours=23),
+            "expires_at": now + timedelta(seconds=600),  # < DOWNLOAD_URL_TTL_SECONDS
+            "deleted_at": None,
+            "url_issue_count": 0,
+            "last_url_issued_at": None,
+            "delete_attempts": 0,
+            "last_delete_error": None,
+        }
+        fs = AsyncMock()
+        fs.get_job.return_value = completed_job_data
+        storage = AsyncMock()
+        storage.generate_signed_url.return_value = "https://signed.url/mono.pdf"
+        storage.get_file_info.return_value = {"size": 1024}
+        service = _make_service(firestore=fs, storage=storage)
+
+        result = await service.get_download_url(jid, "mono")
+
+        assert 0 < result.expires_in <= 600
+        assert storage.generate_signed_url.call_args.kwargs["expires_in"] <= 600
+
+    async def test_repeated_downloads_allowed_until_expiry(self, completed_job_data):
+        """The same job can be downloaded many times within the TTL window."""
+        jid = completed_job_data["job_id"]
+        completed_job_data["output_gs_uris"] = {
+            "mono": f"gs://bucket/translation/{jid}/output/mono.pdf"
+        }
+        fs = AsyncMock()
+        fs.get_job.return_value = completed_job_data
+        storage = AsyncMock()
+        storage.generate_signed_url.return_value = "https://signed.url/mono.pdf"
+        storage.get_file_info.return_value = {"size": 1024}
+        service = _make_service(firestore=fs, storage=storage)
+
+        first = await service.get_download_url(jid, "mono")
+        second = await service.get_download_url(jid, "mono")
+
+        assert first.download_url == second.download_url
+        assert storage.generate_signed_url.await_count == 2
+        # issuance is tracked on the lifecycle record
+        assert completed_job_data["file_lifecycle"]["url_issue_count"] == 2
 
 
 # ---------------------------------------------------------------------------

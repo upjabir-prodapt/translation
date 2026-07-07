@@ -9,7 +9,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud.firestore import AsyncClient
 
 from config.constants import settings
-from config.logging import logger
+from config.logging_config import logger
 from repository.repository_exception import FirestoreError
 
 
@@ -167,6 +167,56 @@ class FirestoreRepository:
             raise FirestoreError(
                 f"Failed to claim job: {e}",
                 document_id=job_id,
+                collection=self.collection,
+            ) from e
+
+    async def list_jobs_with_expired_outputs(
+        self, now: datetime, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List jobs whose output files are past their retention window.
+
+        Includes files still available and files whose previous delete attempt
+        failed (delete_pending), so cleanup can retry them.
+        """
+        try:
+            query = (
+                self._collection_ref.where(
+                    "file_lifecycle.storage_state",
+                    "in",
+                    ["available", "delete_pending"],
+                )
+                .where("file_lifecycle.expires_at", "<=", now)
+                .limit(limit)
+            )
+
+            docs = query.stream()
+            return [data async for doc in docs if (data := doc.to_dict()) is not None]
+
+        except Exception as e:
+            logger.error(f"Failed to list jobs with expired outputs: {e}")
+            raise FirestoreError(
+                f"Failed to list jobs with expired outputs: {e}",
+                collection=self.collection,
+            ) from e
+
+    async def list_expired_terminal_jobs(
+        self, now: datetime, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List failed/cancelled jobs past their job TTL that may hold blobs."""
+        try:
+            query = (
+                self._collection_ref.where("status", "in", ["failed", "cancelled"])
+                .where("expire_at", "<=", now)
+                .limit(limit)
+            )
+
+            docs = query.stream()
+            return [data async for doc in docs if (data := doc.to_dict()) is not None]
+
+        except Exception as e:
+            logger.error(f"Failed to list expired terminal jobs: {e}")
+            raise FirestoreError(
+                f"Failed to list expired terminal jobs: {e}",
                 collection=self.collection,
             ) from e
 

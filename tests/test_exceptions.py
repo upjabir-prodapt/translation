@@ -2,24 +2,21 @@
 Unit tests for api/exceptions.py — custom exception classes and HTTP helpers.
 """
 
-import pytest
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from fastapi import status
 
-from api.exceptions import (
-    BabelDocError,
-    ConfigurationError,
-    FileProcessingError,
-    JobAlreadyCompletedError,
-    JobNotFoundError,
-    StorageError,
-    TranslationError,
-    ValidationError,
-    create_http_exception,
-    internal_error,
-    not_found_error,
-    validation_error,
-)
-
+from api.exceptions import BabelDocError
+from api.exceptions import ConfigurationError
+from api.exceptions import FileProcessingError
+from api.exceptions import JobAlreadyCompletedError
+from api.exceptions import JobNotFoundError
+from api.exceptions import StorageError
+from api.exceptions import TranslationError
+from api.exceptions import ValidationError
+from api.exceptions import create_http_exception
+from api.exceptions import internal_error
+from api.exceptions import not_found_error
+from api.exceptions import validation_error
 
 # ---------------------------------------------------------------------------
 # BabelDocError (base)
@@ -178,7 +175,9 @@ class TestCreateHttpException:
         assert exc.status_code == 400
 
     def test_detail_structure(self):
-        exc = create_http_exception(404, "not found", error_code="NF", details={"id": "1"})
+        exc = create_http_exception(
+            404, "not found", error_code="NF", details={"id": "1"}
+        )
         assert exc.detail["error"]["message"] == "not found"
         assert exc.detail["error"]["code"] == "NF"
         assert exc.detail["error"]["details"] == {"id": "1"}
