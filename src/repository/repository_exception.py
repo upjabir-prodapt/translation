@@ -26,6 +26,19 @@ class RepositoryError(Exception):
         super().__init__(self.message)
 
 
+class FirestoreError(RepositoryError):
+    """Exception raised for Firestore operations."""
+
+    def __init__(
+        self,
+        message: str,
+        document_id: str | None = None,
+        collection: str | None = None,
+    ):
+        details = {"document_id": document_id, "collection": collection}
+        super().__init__(message, {k: v for k, v in details.items() if v is not None})
+
+
 class BigQueryError(RepositoryError):
     """Exception raised for BigQuery operations."""
 

@@ -4,7 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from src.loaders.utils.path_helpers import get_cache_file_path
+from loaders.utils.path_helpers import get_cache_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -133,5 +133,5 @@ def get_file_size(path: Path) -> int:
     """
     try:
         return path.stat().st_size
-    except OSError:
+    except (FileNotFoundError, OSError):
         return 0

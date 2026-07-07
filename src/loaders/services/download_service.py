@@ -10,22 +10,22 @@ from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
-from src.config.constants import settings
-from src.loaders.exceptions import AssetDownloadError
-from src.loaders.exceptions import AssetIntegrityError
-from src.loaders.repositories.cache_repository import verify_or_delete
-from src.loaders.services.integrity_service import verify_and_raise
-from src.loaders.utils.path_helpers import get_cache_file_path
-from src.repository.translation_storage_repository import TranslationStorageRepository
+from config.constants import settings
+from loaders.exceptions import AssetDownloadError
+from loaders.exceptions import AssetIntegrityError
+from loaders.repositories.cache_repository import verify_or_delete
+from loaders.services.integrity_service import verify_and_raise
+from loaders.utils.path_helpers import get_cache_file_path
+from worker.repository.worker_storage_repository import WorkerStorageRepository
 
 logger = logging.getLogger(__name__)
 
 
 def _get_storage_repo(
-    storage_repo: TranslationStorageRepository | None = None,
-) -> TranslationStorageRepository:
+    storage_repo: WorkerStorageRepository | None = None,
+) -> WorkerStorageRepository:
     """Get or create storage repository instance."""
-    return storage_repo or TranslationStorageRepository()
+    return storage_repo or WorkerStorageRepository()
 
 
 @retry(
@@ -42,7 +42,7 @@ def _get_storage_repo(
 def download_with_retry(
     blob_path: str,
     local_path: Path,
-    storage_repo: TranslationStorageRepository | None = None,
+    storage_repo: WorkerStorageRepository | None = None,
 ) -> None:
     """Download file from GCS with automatic retry logic.
 
@@ -71,7 +71,7 @@ def download_with_retry(
 async def download_async(
     blob_path: str,
     local_path: Path,
-    storage_repo: TranslationStorageRepository | None = None,
+    storage_repo: WorkerStorageRepository | None = None,
 ) -> None:
     """Download file asynchronously with retry logic.
 
@@ -99,7 +99,7 @@ def download_and_verify(
     local_path: Path,
     expected_hash: str,
     asset_name: str | None = None,
-    storage_repo: TranslationStorageRepository | None = None,
+    storage_repo: WorkerStorageRepository | None = None,
 ) -> Path:
     """Download asset and verify its integrity.
 
@@ -120,7 +120,10 @@ def download_and_verify(
     name = asset_name or local_path.name
     logger.info(f"Downloading {name}...")
 
-    download_with_retry(blob_path, local_path, storage_repo)
+    try:
+        download_with_retry(blob_path, local_path, storage_repo)
+    except AssetDownloadError:
+        raise
 
     try:
         verify_and_raise(local_path, expected_hash, name)
@@ -138,7 +141,7 @@ async def download_and_verify_async(
     local_path: Path,
     expected_hash: str,
     asset_name: str | None = None,
-    storage_repo: TranslationStorageRepository | None = None,
+    storage_repo: WorkerStorageRepository | None = None,
 ) -> Path:
     """Download asset async and verify its integrity.
 

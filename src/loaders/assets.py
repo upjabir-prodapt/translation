@@ -8,19 +8,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.config.constants import settings
-from src.loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
-from src.loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
-from src.loaders.exceptions import AssetIntegrityError
-from src.loaders.exceptions import MetadataNotFoundError
-from src.loaders.models import FontFamilyConfig
-from src.loaders.models.font_families import get_font_family as _get_font_family
-from src.loaders.repositories.cache_repository import verify_or_delete
-from src.loaders.repositories.metadata_repository import get_cmap_metadata_by_name
-from src.loaders.repositories.metadata_repository import get_font_metadata_by_name
-from src.loaders.services.download_service import download_and_verify
-from src.loaders.services.download_service import get_or_download_model
-from src.loaders.utils.path_helpers import get_cache_file_path
+from config.constants import settings
+from loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
+from loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
+from loaders.exceptions import AssetIntegrityError
+from loaders.exceptions import MetadataNotFoundError
+from loaders.models import FontFamilyConfig
+from loaders.models.font_families import get_font_family as _get_font_family
+from loaders.repositories.cache_repository import verify_or_delete
+from loaders.repositories.metadata_repository import get_cmap_metadata_by_name
+from loaders.repositories.metadata_repository import get_font_metadata_by_name
+from loaders.services.download_service import download_and_verify
+from loaders.services.download_service import get_or_download_model
+from loaders.utils.path_helpers import get_cache_file_path
 
 # ============================================================================
 # Model Access Functions
@@ -101,19 +101,14 @@ def get_font_and_metadata(font_file_name: str) -> tuple[Path, dict[str, Any]]:
     font_path = get_cache_file_path(font_file_name, settings.FONTS_DIR)
 
     # Check if already valid
-    aux = {
-        "sha3_256": metadata.sha3_256,
-        "size": metadata.size,
-        "url": metadata.url,
-        "font_name": metadata.font_name,
-        "subset_font_path": metadata.subset_font_path,
-        "ascent": metadata.ascent,
-        "descent": metadata.descent,
-        "encoding_length": metadata.encoding_length,
-    }
-
     if verify_or_delete(font_path, metadata.sha3_256):
-        return font_path, aux
+        return font_path, {
+            "sha3_256": metadata.sha3_256,
+            "size": metadata.size,
+            "url": metadata.url,
+            "font_name": metadata.font_name,
+            "subset_font_path": metadata.subset_font_path,
+        }
 
     # Download and verify
     download_and_verify(
@@ -123,7 +118,13 @@ def get_font_and_metadata(font_file_name: str) -> tuple[Path, dict[str, Any]]:
         asset_name=font_file_name,
     )
 
-    return font_path, aux
+    return font_path, {
+        "sha3_256": metadata.sha3_256,
+        "size": metadata.size,
+        "url": metadata.url,
+        "font_name": metadata.font_name,
+        "subset_font_path": metadata.subset_font_path,
+    }
 
 
 def get_font_family(lang_code: str) -> FontFamilyConfig:

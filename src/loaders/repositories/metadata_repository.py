@@ -1,18 +1,16 @@
 """Metadata repository for loading and caching metadata."""
 
 import json
-import logging
 import threading
 from pathlib import Path
 from typing import Any
 
-from src.config.constants import settings
-from src.loaders.exceptions import MetadataNotFoundError
-from src.loaders.models import CMapMetadata
-from src.loaders.models import FontMetadata
-from src.loaders.utils.path_helpers import get_cache_file_path
-
-logger = logging.getLogger(__name__)
+from config.constants import settings
+from config.logging_config import logger
+from loaders.exceptions import MetadataNotFoundError
+from loaders.models import CMapMetadata
+from loaders.models import FontMetadata
+from loaders.utils.path_helpers import get_cache_file_path
 
 # Thread-safe cache storage with locks
 _font_cache: dict[str, Any] | None = None

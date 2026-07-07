@@ -6,23 +6,62 @@ Requirements (add to dev dependencies):
     pytest-mock>=3.14.0
 """
 
-import os
-from pathlib import Path
-
-# Load tests/test.env before any module imports Settings (constants.py loads at import time).
-os.environ.setdefault("DOTENV_PATH", str(Path(__file__).resolve().parent / "test.env"))
-
 import base64
 import io
+import os
+import sys
+import types
 import uuid
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import fitz  # PyMuPDF
 import pytest
+
+# ---------------------------------------------------------------------------
+# Test environment
+# ---------------------------------------------------------------------------
+# `config.constants` instantiates Settings() at import time, which requires
+# these variables. Set them here (conftest is imported before any test module)
+# so the suite does not depend on a developer's local .env file.
+
+_TEST_ENV = {
+    "GOOGLE_CLOUD_PROJECT_ID": "test-project",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "GCS_BUCKET_NAME": "test-bucket",
+    "GCS_ASSETS_PREFIX": "assets",
+    "FIRESTORE_COLLECTION": "jobs",
+    "BIGQUERY_DATASET": "translation_service",
+    "BIGQUERY_LOCATION": "US",
+    "CLOUD_TASKS_QUEUE": "test-queue",
+    "CLOUD_TASKS_LOCATION": "us-central1",
+    "CLOUD_TASKS_DEADLINE_SECONDS": "3600",
+    "WORKER_URL": "https://worker.test.local",
+    "OPENAI_API_KEY": "test-openai-key",
+    "OPENAI_MODEL": "gpt-4o-mini",
+}
+
+for _key, _value in _TEST_ENV.items():
+    os.environ.setdefault(_key, _value)
+
+
+# ---------------------------------------------------------------------------
+# Stub for the missing worker handler module
+# ---------------------------------------------------------------------------
+# worker.routes.__init__ imports the process router, which depends on
+# worker.handlers.translation_services — a module that does not exist in this
+# repo. Install a stub here (conftest is imported before any test module) so
+# worker routes can be imported at the top of test files. Tests that exercise
+# the handler patch worker.routes.v1.process.handle_translation_task directly.
+
+_fake_handlers = types.ModuleType("worker.handlers.translation_services")
+_fake_handlers.handle_translation_task = AsyncMock(return_value={"success": True})
+sys.modules.setdefault("worker.handlers.translation_services", _fake_handlers)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,7 +84,7 @@ def make_job_doc(
     status: str = "queued",
     **overrides: Any,
 ) -> dict[str, Any]:
-    """Build a representative translation job document dict."""
+    """Build a representative Firestore job document dict."""
     now = datetime.now(UTC)
     jid = job_id or str(uuid.uuid4())
     doc: dict[str, Any] = {
@@ -73,6 +112,15 @@ def make_job_doc(
             "enable_dlp": True,
             "enable_chunking": True,
             "priority": "standard",
+        },
+        "processing": {
+            "model_used": None,
+            "model_version": None,
+            "chunks": None,
+            "chunking_applied": False,
+            "retry_count": 0,
+            "ab_variant": None,
+            "dlp_applied": True,
         },
         "result": None,
         "timestamps": {"submitted_at": now, "completed_at": None},
@@ -114,6 +162,54 @@ def minimal_pdf_b64(minimal_pdf_bytes: bytes) -> str:
 
 
 @pytest.fixture()
+def mock_firestore_doc_ref():
+    """A mock Firestore document reference supporting async operations."""
+    doc_ref = AsyncMock()
+    # snapshot returned by doc_ref.get()
+    snapshot = AsyncMock()
+    snapshot.exists = True
+    snapshot.to_dict.return_value = {}
+    doc_ref.get.return_value = snapshot
+    return doc_ref, snapshot
+
+
+@pytest.fixture()
+def mock_firestore_collection(mock_firestore_doc_ref):
+    """A mock Firestore collection reference."""
+    doc_ref, snapshot = mock_firestore_doc_ref
+    collection_ref = MagicMock()
+    collection_ref.document.return_value = doc_ref
+    # query chain
+    mock_query = MagicMock()
+    mock_query.where.return_value = mock_query
+    mock_query.order_by.return_value = mock_query
+    mock_query.limit.return_value = mock_query
+    mock_query.offset.return_value = mock_query
+
+    async def _empty_stream():
+        return
+        yield  # make it an async generator
+
+    mock_query.stream.return_value = _empty_stream()
+    collection_ref.order_by.return_value = mock_query
+    collection_ref.where.return_value = mock_query
+    return collection_ref, mock_query, doc_ref, snapshot
+
+
+@pytest.fixture()
+def mock_firestore_client(mock_firestore_collection):
+    """Full mock AsyncClient for Firestore, wired up with collection."""
+    collection_ref, mock_query, doc_ref, snapshot = mock_firestore_collection
+    client = AsyncMock()
+    client.collection.return_value = collection_ref
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    client.transaction.return_value = mock_transaction
+    return client, collection_ref, mock_query, doc_ref, snapshot
+
+
+@pytest.fixture()
 def mock_gcs_bucket():
     """A mock GCS bucket with blob support."""
     bucket = MagicMock()
@@ -142,6 +238,21 @@ def mock_gcs_client(mock_gcs_bucket):
     return client, bucket, blob
 
 
+@pytest.fixture()
+def mock_tasks_client():
+    """A mock Cloud Tasks CloudTasksClient."""
+    client = MagicMock()
+    client.queue_path.return_value = (
+        "projects/test-proj/locations/us-central1/queues/test-queue"
+    )
+    task_resp = MagicMock()
+    task_resp.name = (
+        "projects/test-proj/locations/us-central1/queues/test-queue/tasks/abc"
+    )
+    client.create_task.return_value = task_resp
+    return client
+
+
 # ---------------------------------------------------------------------------
 # Shared job document fixtures
 # ---------------------------------------------------------------------------
@@ -149,13 +260,13 @@ def mock_gcs_client(mock_gcs_bucket):
 
 @pytest.fixture()
 def sample_job_data() -> dict[str, Any]:
-    """A queued translation job document."""
+    """A queued job Firestore document."""
     return make_job_doc(status="queued")
 
 
 @pytest.fixture()
 def completed_job_data() -> dict[str, Any]:
-    """A completed translation job document with result populated."""
+    """A completed job Firestore document with result populated."""
     now = datetime.now(UTC)
     jid = str(uuid.uuid4())
     return make_job_doc(
@@ -168,15 +279,18 @@ def completed_job_data() -> dict[str, Any]:
             "confidence_score": 0.92,
             "token_count": 5000,
             "cost_usd": 1.50,
-            "model_used": "gpt-4o-mini",
-            "model_version": "1.0",
-            "chunks": 3,
-            "retry_count": 1,
-            "ab_variant": "A",
-            "intent": "legal_en_es",
         },
         timestamps={
             "submitted_at": now,
             "completed_at": now,
+        },
+        processing={
+            "model_used": "gpt-4o-mini",
+            "model_version": "1.0",
+            "chunks": 3,
+            "chunking_applied": True,
+            "retry_count": 1,
+            "ab_variant": "A",
+            "dlp_applied": True,
         },
     )

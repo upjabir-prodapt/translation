@@ -1,4 +1,5 @@
 {
+    "auto": "auto",
     "en": "en",
     "eng": "en",
     "english": "en",
@@ -21,6 +22,14 @@
     "ja": "ja",
     "jpn": "ja",
     "japanese": "ja",
+    "zh": "zh",
+    "zho": "zh",
+    "chi": "zh",
+    "chinese": "zh",
     "zh-cn": "zh",
-    "chinese": "zh"
-    }
+    "zh-tw": "zh",
+    "mandarin": "zh",
+    "ar": "ar",
+    "ara": "ar",
+    "arabic": "ar"
+}

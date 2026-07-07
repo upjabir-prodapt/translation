@@ -3,8 +3,8 @@
 import logging
 from pathlib import Path
 
-from src.loaders.exceptions import AssetIntegrityError
-from src.loaders.repositories.cache_repository import verify_or_delete
+from loaders.exceptions import AssetIntegrityError
+from loaders.repositories.cache_repository import verify_or_delete
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,6 @@ def is_valid(path: Path, expected_hash: str) -> bool:
     Returns:
         True if valid, False otherwise
     """
-    from src.loaders.repositories.cache_repository import verify_file_integrity
+    from loaders.repositories.cache_repository import verify_file_integrity
 
     return verify_file_integrity(path, expected_hash)

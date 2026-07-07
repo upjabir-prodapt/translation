@@ -2,25 +2,16 @@
 
 from pathlib import Path
 
-from src.config.constants import settings
+from config.constants import settings
 
 
 def get_cache_root() -> Path:
     """Get the root cache directory.
 
-    Returns the canonical asset cache root from settings.
+    Respects BABELDOC_CACHE_DIR environment variable,
+    otherwise defaults to project_root/assets.
     """
-    return settings.assets_root_path
-
-
-def _assert_under_cache_root(path: Path) -> None:
-    """Ensure path remains inside configured cache root."""
-    root = get_cache_root().resolve()
-    target = path.resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as e:
-        raise ValueError(f"Resolved path '{target}' escapes cache root '{root}'") from e
+    return settings.CACHE_FOLDER or settings.PROJECT_ROOT / "assets"
 
 
 def get_cache_file_path(filename: str, subdir: str = "") -> Path:
@@ -42,7 +33,6 @@ def get_cache_file_path(filename: str, subdir: str = "") -> Path:
     else:
         path = cache_root / filename
 
-    _assert_under_cache_root(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -57,6 +47,5 @@ def get_subdir_path(subdir: str) -> Path:
         Path to the subdirectory (created if it doesn't exist)
     """
     path = get_cache_root() / subdir
-    _assert_under_cache_root(path)
     path.mkdir(parents=True, exist_ok=True)
     return path

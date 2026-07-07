@@ -30,9 +30,6 @@ class FontMetadata(AssetMetadata):
 
     font_name: str = ""
     subset_font_path: str | None = None
-    ascent: float | None = None
-    descent: float | None = None
-    encoding_length: int | None = None
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> "FontMetadata":
@@ -44,9 +41,6 @@ class FontMetadata(AssetMetadata):
             url=data.get("url"),
             font_name=data.get("font_name", ""),
             subset_font_path=data.get("subset_font_path"),
-            ascent=data.get("ascent"),
-            descent=data.get("descent"),
-            encoding_length=data.get("encoding_length"),
         )
 
 

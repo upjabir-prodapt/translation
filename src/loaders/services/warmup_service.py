@@ -3,23 +3,22 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from dataclasses import field
 from typing import Any
 
-from src.config.constants import settings
-from src.loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
-from src.loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
-from src.loaders.exceptions import WarmupError
-from src.loaders.repositories.cache_repository import get_file_size
-from src.loaders.repositories.cache_repository import verify_or_delete
-from src.loaders.repositories.metadata_repository import clear_metadata_cache
-from src.loaders.repositories.metadata_repository import get_cmap_metadata
-from src.loaders.repositories.metadata_repository import get_font_metadata
-from src.loaders.services.download_service import download_async
-from src.loaders.services.download_service import get_or_download_model_async
-from src.loaders.utils.path_helpers import get_cache_file_path
-from src.loaders.utils.path_helpers import get_subdir_path
-from src.repository.translation_storage_repository import TranslationStorageRepository
+from config.constants import settings
+from loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
+from loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
+from loaders.exceptions import WarmupError
+from loaders.repositories.cache_repository import get_file_size
+from loaders.repositories.cache_repository import verify_or_delete
+from loaders.repositories.metadata_repository import clear_metadata_cache
+from loaders.repositories.metadata_repository import get_cmap_metadata
+from loaders.repositories.metadata_repository import get_font_metadata
+from loaders.services.download_service import download_async
+from loaders.services.download_service import get_or_download_model_async
+from loaders.utils.path_helpers import get_cache_file_path
+from loaders.utils.path_helpers import get_subdir_path
+from worker.repository.worker_storage_repository import WorkerStorageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +30,13 @@ class WarmupResult:
     success: bool
     downloaded_count: int = 0
     verified_count: int = 0
-    failed_assets: list[str] = field(default_factory=list)
+    failed_assets: list[str] = None  # type: ignore[assignment]
     elapsed_seconds: float = 0.0
     message: str = ""
+
+    def __post_init__(self):
+        if self.failed_assets is None:
+            self.failed_assets = []
 
 
 class WarmupService:
@@ -41,11 +44,10 @@ class WarmupService:
 
     def __init__(
         self,
-        storage_repo: TranslationStorageRepository | None = None,
+        storage_repo: WorkerStorageRepository | None = None,
     ) -> None:
         self.storage_repo = storage_repo
         self._download_stats = {"downloaded": 0, "verified": 0, "failed": []}
-        self._phase_stats: dict[str, int] = {}
 
     async def warmup_all(self) -> WarmupResult:
         """Run complete asset warmup.
@@ -66,8 +68,8 @@ class WarmupService:
         self._download_stats = {"downloaded": 0, "verified": 0, "failed": []}
 
         try:
-            # Step 1: Bulk sync all files in bounded phases
-            await self._bulk_sync_phased()
+            # Step 1: Bulk sync all files
+            await self._bulk_sync()
 
             # Step 2: Clear metadata cache if new files were downloaded
             clear_metadata_cache()
@@ -91,8 +93,6 @@ class WarmupService:
             logger.info(f"Asset warmup complete in {elapsed:.2f}s")
             logger.info(f"  Downloaded: {self._download_stats['downloaded']}")
             logger.info(f"  Verified: {self._download_stats['verified']}")
-            if self._phase_stats:
-                logger.info(f"  Sync phases: {self._phase_stats}")
             logger.info("=" * 60)
 
             return WarmupResult(
@@ -112,132 +112,51 @@ class WarmupService:
                 failed_assets=self._download_stats["failed"],
             ) from e
 
-    async def _download_blob_if_needed(
-        self,
-        *,
-        rel_path: str,
-        blob: Any,
-        repo: TranslationStorageRepository,
-        semaphore: asyncio.Semaphore,
-    ) -> bool:
-        """Download one blob if local file is missing or size-mismatched."""
-        local_path = get_cache_file_path(rel_path)
-        if local_path.exists() and get_file_size(local_path) == blob.size:
-            return False
-
-        async with semaphore:
-            try:
-                await repo.download_asset(rel_path, local_path)
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to sync asset '{rel_path}': {e}")
-                self._download_stats["failed"].append(rel_path)
-                return False
-
-    async def _bulk_sync_group(
-        self,
-        *,
-        group_name: str,
-        rel_paths: list[str],
-        blob_map: dict[str, Any],
-        repo: TranslationStorageRepository,
-        semaphore: asyncio.Semaphore,
-    ) -> int:
-        """Sync a specific logical group of assets."""
-        if not rel_paths:
-            self._phase_stats[group_name] = 0
-            return 0
-
-        downloaded = 0
-        batch_size = max(1, settings.WARMUP_SYNC_CONCURRENCY * 4)
-        pending: list[asyncio.Task[bool]] = []
-
-        async def flush_pending() -> None:
-            nonlocal downloaded
-            if not pending:
-                return
-            results = await asyncio.gather(*pending, return_exceptions=False)
-            downloaded += sum(1 for item in results if item)
-            pending.clear()
-
-        for rel_path in rel_paths:
-            blob = blob_map[rel_path]
-            pending.append(
-                asyncio.create_task(
-                    self._download_blob_if_needed(
-                        rel_path=rel_path,
-                        blob=blob,
-                        repo=repo,
-                        semaphore=semaphore,
-                    )
-                )
-            )
-            if len(pending) >= batch_size:
-                await flush_pending()
-
-        await flush_pending()
-        self._phase_stats[group_name] = downloaded
-        logger.info(f"Bulk sync phase '{group_name}' downloaded {downloaded} file(s)")
-        return downloaded
-
-    async def _bulk_sync_phased(self) -> int:
-        """Bulk sync all assets from GCS using bounded concurrency phases.
+    async def _bulk_sync(self) -> int:
+        """Bulk sync all assets from GCS to local cache.
 
         Returns:
             Number of files downloaded
         """
-        repo = self.storage_repo or TranslationStorageRepository()
+        repo = self.storage_repo or WorkerStorageRepository()
 
         try:
             logger.info("Bulk sync: Listing GCS objects...")
             blobs = await repo.list_assets()
-            self._phase_stats = {}
-            prefix = settings.GCS_ASSETS_PREFIX.strip("/")
 
-            blob_map: dict[str, Any] = {}
+            download_tasks = []
+            download_count = 0
+
             for blob in blobs:
-                if blob.name is None or blob.name.endswith("/"):
+                # Skip if blob name is missing
+                if blob.name is None:
                     continue
-                name = blob.name.lstrip("/")
-                if not name.startswith(f"{prefix}/"):
-                    continue
-                rel_path = name[len(prefix) :].lstrip("/")
-                if rel_path:
-                    blob_map[rel_path] = blob
 
-            if not blob_map:
+                # Skip directories
+                if blob.name.endswith("/"):
+                    continue
+
+                # Extract relative path
+                prefix = settings.GCS_ASSETS_PREFIX
+                rel_path = blob.name[len(prefix) :].lstrip("/")
+
+                local_path = get_cache_file_path(rel_path)
+
+                # Check if download needed (missing or size mismatch)
+                if not local_path.exists() or get_file_size(local_path) != blob.size:
+                    logger.debug(f"Scheduling download: {rel_path}")
+                    download_tasks.append(repo.download_asset(rel_path, local_path))
+                    download_count += 1
+
+            if download_tasks:
+                logger.info(f"Bulk sync: Downloading {len(download_tasks)} files...")
+                await asyncio.gather(*download_tasks, return_exceptions=True)
+                self._download_stats["downloaded"] += download_count
+                logger.info(f"Bulk sync complete ({download_count} files)")
+            else:
                 logger.info("All assets already cached locally")
-                return 0
 
-            semaphore = asyncio.Semaphore(max(1, settings.WARMUP_SYNC_CONCURRENCY))
-            remaining = set(blob_map.keys())
-            total_downloaded = 0
-
-            for phase_prefix in settings.WARMUP_SYNC_PHASE_PREFIXES:
-                phase_prefix = phase_prefix.strip().strip("/")
-                if not phase_prefix:
-                    continue
-                phase_paths = sorted(
-                    path for path in remaining if path.startswith(f"{phase_prefix}/")
-                )
-                total_downloaded += await self._bulk_sync_group(
-                    group_name=phase_prefix,
-                    rel_paths=phase_paths,
-                    blob_map=blob_map,
-                    repo=repo,
-                    semaphore=semaphore,
-                )
-                remaining.difference_update(phase_paths)
-
-            if remaining:
-                self._phase_stats["unmatched_skipped"] = len(remaining)
-                logger.info(
-                    f"Bulk sync skipped {len(remaining)} unmatched file(s) outside phase prefixes"
-                )
-
-            self._download_stats["downloaded"] += total_downloaded
-            logger.info(f"Bulk sync complete ({total_downloaded} files downloaded)")
-            return total_downloaded
+            return download_count
 
         except Exception as e:
             logger.error(f"Bulk sync failed: {e}")
@@ -356,7 +275,7 @@ class WarmupService:
 
         try:
             # Ensure directory exists
-            get_subdir_path(settings.TIKTOKEN_DIR)
+            tiktoken_dir = get_subdir_path(settings.TIKTOKEN_DIR)
 
             # Pre-load common encodings
             await asyncio.to_thread(self._init_tiktoken)
@@ -376,7 +295,7 @@ class WarmupService:
 
 
 async def async_warmup(
-    storage_repo: TranslationStorageRepository | None = None,
+    storage_repo: WorkerStorageRepository | None = None,
 ) -> WarmupResult:
     """Run complete asset warmup asynchronously.
 
@@ -390,9 +309,7 @@ async def async_warmup(
     return await service.warmup_all()
 
 
-def warmup(
-    storage_repo: TranslationStorageRepository | None = None,
-) -> WarmupResult | Any:
+def warmup(storage_repo: WorkerStorageRepository | None = None) -> WarmupResult:
     """Run complete asset warmup synchronously.
 
     Args:

@@ -1,10 +1,21 @@
-"""Route tests for translation endpoints."""
+"""
+Integration tests for translation endpoints:
+  POST /api/v1/translate
+  GET  /api/v1/translate/{job_id}
+  GET  /api/v1/healthz
+
+Uses the FastAPI TestClient with mocked service dependencies
+(no real GCP calls). See integration/conftest.py for fixtures.
+"""
 
 from datetime import UTC
 from datetime import datetime
 
-from src.api.exceptions import JobNotFoundError
-from src.api.schemas.responses import JobDetailResponse
+from fixtures.sample_data import TRANSLATE_REQUEST_VALID
+
+from api.exceptions import JobNotFoundError
+from api.schemas.responses import JobDetailResponse
+from api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
 # Health check
@@ -39,78 +50,105 @@ class TestHealthCheck:
 
 
 class TestSubmitTranslation:
-    def test_returns_200(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={
-                "target_language": "Spanish",
-                "domain": "commercial",
-                "source_language": "English",
-            },
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_returns_200(self, api_client):
+        resp = api_client.post("/api/v1/translate", json=TRANSLATE_REQUEST_VALID)
         assert resp.status_code == 200
 
-    def test_response_has_job_id(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_response_has_job_id(self, api_client):
+        resp = api_client.post("/api/v1/translate", json=TRANSLATE_REQUEST_VALID)
         body = resp.json()
         assert "job_id" in body
         assert body["job_id"]
 
-    def test_response_status_is_queued(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_response_status_is_queued(self, api_client):
+        resp = api_client.post("/api/v1/translate", json=TRANSLATE_REQUEST_VALID)
         body = resp.json()
         assert body["status"] == "queued"
 
-    def test_response_has_status_url(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_response_has_status_url(self, api_client):
+        resp = api_client.post("/api/v1/translate", json=TRANSLATE_REQUEST_VALID)
         body = resp.json()
         assert "status_url" in body
         assert "/api/v1/translate/" in body["status_url"]
 
-    def test_missing_file_returns_422(self, api_client):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
-        )
+    def test_missing_document_returns_422(self, api_client):
+        payload = {
+            "translation_config": {
+                "target_language": "es",
+                "domain": "commercial",
+            }
+        }
+        resp = api_client.post("/api/v1/translate", json=payload)
         assert resp.status_code == 422
 
-    def test_missing_target_language_returns_422(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"domain": "commercial"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_missing_translation_config_returns_422(self, api_client):
+        payload = {
+            "document": {
+                "content": "dGVzdA==",  # valid base64 of "test"
+                "filename": "file.pdf",
+            }
+        }
+        resp = api_client.post("/api/v1/translate", json=payload)
         assert resp.status_code == 422
 
-    def test_invalid_domain_returns_422(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "science"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
+    def test_invalid_base64_content_returns_422(self, api_client):
+        payload = {
+            "document": {
+                "content": "!!!NOT_BASE64!!!",
+                "filename": "file.pdf",
+            },
+            "translation_config": {
+                "target_language": "es",
+                "domain": "commercial",
+            },
+        }
+        resp = api_client.post("/api/v1/translate", json=payload)
         assert resp.status_code == 422
 
-    def test_rejects_invalid_token(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            headers={"x-app-auth": "Bearer invalid"},
-            data={"target_language": "Spanish", "domain": "commercial"},
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+    def test_invalid_domain_returns_422(self, api_client):
+        from fixtures.sample_data import VALID_PDF_B64
+
+        payload = {
+            "document": {"content": VALID_PDF_B64, "filename": "doc.pdf"},
+            "translation_config": {
+                "target_language": "es",
+                "domain": "science",  # invalid
+            },
+        }
+        resp = api_client.post("/api/v1/translate", json=payload)
+        assert resp.status_code == 422
+
+    def test_invalid_filename_extension_returns_422(self, api_client):
+        from fixtures.sample_data import VALID_PDF_B64
+
+        payload = {
+            "document": {"content": VALID_PDF_B64, "filename": "doc.exe"},
+            "translation_config": {
+                "target_language": "es",
+                "domain": "commercial",
+            },
+        }
+        resp = api_client.post("/api/v1/translate", json=payload)
+        assert resp.status_code == 422
+
+    def test_service_exception_returns_error_response(
+        self, api_client, mock_translation_service
+    ):
+        """If the service raises, the middleware converts it to an error response."""
+        from api.exceptions import ValidationError as APIValidationError
+
+        mock_translation_service.submit_translation.side_effect = APIValidationError(
+            "encrypted PDF not supported"
         )
-        assert resp.status_code == 401
+        resp = api_client.post("/api/v1/translate", json=TRANSLATE_REQUEST_VALID)
+        assert resp.status_code in (400, 422, 500)
+        # Reset side effect for subsequent tests
+        mock_translation_service.submit_translation.side_effect = None
+        mock_translation_service.submit_translation.return_value = TranslateResponse(
+            job_id="test-job-id-001",
+            status="queued",
+            status_url="/api/v1/translate/test-job-id-001",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +195,11 @@ class TestGetTranslationStatus:
         )
 
     def test_completed_job_has_result_field(self, api_client, mock_job_service):
-        """When job is completed, result field is populated."""
-        from src.api.schemas.responses import TranslatedDocumentResult
-        from src.api.schemas.responses import TranslationLabels
-        from src.api.schemas.responses import TranslationMetadata
-        from src.api.schemas.responses import TranslationResult
+        """When job is completed, result field should be populated."""
+        from api.schemas.responses import TranslatedDocumentResult
+        from api.schemas.responses import TranslationLabels
+        from api.schemas.responses import TranslationMetadata
+        from api.schemas.responses import TranslationResult
 
         now = datetime.now(UTC)
         mock_job_service.get_translation_status.return_value = JobDetailResponse(

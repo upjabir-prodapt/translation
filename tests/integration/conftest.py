@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-from src.api.core.security import create_access_token
-from src.api.dependencies import get_job_service
-from src.api.dependencies import get_translation_service
-from src.api.main import app
-from src.api.schemas.responses import JobDetailResponse
-from src.api.schemas.responses import JobListResponse
-from src.api.schemas.responses import JobStatusResponse
-from src.api.schemas.responses import TranslateResponse
+
+from api.dependencies import get_job_service
+from api.dependencies import get_translation_service
+from api.main import app
+from api.schemas.responses import JobDetailResponse
+from api.schemas.responses import JobListResponse
+from api.schemas.responses import JobStatusResponse
+from api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
 # Service mocks
@@ -105,16 +105,7 @@ def api_client(mock_translation_service, mock_job_service):
     app.dependency_overrides[get_translation_service] = lambda: mock_translation_service
     app.dependency_overrides[get_job_service] = lambda: mock_job_service
 
-    token = create_access_token(
-        {
-            "sub": "user@colt.net",
-            "business_unit": "engineering",
-            "organization": "colt",
-        }
-    )
-
     with TestClient(app, raise_server_exceptions=False) as client:
-        client.headers.update({"x-app-auth": f"Bearer {token}"})
         yield client
 
     app.dependency_overrides.clear()

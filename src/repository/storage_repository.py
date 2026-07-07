@@ -1,7 +1,6 @@
 """Generic GCS Storage Repository - Handles all Google Cloud Storage operations."""
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -10,23 +9,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import google.auth
-import google.auth.transport.requests
 from google.api_core.exceptions import GoogleAPIError
-from google.auth import iam
-from google.auth.credentials import Credentials
 from google.cloud import storage
-from opentelemetry.trace import SpanKind
 
-from src.config.constants import settings
-from src.config.retry import gcs_write_retry
-from src.config.tracing import tracer_repository
-from src.repository.repository_exception import StorageError
-
-logger = logging.getLogger(__name__)
-
-_ATTR_RPC_SYSTEM = "rpc.system"
-_ATTR_GCS_BUCKET = "gcs.bucket"
+from config.constants import settings
+from config.logging_config import logger
+from repository.repository_exception import StorageError
 
 
 class FileType(Enum):
@@ -83,33 +71,6 @@ class StorageRepository:
     # Generic File Operations
     # ========================================================================
 
-    @gcs_write_retry(logger=logger)
-    async def _upload_blob(
-        self,
-        blob: "storage.Blob",
-        source: "Path | bytes",
-        file_type: "FileType | None",
-    ) -> None:
-        """Execute the GCS upload; retried automatically on transient failures."""
-        if isinstance(source, bytes):
-            if file_type:
-                await asyncio.to_thread(
-                    blob.upload_from_string, source, content_type=file_type.value
-                )
-            else:
-                await asyncio.to_thread(blob.upload_from_string, source)
-        elif isinstance(source, Path):
-            if not source.exists():
-                raise FileNotFoundError(f"Source file not found: {source}")
-            if file_type:
-                await asyncio.to_thread(
-                    blob.upload_from_filename, str(source), content_type=file_type.value
-                )
-            else:
-                await asyncio.to_thread(blob.upload_from_filename, str(source))
-        else:
-            raise ValueError("Source must be Path or bytes")
-
     async def upload_file(
         self,
         source: Path | bytes,
@@ -130,34 +91,44 @@ class StorageRepository:
             GCS URI (gs://bucket/path)
 
         Raises:
-            StorageError: If upload fails after all retry attempts
+            StorageError: If upload fails
         """
-        size_bytes = len(source) if isinstance(source, bytes) else 0
-        with tracer_repository.start_as_current_span(
-            "gcs.upload",
-            kind=SpanKind.CLIENT,
-            attributes={
-                _ATTR_RPC_SYSTEM: "gcs",
-                _ATTR_GCS_BUCKET: self.bucket_name,
-                "gcs.object": blob_path,
-                "gcs.size_bytes": size_bytes,
-            },
-        ):
-            try:
-                blob = self.bucket.blob(blob_path)
-                if metadata:
-                    blob.metadata = metadata
-                await self._upload_blob(blob, source, file_type)
-                gcs_uri = f"gs://{self.bucket_name}/{blob_path}"
-                logger.info(f"Uploaded file to {gcs_uri}")
-                return gcs_uri
-            except (FileNotFoundError, ValueError):
-                raise
-            except GoogleAPIError as e:
-                logger.error(f"Failed to upload file after all retry attempts: {e}")
-                raise StorageError(
-                    f"Failed to upload file: {e}", operation="upload", path=blob_path
-                ) from e
+        try:
+            blob = self.bucket.blob(blob_path)
+
+            if metadata:
+                blob.metadata = metadata
+
+            if isinstance(source, bytes):
+                if file_type:
+                    await asyncio.to_thread(
+                        blob.upload_from_string, source, content_type=file_type.value
+                    )
+                else:
+                    await asyncio.to_thread(blob.upload_from_string, source)
+            elif isinstance(source, Path):
+                if not source.exists():
+                    raise FileNotFoundError(f"Source file not found: {source}")
+                if file_type:
+                    await asyncio.to_thread(
+                        blob.upload_from_filename,
+                        str(source),
+                        content_type=file_type.value,
+                    )
+                else:
+                    await asyncio.to_thread(blob.upload_from_filename, str(source))
+            else:
+                raise ValueError("Source must be Path or bytes")
+
+            gcs_uri = f"gs://{self.bucket_name}/{blob_path}"
+            logger.info(f"Uploaded file to {gcs_uri}")
+            return gcs_uri
+
+        except GoogleAPIError as e:
+            logger.error(f"Failed to upload file: {e}")
+            raise StorageError(
+                f"Failed to upload file: {e}", operation="upload", path=blob_path
+            ) from e
 
     async def download_file(
         self, blob_path: str, local_path: Path, create_dirs: bool = True
@@ -176,37 +147,24 @@ class StorageRepository:
         Raises:
             StorageError: If download fails
         """
-        with tracer_repository.start_as_current_span(
-            "gcs.download",
-            kind=SpanKind.CLIENT,
-            attributes={
-                _ATTR_RPC_SYSTEM: "gcs",
-                _ATTR_GCS_BUCKET: self.bucket_name,
-                "gcs.object": blob_path,
-            },
-        ) as span:
-            try:
-                blob = self.bucket.blob(blob_path)
+        try:
+            blob = self.bucket.blob(blob_path)
 
-                if create_dirs:
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
+            if create_dirs:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                await asyncio.to_thread(blob.download_to_filename, str(local_path))
+            await asyncio.to_thread(blob.download_to_filename, str(local_path))
 
-                if local_path.exists():
-                    span.set_attribute("gcs.size_bytes", local_path.stat().st_size)
-                logger.info(
-                    f"Downloaded file from gs://{self.bucket_name}/{blob_path} to {local_path}"
-                )
-                return local_path
+            logger.info(
+                f"Downloaded file from gs://{self.bucket_name}/{blob_path} to {local_path}"
+            )
+            return local_path
 
-            except GoogleAPIError as e:
-                logger.error(f"Failed to download file: {e}")
-                raise StorageError(
-                    f"Failed to download file: {e}",
-                    operation="download",
-                    path=blob_path,
-                ) from e
+        except GoogleAPIError as e:
+            logger.error(f"Failed to download file: {e}")
+            raise StorageError(
+                f"Failed to download file: {e}", operation="download", path=blob_path
+            ) from e
 
     async def list_files(
         self,
@@ -228,32 +186,22 @@ class StorageRepository:
         Raises:
             StorageError: If listing fails
         """
-        with tracer_repository.start_as_current_span(
-            "gcs.list",
-            kind=SpanKind.CLIENT,
-            attributes={
-                _ATTR_RPC_SYSTEM: "gcs",
-                _ATTR_GCS_BUCKET: self.bucket_name,
-                "gcs.prefix": prefix or "",
-            },
-        ) as span:
-            try:
-                blobs = await asyncio.to_thread(
-                    lambda: list(
-                        self.bucket.list_blobs(
-                            prefix=prefix, delimiter=delimiter, max_results=max_results
-                        )
+        try:
+            blobs = await asyncio.to_thread(
+                lambda: list(
+                    self.bucket.list_blobs(
+                        prefix=prefix, delimiter=delimiter, max_results=max_results
                     )
                 )
-                span.set_attribute("gcs.result_count", len(blobs))
-                logger.debug(f"Listed {len(blobs)} files with prefix '{prefix}'")
-                return blobs
+            )
+            logger.debug(f"Listed {len(blobs)} files with prefix '{prefix}'")
+            return blobs
 
-            except GoogleAPIError as e:
-                logger.error(f"Failed to list files: {e}")
-                raise StorageError(
-                    f"Failed to list files: {e}", operation="list", path=prefix or ""
-                ) from e
+        except GoogleAPIError as e:
+            logger.error(f"Failed to list files: {e}")
+            raise StorageError(
+                f"Failed to list files: {e}", operation="list", path=prefix or ""
+            ) from e
 
     async def delete_file(self, blob_path: str) -> None:
         """
@@ -397,10 +345,6 @@ class StorageRepository:
         """
         Generate signed URL for file access.
 
-        Works both locally (service account key file) and on Cloud Run
-        (Compute Engine credentials), by falling back to IAM-based signing
-        when no private key is available in the current credentials.
-
         Args:
             blob_path: Blob path or GCS URI (gs://bucket/path)
             expires_in: Expiration time in seconds
@@ -417,14 +361,11 @@ class StorageRepository:
             blob = self.bucket.blob(blob_path)
             expiration = datetime.now(UTC) + timedelta(seconds=expires_in)
 
-            signing_credentials = await asyncio.to_thread(self._get_signing_credentials)
-
             url = await asyncio.to_thread(
                 blob.generate_signed_url,
                 expiration=expiration,
                 method=method,
                 version="v4",
-                credentials=signing_credentials,
             )
 
             logger.debug(f"Generated signed URL for {blob_path}")
@@ -437,72 +378,6 @@ class StorageRepository:
                 operation="sign_url",
                 path=blob_path,
             ) from e
-
-    @staticmethod
-    def _get_signing_credentials() -> Credentials | None:
-        """
-        Return credentials suitable for signing GCS URLs.
-
-        - If the current credentials already have a private key (e.g. a
-          service-account JSON key file used locally), return None so the
-          GCS client uses them as-is.
-        - Otherwise (Cloud Run / Compute Engine), build an IAM-backed signer
-          that delegates signing to the IAM API — no private key required.
-        """
-        credentials, project = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-
-        # Service account credentials loaded from a key file already have a
-        # private key — nothing extra needed.
-        if hasattr(credentials, "_private_key_pkcs8_pem") or hasattr(
-            credentials, "_signer"
-        ):
-            return None
-
-        # On GCE / Cloud Run we have impersonated or compute credentials that
-        # only carry a token.  Use the IAM signer instead.
-        request = google.auth.transport.requests.Request()
-        credentials.refresh(request)
-
-        service_account_email = getattr(credentials, "service_account_email", None)
-        if not service_account_email:
-            # Last resort: read the SA email from the GCE metadata server.
-            # URL is a hardcoded GCE internal constant — never user-supplied.
-            import requests as _requests  # transitive dep via google-auth[requests]
-
-            _gce_metadata_base = "http://metadata.google.internal/computeMetadata/v1/"
-            _gce_metadata_email_url = (
-                _gce_metadata_base + "instance/service-accounts/default/email"
-            )
-            if not _gce_metadata_email_url.startswith(_gce_metadata_base):
-                raise ValueError(
-                    f"Unexpected GCE metadata URL: {_gce_metadata_email_url!r}"
-                )
-            _resp = _requests.get(
-                _gce_metadata_email_url,  # nosec B310 - URL is constructed from hardcoded GCE metadata constant; validated by startswith check above
-                headers={"Metadata-Flavor": "Google"},
-                timeout=5,
-            )
-            _resp.raise_for_status()
-            service_account_email = _resp.text
-
-        signer = iam.Signer(
-            request=request,
-            credentials=credentials,
-            service_account_email=service_account_email,
-        )
-
-        # Build new service-account credentials that use IAM for signing.
-        from google.oauth2 import service_account as sa_module
-
-        signing_credentials = sa_module.Credentials(
-            signer=signer,
-            service_account_email=service_account_email,
-            token_uri="https://oauth2.googleapis.com/token",  # noqa: S106
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        return signing_credentials
 
     async def get_file_metadata(self, blob_path: str) -> dict[str, Any]:
         """
@@ -775,7 +650,7 @@ def download_from_gcs_sync(blob_path: str, local_path: Path) -> None:
     )
 
 
-async def download_from_gcs_async(blob_path: str, local_path: Path) -> Path:
+async def download_from_gcs_async(blob_path: str, local_path: Path) -> None:
     """
     Async download asset file from GCS (backward compatible).
 
@@ -783,7 +658,7 @@ async def download_from_gcs_async(blob_path: str, local_path: Path) -> Path:
         blob_path: Relative blob path (without assets prefix)
         local_path: Local destination path
     """
-    return await download_blob_async(
+    await download_blob_async(
         blob_path=blob_path, local_path=local_path, prefix=settings.GCS_ASSETS_PREFIX
     )
 
