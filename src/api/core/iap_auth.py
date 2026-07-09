@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 IAP_JWT_HEADER = "x-goog-iap-jwt-assertion"
 DEV_IAP_USER_HEADER = "x-dev-iap-user-email"
+IAP_CERTS_URL = "https://www.gstatic.com/iap/verify/public_key"
 
 _GOOGLE_REQUEST = google_requests.Request()
 
@@ -35,6 +36,7 @@ def verify_iap_jwt(assertion: str, audience: str) -> str:
             assertion,
             _GOOGLE_REQUEST,
             audience=audience,
+            certs_url=IAP_CERTS_URL,
         )
     except Exception as exc:
         logger.warning("IAP JWT verification failed for audience %s: %s", audience, exc)
