@@ -28,16 +28,16 @@ def _normalize_email(email: str) -> str:
     return normalized
 
 
-def verify_iap_jwt(assertion: str) -> str:
+def verify_iap_jwt(assertion: str, audience: str) -> str:
     """Verify IAP JWT and return normalized email."""
     try:
         claims = id_token.verify_token(
             assertion,
             _GOOGLE_REQUEST,
-            audience=settings.IAP_AUDIENCE,
+            audience=audience,
         )
     except Exception as exc:
-        logger.warning("IAP JWT verification failed: %s", exc)
+        logger.warning("IAP JWT verification failed for audience %s: %s", audience, exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing IAP identity token",
@@ -50,6 +50,23 @@ def verify_iap_jwt(assertion: str) -> str:
             detail="IAP token missing email claim",
         )
     return _normalize_email(email)
+
+
+def _verify_iap_assertion(assertion: str) -> str:
+    """Accept this service's IAP audience, or the AI Hub ILB audience when called via aihub hostname."""
+    audiences = [a for a in [settings.IAP_AUDIENCE, settings.HUB_IAP_AUDIENCE] if a]
+    last_exc: HTTPException | None = None
+    for audience in dict.fromkeys(audiences):
+        try:
+            return verify_iap_jwt(assertion, audience)
+        except HTTPException as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Missing IAP audience configuration",
+    )
 
 
 def get_iap_user(request: Request) -> str:
@@ -72,4 +89,4 @@ def get_iap_user(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing X-Goog-IAP-JWT-Assertion header",
         )
-    return verify_iap_jwt(assertion)
+    return _verify_iap_assertion(assertion)
