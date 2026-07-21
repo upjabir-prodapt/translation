@@ -1,33 +1,59 @@
 [project]
-name = "DocTranslator"
+name = "translation-api"
 version = "0.5.23"
-description = "Yet Another Document Translator"
+description = "PDF translation API and Cloud Tasks worker (DocTranslator)"
 license = "MIT"
-readme = "README.md"
 requires-python = ">=3.12,<3.13"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-keywords = ["PDF"]
+keywords = ["PDF", "translation", "cloud-run"]
+# Base / API image dependencies (no DocTranslator / ONNX / LLM SDKs).
 dependencies = [
-    # 4.25.x probes google._upb before honoring PROTOCOL_*; that import crashes on Python 3.14.
     "protobuf>=4.30.0,<6",
-    "bitstring>=4.3.0",
     "httpx[socks]>=0.27.0",
-    "numpy>=2.0.2",
-    "onnx>=1.21.0",
-    "onnxruntime>=1.16.1",
     "orjson>=3.10.14",
     "charset-normalizer >= 2.0.0",
     "cryptography>=46.0.7",
-    "psutil>=7.0.0",
     "pymupdf>=1.25.1",
+    "pydantic>=2.10.6",
+    "tenacity>=9.0.0",
+    "google-cloud-storage>=2.10.0",
+    "python-dotenv>=1.2.2",
+    "google-cloud-bigquery>=3.40.1",
+    "google-cloud-tasks>=2.23.0",
+    "opentelemetry-api>=1.41.0",
+    "opentelemetry-sdk>=1.41.0",
+    "opentelemetry-semantic-conventions>=0.62b1",
+    "opentelemetry-exporter-otlp-proto-http>=1.41.0",
+    "opentelemetry-instrumentation-fastapi>=0.62b1",
+    "opentelemetry-instrumentation-httpx>=0.62b1",
+    "opentelemetry-instrumentation-logging>=0.62b1",
+    "opentelemetry-resourcedetector-gcp>=1.12.0a0",
+    "google-auth>=2.53",
+    "pydantic-settings>=2.13.1",
+    "fastapi>=0.135.1",
+    "uvicorn>=0.41.0",
+    "python-multipart>=0.0.27",
+    "PyJWT[crypto]>=2.12.1",
+    "urllib3>=2.7.0",
+    "idna>=3.12",
+    "pyasn1>=0.6.3",
+    "requests>=2.33.0",
+]
+
+[project.optional-dependencies]
+# Worker Cloud Run + local in-process pipeline / full test suite.
+worker = [
+    "bitstring>=4.3.0",
+    "numpy>=2.0.2",
+    "onnx>=1.21.0",
+    "onnxruntime>=1.16.1",
+    "psutil>=7.0.0",
     "rich>=13.9.4",
     "tqdm>=4.67.1",
     "xsdata[cli,lxml,soap]>=24.12",
-    "pydantic>=2.10.6",
-    "tenacity>=9.0.0",
     "scikit-image>=0.25.2",
     "freetype-py>=2.5.1",
     "tiktoken>=0.9.0",
@@ -39,39 +65,19 @@ dependencies = [
     "rtree>=1.4.0",
     "chardet>=5.2.0",
     "scikit-learn>=1.7.1",
-    "google-cloud-storage>=2.10.0",
-    "python-dotenv>=1.2.2",
-    "google-cloud-bigquery>=3.40.1",
-    "opentelemetry-api>=1.41.0",
-    "opentelemetry-sdk>=1.41.0",
-    "opentelemetry-semantic-conventions>=0.62b1",
-    "opentelemetry-exporter-otlp-proto-http>=1.41.0",
-    "opentelemetry-instrumentation-fastapi>=0.62b1",
-    "opentelemetry-instrumentation-httpx>=0.62b1",
-    "opentelemetry-instrumentation-logging>=0.62b1",
     "opentelemetry-instrumentation-google-genai>=0.7b1",
-    "opentelemetry-resourcedetector-gcp>=1.12.0a0",
-    "google-auth>=2.53",
-    "pydantic-settings>=2.13.1",
-    "fastapi>=0.135.1",
-    "uvicorn>=0.41.0",
-    "python-multipart>=0.0.27",
-    "PyJWT[crypto]>=2.12.1",
     "google-genai>=1.67.0",
     "anthropic[vertex]>=0.40.0",
-    "anthropic[vertex]>=0.40.0",
     "langdetect>=1.0.9",
-    "urllib3>=2.7.0",
-    "idna>=3.12",
     "gitpython>=3.1.49",
     "lxml>=6.1.0",
     "pillow>=12.2.0",
-    "pyasn1>=0.6.3",
-    "requests>=2.33.0",
     "google-cloud-dlp>=3.22.0",
 ]
-
-[project.optional-dependencies]
+# Alias for Dockerfile.api clarity (installs base deps; no worker wheels).
+api = [
+    "pymupdf>=1.25.1",
+]
 directml = ["onnxruntime-directml>=1.16.1"]
 cuda = ["onnxruntime-gpu>=1.16.1"]
 memray = ["memray>=1.17.1"]
@@ -86,39 +92,37 @@ target-version = "py312"
 show-fixes = true
 
 [tool.ruff.format]
-# Enable reformatting of code snippets in docstrings.
 docstring-code-format = true
 
 [tool.ruff.lint]
 ignore = [
-    "E203",   # 冒号前的空格
-    "E261",   # 注释前至少两个空格
-    "E501",   # 行太长
-    "E741",   # 变量名歧义
-    "F841",   # 未使用的变量
-    "C901",   # 太复杂的函数
-    "S101",   # use assert
-    "SIM",    # flake8-simplify
-    "ARG002", # unused argument
-    "S110",   # `try`-`except`-`pass` detected, consider logging the exception
-    "B024",   # abstract class without abstract methods
-    "S112",   # `try`-`except`-`continue` detected, consider logging the exception
-    "COM812", # missing-trailing-comma
-
+    "E203",
+    "E261",
+    "E501",
+    "E741",
+    "F841",
+    "C901",
+    "S101",
+    "SIM",
+    "ARG002",
+    "S110",
+    "B024",
+    "S112",
+    "COM812",
 ]
 select = [
-    "E",   # pycodestyle 错误
-    "F",   # Pyflakes
-    "N",   # PEP8 命名
-    "B",   # flake8-bugbear
-    "I",   # isort
-    "C",   # mccabe
-    "UP",  # pyupgrade
-    "S",   # flake8-bandit
-    "A",   # flake8-builtins
-    "COM", # flake8-commas
-    "ARG", # flake8-unused-arguments
-    "PTH", # 使用 pathlib
+    "E",
+    "F",
+    "N",
+    "B",
+    "I",
+    "C",
+    "UP",
+    "S",
+    "A",
+    "COM",
+    "ARG",
+    "PTH",
 ]
 
 [tool.ruff.lint.flake8-quotes]
@@ -133,19 +137,17 @@ force-single-line = true
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-# 设置一些规则的特定配置
 [tool.ruff.lint.mccabe]
-max-complexity = 10 # 函数圈复杂度阈值
+max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"src/doctranslator/doctranslator_exception/DocTranslatorException.py" = ["N999"]
-"src/doctranslator/format/pdf/pdfinterp.py" = ["N"] # 忽略命名规范
-"tests/*" = ["S101"]            
-"**/__init__.py" = ["F401"]     
-"src/doctranslator/format/pdf/document_il/midend/paragraph_finder.py" = ["S311"]
+"src/worker/doctranslator/doctranslator_exception/DocTranslatorException.py" = ["N999"]
+"src/worker/doctranslator/format/pdf/pdfinterp.py" = ["N"]
+"tests/*" = ["S101"]
+"**/__init__.py" = ["F401"]
+"src/worker/doctranslator/format/pdf/document_il/midend/paragraph_finder.py" = ["S311"]
 "docs/*" = ["A001"]
-"src/doctranslator/pdfminer/*" =["A","F", "I", "N", "S", "B", "C", "COM", "ARG", "PTH", "UP"]
-
+"src/worker/doctranslator/pdfminer/*" = ["A", "F", "I", "N", "S", "B", "C", "COM", "ARG", "PTH", "UP"]
 
 [dependency-groups]
 dev = [
@@ -177,18 +179,18 @@ addopts = "--import-mode=importlib"
 source = ["src"]
 relative_files = true
 omit = [
-    "src/doctranslator/*",
-    "src/doctranslator/**/*",
-    "src/loaders/*",
-    "src/loaders/**/*",
+    "src/worker/doctranslator/*",
+    "src/worker/doctranslator/**/*",
+    "src/worker/loaders/*",
+    "src/worker/loaders/**/*",
 ]
 
 [tool.coverage.report]
 omit = [
-    "src/doctranslator/*",
-    "src/doctranslator/**/*",
-    "src/loaders/*",
-    "src/loaders/**/*",
+    "src/worker/doctranslator/*",
+    "src/worker/doctranslator/**/*",
+    "src/worker/loaders/*",
+    "src/worker/loaders/**/*",
 ]
 exclude_lines = [
     "pragma: no cover",
@@ -206,9 +208,6 @@ version_pattern = "MAJOR.MINOR.PATCH[.PYTAGNUM]"
     'current_version = "{version}"',
     'version = "{version}"'
 ]
-
-[tool.uv.sources]
-yadt = { path = ".", editable = true }
 
 [tool.pyright]
 pythonVersion = "3.12"

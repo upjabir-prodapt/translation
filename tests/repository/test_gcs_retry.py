@@ -351,7 +351,7 @@ class TestPipelineGcsFailureOnJobsTable:
 
     @pytest.fixture
     def orchestrator(self, mock_bigquery, mock_storage):
-        from src.api.services.pipeline_orchestrator import PipelineOrchestrator
+        from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 
         return PipelineOrchestrator(bigquery=mock_bigquery, storage=mock_storage)
 
@@ -393,7 +393,7 @@ class TestPipelineGcsFailureOnJobsTable:
         mock_storage.download_file.side_effect = storage_error
 
         pipeline_span = MagicMock()
-        with patch("src.api.services.pipeline_orchestrator.logger") as mock_logger:
+        with patch("src.worker.services.pipeline_orchestrator.logger") as mock_logger:
             await orchestrator._execute_pipeline(
                 job_id, _job_data(job_id), pipeline_span
             )
@@ -428,7 +428,7 @@ class TestPipelineGcsFailureOnJobsTable:
         mock_storage.download_file.side_effect = RuntimeError("pipeline crash")
 
         pipeline_span = MagicMock()
-        with patch("src.api.services.pipeline_orchestrator.logger") as mock_logger:
+        with patch("src.worker.services.pipeline_orchestrator.logger") as mock_logger:
             await orchestrator._execute_pipeline(
                 job_id, _job_data(job_id), pipeline_span
             )

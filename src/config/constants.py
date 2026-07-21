@@ -156,6 +156,24 @@ class Settings(BaseSettings):
     API_USE_BACKGROUND_PIPELINE: bool
 
     # -----------------------------
+    # App role / Cloud Tasks
+    # -----------------------------
+
+    # api | worker | "" (empty = treat as worker for asset dirs — safe for tests/local)
+    APP_ROLE: str = ""
+
+    CLOUD_TASKS_PROJECT: str = ""
+    CLOUD_TASKS_LOCATION: str = ""
+    CLOUD_TASKS_QUEUE: str = ""
+    CLOUD_TASKS_WORKER_URL: str = ""
+    CLOUD_TASKS_OIDC_SERVICE_ACCOUNT: str = ""
+    CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS: int = 3600
+    # Worker-only: override OIDC audience if different from CLOUD_TASKS_WORKER_URL
+    WORKER_OIDC_AUDIENCE: str = ""
+    # Local/dev only — never enable in production
+    WORKER_SKIP_OIDC_VERIFICATION: bool = False
+
+    # -----------------------------
     # Gemini / Judge
     # -----------------------------
 
@@ -373,29 +391,44 @@ class Settings(BaseSettings):
         )
         return self
 
+    @property
+    def is_api_role(self) -> bool:
+        return self.APP_ROLE.strip().lower() == "api"
+
+    @property
+    def is_worker_role(self) -> bool:
+        return self.APP_ROLE.strip().lower() == "worker"
+
     @model_validator(mode="after")
     def setup_directories(self) -> "Settings":
         if self.JWT_ALGORITHM.upper() != "HS256":
             raise ValueError("JWT_ALGORITHM must be HS256")
         if not self.IS_LOCAL and not self.JWT_SECRET_KEY:
             raise ValueError("JWT_SECRET_KEY is required when IS_LOCAL is false")
-        if not self.IS_LOCAL and not self.IAP_AUDIENCE:
+        # Worker does not use IAP; API and unset role still require it in cloud.
+        if (
+            not self.IS_LOCAL
+            and not self.is_worker_role
+            and not self.IAP_AUDIENCE
+        ):
             raise ValueError("IAP_AUDIENCE is required when IS_LOCAL is false")
 
-        cache_folder = self.assets_root_path
-        cache_folder.mkdir(parents=True, exist_ok=True)
-
-        temp_dir = self.temp_root_path
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        for subdir in (
-            self.MODELS_DIR,
-            self.METADATA_DIR,
-            self.FONTS_DIR,
-            self.CMAP_DIR,
-            self.TIKTOKEN_DIR,
-            self.GLOSSARIES_DIR,
-        ):
-            (cache_folder / subdir).mkdir(parents=True, exist_ok=True)
+        # Asset cache dirs are worker-owned (GCS FUSE). Skip when APP_ROLE=api.
+        ensure_assets = not self.is_api_role
+        if ensure_assets:
+            cache_folder = self.assets_root_path
+            cache_folder.mkdir(parents=True, exist_ok=True)
+            for subdir in (
+                self.MODELS_DIR,
+                self.METADATA_DIR,
+                self.FONTS_DIR,
+                self.CMAP_DIR,
+                self.TIKTOKEN_DIR,
+                self.GLOSSARIES_DIR,
+            ):
+                (cache_folder / subdir).mkdir(parents=True, exist_ok=True)
+            temp_dir = self.temp_root_path
+            temp_dir.mkdir(parents=True, exist_ok=True)
 
         self._log_config_sources()
         return self

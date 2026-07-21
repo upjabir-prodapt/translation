@@ -121,8 +121,10 @@ stages:
                 gcloud auth print-access-token \
                   | docker login -u oauth2accesstoken --password-stdin "https://$(REGION)-docker.pkg.dev"
 
-                docker build -t "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" "$(ROOT)"
-                docker push "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)"
+                docker build -f "$(ROOT)/Dockerfile.api" -t "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-api:$(Build.BuildId)" "$(ROOT)"
+                docker build -f "$(ROOT)/Dockerfile.worker" -t "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-worker:$(Build.BuildId)" "$(ROOT)"
+                docker push "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-api:$(Build.BuildId)"
+                docker push "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-worker:$(Build.BuildId)"
 
 # ============================================================================
 # STAGE 2 — Deploy Approve
@@ -197,9 +199,15 @@ stages:
                 gcloud auth login --cred-file="$(GOOGLE_APPLICATION_CREDENTIALS)"
                 gcloud config set project "$(PROJECT_ID)"
 
-                gcloud beta run deploy "$(SERVICE_NAME)" \
+                API_SERVICE="${CLOUD_RUN_API_SERVICE:-$(SERVICE_NAME)-api}"
+                WORKER_SERVICE="${CLOUD_RUN_WORKER_SERVICE:-$(SERVICE_NAME)-worker}"
+                API_SECRET="${APP_CONFIG_API_SECRET_NAME:-$(APP_CONFIG_SECRET_NAME)}"
+                WORKER_SECRET="${APP_CONFIG_WORKER_SECRET_NAME:-$(APP_CONFIG_SECRET_NAME)}"
+                SECRET_VERSION="${APP_CONFIG_SECRET_VERSION:-latest}"
+
+                gcloud beta run deploy "$WORKER_SERVICE" \
                   --quiet \
-                  --image "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME):$(Build.BuildId)" \
+                  --image "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-worker:$(Build.BuildId)" \
                   --platform=managed \
                   --region="$(REGION)" \
                   --project="$(PROJECT_ID)" \
@@ -209,12 +217,34 @@ stages:
                   --min-instances=1 \
                   --concurrency=1 \
                   --port=8000 \
-                  --timeout=600 \
+                  --timeout=3600 \
                   --memory=4Gi \
                   --cpu=4 \
                   --no-cpu-throttling \
                   --cpu-boost \
+                  --no-allow-unauthenticated \
                   --add-volume mount-path=$(ASSETS_MOUNT_PATH),type=cloud-storage,bucket=$(GCS_BUCKET_NAME),readonly=false,mount-options="only-dir=$(GCS_ASSETS_DIR)" \
-                  --set-env-vars="GOOGLE_CLOUD_PROJECT=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),IS_LOCAL=false,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp" \
-                  --set-secrets="/secrets/.env=$(APP_CONFIG_SECRET_NAME):$(APP_CONFIG_SECRET_VERSION)"
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp" \
+                  --set-secrets="/secrets/.env=${WORKER_SECRET}:${SECRET_VERSION}"
+
+                WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$(REGION)" --project="$(PROJECT_ID)" --format='value(status.url)')"
+                TASKS_URL="${WORKER_URL}/internal/tasks/translate"
+
+                gcloud beta run deploy "$API_SERVICE" \
+                  --quiet \
+                  --image "$(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)/$(IMAGE_NAME)-api:$(Build.BuildId)" \
+                  --platform=managed \
+                  --region="$(REGION)" \
+                  --project="$(PROJECT_ID)" \
+                  --network="$(NETWORK)"  \
+                  --subnet="$(SUBNET)"  \
+                  --service-account="$(CLOUD_RUN_SA)" \
+                  --min-instances=1 \
+                  --concurrency=20 \
+                  --port=8000 \
+                  --timeout=60 \
+                  --memory=1Gi \
+                  --cpu=1 \
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),IS_LOCAL=false,APP_ROLE=api,API_USE_BACKGROUND_PIPELINE=false,TEMP_DIR=/tmp,CLOUD_TASKS_LOCATION=$(REGION),CLOUD_TASKS_QUEUE=$(CLOUD_TASKS_QUEUE),CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$(CLOUD_TASKS_OIDC_SERVICE_ACCOUNT),CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS=3600" \
+                  --set-secrets="/secrets/.env=${API_SECRET}:${SECRET_VERSION}"
 

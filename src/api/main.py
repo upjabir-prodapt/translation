@@ -1,7 +1,5 @@
-"""Main FastAPI application."""
+"""Main FastAPI application (public API — no asset warmup)."""
 
-import asyncio
-import contextlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC
@@ -15,8 +13,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from src.api.middleware.exception_handler import exception_handler_middleware
 from src.api.middleware.trace_middleware import TraceEnrichmentMiddleware
 from src.api.routes.router import api_router
-from src.api.services.startup_assets_service import StartupAssetsService
-from src.api.services.startup_assets_service import create_background_task
 from src.config.constants import settings
 from src.config.logging_config import setup_logging
 from src.config.telemetry import setup_telemetry
@@ -24,16 +20,12 @@ from src.config.telemetry import shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 
-# Track startup time
 app_start_time = datetime.now(UTC)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Application lifespan handler."""
-    # Startup — ordering is critical: telemetry first, then logging.
-    # LoggingInstrumentor (called inside setup_telemetry) must register its
-    # record factory before GcpJsonFormatter starts reading otelTraceID/otelSpanID.
+    """API lifespan — telemetry only (assets live on the worker)."""
     otel_ready = setup_telemetry(_app, settings)
     setup_logging()
     if settings.TRACE_ENABLED:
@@ -49,71 +41,24 @@ async def lifespan(_app: FastAPI):
                 "export to Cloud Trace. Search logs for '[OTEL] FAILED' for the "
                 "root cause (ADC, project ID, or setup error)."
             )
-    logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
-    startup_assets = StartupAssetsService()
-    _app.state.startup_preflight_status = None
-
-    if settings.STARTUP_WARMUP_ENABLED:
-        try:
-            preflight_status = await asyncio.wait_for(
-                startup_assets.run_preflight(),
-                timeout=settings.STARTUP_PREFLIGHT_TIMEOUT_SECONDS,
-            )
-            _app.state.startup_preflight_status = preflight_status
-            logger.info(
-                "Startup assets preflight complete (critical_sync_ok=%s ready=%s)",
-                preflight_status.critical_sync_ok,
-                preflight_status.critical_files_ready,
-            )
-        except Exception as e:
-            if settings.STARTUP_WARMUP_STRICT:
-                logger.error("Startup assets preflight failed in strict mode")
-                raise
-            logger.warning(f"Startup assets preflight failed (continuing): {e}")
-    else:
-        logger.info("Startup assets preflight disabled by STARTUP_WARMUP_ENABLED=false")
-
-    if settings.STARTUP_BACKGROUND_WARMUP_ENABLED:
-        _app.state.asset_background_warmup = create_background_task(
-            startup_assets.run_background_warmup()
-        )
-        logger.info("Background asset warmup scheduled (non-blocking)")
-    else:
-        logger.info(
-            "Background asset warmup disabled by STARTUP_BACKGROUND_WARMUP_ENABLED=false"
-        )
-
-    logger.info("API startup complete and ready to serve traffic")
-
+    logger.info("Starting %s v%s (API)", settings.API_TITLE, settings.API_VERSION)
+    logger.info("API startup complete (asset warmup skipped — worker-owned)")
     yield
-
-    # Shutdown
-    task: asyncio.Task | None = getattr(_app.state, "asset_background_warmup", None)
-    if task and not task.done():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
     logger.info("API shutting down")
     shutdown_telemetry(_app)
 
 
-# Create FastAPI app
 app = FastAPI(
     title=settings.API_TITLE,
     version=settings.API_VERSION,
-    description="PDF Translation API using DocTranslator",
+    description="PDF Translation API",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
-# Add global exception handling middleware
 app.add_middleware(BaseHTTPMiddleware, dispatch=exception_handler_middleware)
-
-# Enrich OTel HTTP spans with user/org/job_id business attributes
 app.add_middleware(TraceEnrichmentMiddleware)
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -122,29 +67,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routes
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 
-# Root endpoint
 @app.get("/")
 async def root(request: Request):
     """Root endpoint."""
-    preflight_status = getattr(request.app.state, "startup_preflight_status", None)
     return {
         "service": settings.API_TITLE,
         "version": settings.API_VERSION,
         "status": "running",
+        "role": "api",
         "timestamp": datetime.now(UTC).isoformat(),
-        "startup_preflight": (
-            {
-                "critical_sync_ok": preflight_status.critical_sync_ok,
-                "critical_files_ready": preflight_status.critical_files_ready,
-                "assets_root": preflight_status.assets_root,
-            }
-            if preflight_status
-            else None
-        ),
     }
 
 
@@ -156,4 +90,4 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=8000,
         reload=True,
-    )  # noqa: S104
+    )
