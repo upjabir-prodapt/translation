@@ -6,7 +6,9 @@ from typing import cast
 import numpy as np
 
 from src.worker.doctranslator.format.pdf.babelpdf.utils import guarded_bbox
-from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import ILCreater
+from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import (
+    ILCreater,
+)
 from src.worker.doctranslator.pdfminer import settings
 from src.worker.doctranslator.pdfminer.pdfcolor import PREDEFINED_COLORSPACE
 from src.worker.doctranslator.pdfminer.pdfcolor import PDFColorSpace

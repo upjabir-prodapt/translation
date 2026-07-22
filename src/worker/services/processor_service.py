@@ -14,23 +14,27 @@ from langdetect import LangDetectException
 from langdetect import detect_langs
 from opentelemetry.trace import SpanKind
 
-from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestrator
-from src.worker.services.task_models import DocTranslatorTranslationConfig
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
+from src.repository.translation_storage_repository import (
+    get_translation_storage_repository,
+)
 from src.worker.doctranslator import async_translate
 from src.worker.doctranslator.docvision.doclayout import OnnxModel
-from src.worker.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
+from src.worker.doctranslator.format.pdf.split_manager import (
+    StructureAwareSplitStrategy,
+)
 from src.worker.doctranslator.format.pdf.translation_config import DlpConfig
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
-from src.worker.doctranslator.format.pdf.translation_config import TranslationCoverPageMetadata
+from src.worker.doctranslator.format.pdf.translation_config import (
+    TranslationCoverPageMetadata,
+)
 from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutputMode
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.translator.factory import create_translator
 from src.worker.loaders.assets import get_doclayout_onnx_model_path
-from src.repository.translation_storage_repository import (
-    get_translation_storage_repository,
-)
+from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestrator
+from src.worker.services.task_models import DocTranslatorTranslationConfig
 
 logger = logging.getLogger(__name__)
 

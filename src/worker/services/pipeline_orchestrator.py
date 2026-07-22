@@ -13,6 +13,14 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode
 
+from src.config.constants import settings
+from src.config.tracing import set_root_span
+from src.config.tracing import set_root_span_attributes
+from src.config.tracing import tracer_pipeline
+from src.repository.api_storage_repository import APIStorageRepository
+from src.repository.bigquery_repository import BigQueryRepository
+from src.repository.repository_exception import BigQueryError
+from src.repository.repository_exception import StorageError
 from src.worker.services.assembly_service import AssemblyService
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.intent_router_service import IntentRouterService
@@ -23,14 +31,6 @@ from src.worker.services.temp_workspace_service import TempWorkspaceService
 from src.worker.services.translation_job_session import TranslationJobSessionManager
 from src.worker.utils.cost_utils import validate_job_cost
 from src.worker.utils.docx_converter import convert_docx_to_pdf
-from src.config.constants import settings
-from src.config.tracing import set_root_span
-from src.config.tracing import set_root_span_attributes
-from src.config.tracing import tracer_pipeline
-from src.repository.api_storage_repository import APIStorageRepository
-from src.repository.bigquery_repository import BigQueryRepository
-from src.repository.repository_exception import BigQueryError
-from src.repository.repository_exception import StorageError
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +222,10 @@ class PipelineOrchestrator:
         model_id: str,
     ) -> dict[str, float | int]:
         """Split the PDF into chunks, compute proportional costs, and return job totals."""
-        from src.worker.utils.cost_utils import aggregate_chunk_cost_records
         from src.worker.doctranslator.format.pdf.split_manager import (
             StructureAwareSplitStrategy,
         )
+        from src.worker.utils.cost_utils import aggregate_chunk_cost_records
 
         class _Cfg:
             input_file = local_input_path

@@ -11,12 +11,12 @@ from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
 from src.config.constants import settings
+from src.repository.translation_storage_repository import TranslationStorageRepository
 from src.worker.loaders.exceptions import AssetDownloadError
 from src.worker.loaders.exceptions import AssetIntegrityError
 from src.worker.loaders.repositories.cache_repository import verify_or_delete
 from src.worker.loaders.services.integrity_service import verify_and_raise
 from src.worker.loaders.utils.path_helpers import get_cache_file_path
-from src.repository.translation_storage_repository import TranslationStorageRepository
 
 logger = logging.getLogger(__name__)
 

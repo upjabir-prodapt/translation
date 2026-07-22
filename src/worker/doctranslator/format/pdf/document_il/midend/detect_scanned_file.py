@@ -10,7 +10,9 @@ from src.worker.doctranslator.doctranslator_exception.DocTranslatorException imp
     ScannedPDFError,
 )
 from src.worker.doctranslator.format.pdf.document_il import il_version_1
-from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
+from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    PDFCreater,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import BLACK
 from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import GREEN
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig

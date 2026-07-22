@@ -1,7 +1,6 @@
 """Unit tests for Cloud Tasks enqueue client."""
 
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import pytest
 from google.api_core import exceptions as gcp_exceptions
@@ -40,7 +39,7 @@ def test_task_id_for_job():
     assert CloudTasksService.task_id_for_job("abc-123").startswith("translate-")
 
 
-def test_enqueue_translate_success(tasks_settings):
+def test_enqueue_translate_success(_tasks_settings):
     client = MagicMock()
     client.queue_path.return_value = (
         "projects/proj/locations/europe-west1/queues/translation-jobs"
@@ -57,7 +56,7 @@ def test_enqueue_translate_success(tasks_settings):
     client.create_task.assert_called_once()
 
 
-def test_enqueue_already_exists_is_ok(tasks_settings):
+def test_enqueue_already_exists_is_ok(_tasks_settings):
     client = MagicMock()
     client.queue_path.return_value = (
         "projects/proj/locations/europe-west1/queues/translation-jobs"

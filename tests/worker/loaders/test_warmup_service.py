@@ -58,7 +58,10 @@ class TestWarmupService:
     @patch("src.worker.loaders.services.warmup_service.get_font_metadata")
     @patch("src.worker.loaders.services.warmup_service.get_cache_file_path")
     @patch("src.worker.loaders.services.warmup_service.verify_or_delete")
-    @patch("src.worker.loaders.services.warmup_service.download_async", new_callable=AsyncMock)
+    @patch(
+        "src.worker.loaders.services.warmup_service.download_async",
+        new_callable=AsyncMock,
+    )
     async def test_warmup_fonts(
         self, mock_down, mock_verify, mock_path, mock_get_meta, service
     ):
@@ -72,7 +75,10 @@ class TestWarmupService:
 
     @patch("src.worker.loaders.services.warmup_service.get_cmap_metadata")
     @patch("src.worker.loaders.services.warmup_service.verify_or_delete")
-    @patch("src.worker.loaders.services.warmup_service.download_async", new_callable=AsyncMock)
+    @patch(
+        "src.worker.loaders.services.warmup_service.download_async",
+        new_callable=AsyncMock,
+    )
     async def test_warmup_cmaps(self, mock_down, mock_verify, mock_get_meta, service):
         mock_cmap = MagicMock()
         mock_cmap.sha3_256 = "abc"
@@ -100,7 +106,9 @@ class TestWarmupService:
         mock_repo.list_assets.return_value = [m1, m2]
         service.storage_repo = mock_repo
 
-        with patch("src.worker.loaders.services.warmup_service.settings") as mock_settings:
+        with patch(
+            "src.worker.loaders.services.warmup_service.settings"
+        ) as mock_settings:
             mock_settings.GCS_ASSETS_PREFIX = prefix
             mock_settings.WARMUP_SYNC_CONCURRENCY = 1
             mock_settings.WARMUP_SYNC_PHASE_PREFIXES = ["fonts", "cmaps"]
@@ -128,7 +136,10 @@ class TestWarmupService:
                 "src.worker.loaders.services.warmup_service.get_cache_file_path",
                 return_value=Path(tempfile.gettempdir()) / "f1",
             ),
-            patch("src.worker.loaders.services.warmup_service.get_file_size", return_value=50),
+            patch(
+                "src.worker.loaders.services.warmup_service.get_file_size",
+                return_value=50,
+            ),
             patch("pathlib.Path.exists", return_value=True),
         ):
             mock_repo = AsyncMock()

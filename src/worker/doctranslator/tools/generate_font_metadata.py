@@ -43,7 +43,9 @@ def get_font_metadata(font_path) -> PdfFont:
         )
     )
     translation_config.font = font_path
-    il_creater = src.worker.doctranslator.format.pdf.high_level.ILCreater(translation_config)
+    il_creater = src.worker.doctranslator.format.pdf.high_level.ILCreater(
+        translation_config
+    )
     il_creater.mupdf = doc
     buffer = io.BytesIO()
     doc.save(buffer)

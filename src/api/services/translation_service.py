@@ -301,9 +301,7 @@ class TranslationService:
     ) -> None:
         """Schedule translation via in-process task (local) or Cloud Tasks (prod)."""
         if settings.API_USE_BACKGROUND_PIPELINE:
-            token = (
-                otel_context.attach(parent_ctx) if parent_ctx is not None else None
-            )
+            token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
             try:
                 task = asyncio.create_task(
                     self.orchestrator.run(

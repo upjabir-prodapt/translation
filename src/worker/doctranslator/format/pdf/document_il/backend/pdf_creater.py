@@ -16,8 +16,12 @@ from bitstring import BitStream
 from src.worker.doctranslator.format.pdf.document_il import PdfOriginalPath
 from src.worker.doctranslator.format.pdf.document_il import il_version_1
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.worker.doctranslator.format.pdf.document_il.utils.matrix_helper import matrix_to_bytes
-from src.worker.doctranslator.format.pdf.document_il.utils.zstd_helper import zstd_decompress
+from src.worker.doctranslator.format.pdf.document_il.utils.matrix_helper import (
+    matrix_to_bytes,
+)
+from src.worker.doctranslator.format.pdf.document_il.utils.zstd_helper import (
+    zstd_decompress,
+)
 from src.worker.doctranslator.format.pdf.translation_config import TranslateResult
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutputMode

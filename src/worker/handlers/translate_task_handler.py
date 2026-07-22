@@ -71,9 +71,7 @@ class TranslateTaskHandler:
 
             status = str(job.get("status") or "")
             if status in job_status.TERMINAL_STATUSES:
-                logger.info(
-                    "Job %s already terminal (%s); skipping", job_id, status
-                )
+                logger.info("Job %s already terminal (%s); skipping", job_id, status)
                 return {"job_id": job_id, "status": status, "action": "noop"}
 
             if status == job_status.CANCELLED:

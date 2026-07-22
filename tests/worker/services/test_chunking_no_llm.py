@@ -16,7 +16,9 @@ import fitz  # PyMuPDF
 import pytest
 from src.worker.doctranslator.format.pdf.split_manager import PageCountStrategy
 from src.worker.doctranslator.format.pdf.split_manager import SplitManager
-from src.worker.doctranslator.format.pdf.split_manager import StructureAwareSplitStrategy
+from src.worker.doctranslator.format.pdf.split_manager import (
+    StructureAwareSplitStrategy,
+)
 
 # ---------------------------------------------------------------------------
 # PDF fixtures
@@ -105,16 +107,16 @@ class TestStructureAwareStrategyNoLLM:
 
     def test_gemini_translator_never_instantiated(self, multi_section_pdf):
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
-        target = (
-            "src.worker.doctranslator.translator.translator.GeminiVertexAITranslator.__init__"
-        )
+        target = "src.worker.doctranslator.translator.translator.GeminiVertexAITranslator.__init__"
         with patch(target) as mock_init:
             strategy.determine_split_points(_config(multi_section_pdf))
         mock_init.assert_not_called()
 
     def test_create_translator_never_called(self, multi_section_pdf):
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
-        with patch("src.worker.doctranslator.translator.factory.create_translator") as mock_ct:
+        with patch(
+            "src.worker.doctranslator.translator.factory.create_translator"
+        ) as mock_ct:
             strategy.determine_split_points(_config(multi_section_pdf))
         mock_ct.assert_not_called()
 
@@ -208,7 +210,9 @@ class TestPageCountStrategyNoLLM:
 
     def test_create_translator_never_called(self, multi_section_pdf):
         strategy = PageCountStrategy(max_pages_per_part=10)
-        with patch("src.worker.doctranslator.translator.factory.create_translator") as mock_ct:
+        with patch(
+            "src.worker.doctranslator.translator.factory.create_translator"
+        ) as mock_ct:
             strategy.determine_split_points(_config(multi_section_pdf))
         mock_ct.assert_not_called()
 
@@ -242,7 +246,9 @@ class TestSplitManagerNoLLM:
 
         with (
             patch("google.genai.Client") as mock_genai,
-            patch("src.worker.doctranslator.translator.factory.create_translator") as mock_ct,
+            patch(
+                "src.worker.doctranslator.translator.factory.create_translator"
+            ) as mock_ct,
         ):
             manager.determine_split_points(config)
 

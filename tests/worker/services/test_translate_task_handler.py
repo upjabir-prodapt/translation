@@ -38,7 +38,11 @@ async def test_noop_when_cancelled(handler):
 async def test_runs_when_queued(handler):
     h, bq, orch = handler
     job = {"job_id": "j1", "status": "queued"}
-    bq.get_translation_job.side_effect = [job, job, {"job_id": "j1", "status": "completed"}]
+    bq.get_translation_job.side_effect = [
+        job,
+        job,
+        {"job_id": "j1", "status": "completed"},
+    ]
     result = await h.handle(TranslateTaskPayload(job_id="j1"))
     assert result["action"] == "ran"
     orch.run.assert_awaited_once()

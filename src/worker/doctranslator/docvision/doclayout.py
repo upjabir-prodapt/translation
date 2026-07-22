@@ -218,7 +218,10 @@ class OnnxModel(DocLayoutModel):
         translate_config,
         save_debug_image,
     ) -> Generator[
-        tuple[src.worker.doctranslator.format.pdf.document_il.il_version_1.Page, YoloResult],
+        tuple[
+            src.worker.doctranslator.format.pdf.document_il.il_version_1.Page,
+            YoloResult,
+        ],
         None,
         None,
     ]:

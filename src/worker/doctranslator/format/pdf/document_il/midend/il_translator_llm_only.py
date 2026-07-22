@@ -16,7 +16,9 @@ from src.worker.doctranslator.format.pdf.document_il import PdfParagraph
 from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import (
     DocumentTranslateTracker,
 )
-from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import ILTranslator
+from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import (
+    ILTranslator,
+)
 from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import (
     PageTranslateTracker,
 )

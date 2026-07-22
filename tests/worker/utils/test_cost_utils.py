@@ -251,7 +251,9 @@ class TestComputeAccumulatedChunkCosts:
 
         orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
-        with patch("src.worker.services.pipeline_orchestrator.settings") as mock_settings:
+        with patch(
+            "src.worker.services.pipeline_orchestrator.settings"
+        ) as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
@@ -275,7 +277,9 @@ class TestComputeAccumulatedChunkCosts:
 
         orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
-        with patch("src.worker.services.pipeline_orchestrator.settings") as mock_settings:
+        with patch(
+            "src.worker.services.pipeline_orchestrator.settings"
+        ) as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
@@ -298,7 +302,9 @@ class TestComputeAccumulatedChunkCosts:
 
         orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
-        with patch("src.worker.services.pipeline_orchestrator.settings") as mock_settings:
+        with patch(
+            "src.worker.services.pipeline_orchestrator.settings"
+        ) as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 
@@ -322,7 +328,9 @@ class TestComputeAccumulatedChunkCosts:
 
         orchestrator = PipelineOrchestrator(bigquery=AsyncMock(), storage=AsyncMock())
 
-        with patch("src.worker.services.pipeline_orchestrator.settings") as mock_settings:
+        with patch(
+            "src.worker.services.pipeline_orchestrator.settings"
+        ) as mock_settings:
             mock_settings.GEMINI_INPUT_COST_PER_1K = 0.30
             mock_settings.GEMINI_OUTPUT_COST_PER_1K = 0.60
 

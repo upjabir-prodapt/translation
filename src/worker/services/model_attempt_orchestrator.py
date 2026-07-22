@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
+from src.config.constants import settings
+from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
+from src.worker.doctranslator.format.pdf.translation_config import (
+    TranslationCoverPageMetadata,
+)
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
 from src.worker.services.quality_judge_service import QualityJudgeResult
 from src.worker.services.translation_attempt_runner import TranslationAttemptRunner
-from src.config.constants import settings
-from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
-from src.worker.doctranslator.format.pdf.translation_config import TranslationCoverPageMetadata
 
 if TYPE_CHECKING:
     from src.worker.services.processor_service import JobProcessor

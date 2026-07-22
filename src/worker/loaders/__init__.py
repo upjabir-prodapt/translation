@@ -20,7 +20,9 @@ from src.worker.loaders.assets import get_doclayout_onnx_model_path
 from src.worker.loaders.assets import get_font_and_metadata
 from src.worker.loaders.assets import get_font_family
 from src.worker.loaders.assets import get_table_detection_rapidocr_model_path
-from src.worker.loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
+from src.worker.loaders.constants import (
+    DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256,
+)
 from src.worker.loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
 from src.worker.loaders.constants import TIKTOKEN_CACHES
 from src.worker.loaders.exceptions import AssetDownloadError
@@ -41,7 +43,9 @@ from src.worker.loaders.models.font_families import ALL_FONT_FAMILIES as ALL_FON
 # Backward compatibility - re-export from canonical sources
 from src.worker.loaders.repositories.metadata_repository import CMAP_METADATA
 from src.worker.loaders.repositories.metadata_repository import EMBEDDING_FONT_METADATA
-from src.worker.loaders.repositories.metadata_repository import get_font_names as font_names
+from src.worker.loaders.repositories.metadata_repository import (
+    get_font_names as font_names,
+)
 from src.worker.loaders.services.warmup_service import async_warmup
 from src.worker.loaders.services.warmup_service import warmup
 from src.worker.loaders.utils.path_helpers import get_cache_file_path

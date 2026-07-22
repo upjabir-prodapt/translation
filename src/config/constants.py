@@ -406,11 +406,7 @@ class Settings(BaseSettings):
         if not self.IS_LOCAL and not self.JWT_SECRET_KEY:
             raise ValueError("JWT_SECRET_KEY is required when IS_LOCAL is false")
         # Worker does not use IAP; API and unset role still require it in cloud.
-        if (
-            not self.IS_LOCAL
-            and not self.is_worker_role
-            and not self.IAP_AUDIENCE
-        ):
+        if not self.IS_LOCAL and not self.is_worker_role and not self.IAP_AUDIENCE:
             raise ValueError("IAP_AUDIENCE is required when IS_LOCAL is false")
 
         # Asset cache dirs are worker-owned (GCS FUSE). Skip when APP_ROLE=api.

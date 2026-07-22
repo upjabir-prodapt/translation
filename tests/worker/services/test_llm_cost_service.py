@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 
 import pytest
-from src.worker.services.llm_cost_service import VertexLLMCostService
 from src.config.llm_rate_catalog import ModelRateEntry
 from src.config.llm_rate_catalog import RateTier
 from src.worker.doctranslator.translator.usage import TokenUsage
+from src.worker.services.llm_cost_service import VertexLLMCostService
 
 
 def _default_test_catalog() -> tuple[ModelRateEntry, ...]:

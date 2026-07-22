@@ -6,9 +6,9 @@ import logging
 import re
 from dataclasses import dataclass
 
+from src.worker.doctranslator.format.pdf.document_il import il_version_1
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpService
-from src.worker.doctranslator.format.pdf.document_il import il_version_1
 
 logger = logging.getLogger(__name__)
 
