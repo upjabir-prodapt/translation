@@ -39,7 +39,7 @@ def test_task_id_for_job():
     assert CloudTasksService.task_id_for_job("abc-123").startswith("translate-")
 
 
-def test_enqueue_translate_success(_tasks_settings):
+def test_enqueue_translate_success(tasks_settings):  # noqa: ARG001
     client = MagicMock()
     client.queue_path.return_value = (
         "projects/proj/locations/europe-west1/queues/translation-jobs"
@@ -56,7 +56,7 @@ def test_enqueue_translate_success(_tasks_settings):
     client.create_task.assert_called_once()
 
 
-def test_enqueue_already_exists_is_ok(_tasks_settings):
+def test_enqueue_already_exists_is_ok(tasks_settings):  # noqa: ARG001
     client = MagicMock()
     client.queue_path.return_value = (
         "projects/proj/locations/europe-west1/queues/translation-jobs"
@@ -69,6 +69,10 @@ def test_enqueue_already_exists_is_ok(_tasks_settings):
 
 
 def test_enqueue_requires_queue(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.services.cloud_tasks_service.settings.CLOUD_TASKS_WORKER_URL",
+        "https://worker.example/internal/tasks/translate",
+    )
     monkeypatch.setattr(
         "src.api.services.cloud_tasks_service.settings.CLOUD_TASKS_QUEUE", ""
     )
