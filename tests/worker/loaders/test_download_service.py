@@ -28,7 +28,9 @@ class TestDownloadService:
         mock_repo.download_asset_sync.side_effect = Exception("fail")
         mock_get_repo.return_value = mock_repo
         # Set DOWNLOAD_MAX_ATTEMPTS=1 for fast test
-        with patch("src.worker.loaders.services.download_service.settings") as mock_settings:
+        with patch(
+            "src.worker.loaders.services.download_service.settings"
+        ) as mock_settings:
             mock_settings.DOWNLOAD_MAX_ATTEMPTS = 1
             with pytest.raises(AssetDownloadError):
                 download_with_retry("blob", Path(tempfile.gettempdir()) / "dest")
@@ -73,7 +75,10 @@ class TestDownloadService:
         "src.worker.loaders.services.download_service.get_cache_file_path",
         return_value=Path(tempfile.gettempdir()) / "m",
     )
-    @patch("src.worker.loaders.services.download_service.verify_or_delete", return_value=True)
+    @patch(
+        "src.worker.loaders.services.download_service.verify_or_delete",
+        return_value=True,
+    )
     def test_get_or_download_model_cached(self, mock_verify, mock_path):
         res = get_or_download_model("f", "abc", "name")
         assert res == Path(tempfile.gettempdir()) / "m"
@@ -82,7 +87,10 @@ class TestDownloadService:
         "src.worker.loaders.services.download_service.get_cache_file_path",
         return_value=Path(tempfile.gettempdir()) / "m",
     )
-    @patch("src.worker.loaders.services.download_service.verify_or_delete", return_value=False)
+    @patch(
+        "src.worker.loaders.services.download_service.verify_or_delete",
+        return_value=False,
+    )
     @patch("src.worker.loaders.services.download_service.download_and_verify")
     def test_get_or_download_model_download(self, mock_down, mock_verify, mock_path):
         get_or_download_model("f", "abc", "name")
@@ -92,7 +100,10 @@ class TestDownloadService:
         "src.worker.loaders.services.download_service.get_cache_file_path",
         return_value=Path(tempfile.gettempdir()) / "m",
     )
-    @patch("src.worker.loaders.services.download_service.verify_or_delete", return_value=True)
+    @patch(
+        "src.worker.loaders.services.download_service.verify_or_delete",
+        return_value=True,
+    )
     @pytest.mark.asyncio
     async def test_get_or_download_model_async_cached(self, mock_verify, mock_path):
         res = await get_or_download_model_async("f", "abc", "name")
@@ -102,7 +113,10 @@ class TestDownloadService:
         "src.worker.loaders.services.download_service.get_cache_file_path",
         return_value=Path(tempfile.gettempdir()) / "m",
     )
-    @patch("src.worker.loaders.services.download_service.verify_or_delete", return_value=False)
+    @patch(
+        "src.worker.loaders.services.download_service.verify_or_delete",
+        return_value=False,
+    )
     @patch("src.worker.loaders.services.download_service.download_and_verify_async")
     @pytest.mark.asyncio
     async def test_get_or_download_model_async_download(

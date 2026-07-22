@@ -8,14 +8,14 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.worker.services.glossary_service import GlossaryService
-from src.worker.services.intent_router_service import IntentRouterService
 from src.config.constants import settings
 from src.worker.loaders.services.download_service import download_async
 from src.worker.loaders.services.warmup_service import WarmupService
 from src.worker.loaders.utils.path_helpers import get_cache_file_path
 from src.worker.loaders.utils.path_helpers import get_cache_root
 from src.worker.loaders.utils.path_helpers import get_subdir_path
+from src.worker.services.glossary_service import GlossaryService
+from src.worker.services.intent_router_service import IntentRouterService
 
 logger = logging.getLogger(__name__)
 

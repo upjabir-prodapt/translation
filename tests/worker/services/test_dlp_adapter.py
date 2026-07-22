@@ -1,11 +1,11 @@
 """Tests for IL-aware DLP masking adapter."""
 
 import pytest
-from src.worker.services.dlp_service import DlpProvider
-from src.worker.services.dlp_service import DlpService
 from src.worker.doctranslator.format.pdf.dlp_adapter import apply_dlp_to_document
 from src.worker.doctranslator.format.pdf.dlp_adapter import unmask_document_with_tokens
 from src.worker.doctranslator.format.pdf.document_il import il_version_1
+from src.worker.services.dlp_service import DlpProvider
+from src.worker.services.dlp_service import DlpService
 
 
 @pytest.fixture

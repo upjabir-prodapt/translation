@@ -62,9 +62,11 @@ class TestJobProcessorCore:
     def test_collect_token_usage(self, processor):
         from unittest.mock import MagicMock
 
-        from src.worker.services.translation_attempt_runner import TranslationAttemptRunner
         from src.worker.doctranslator.translator.providers.gemini import (
             GeminiVertexAITranslator,
+        )
+        from src.worker.services.translation_attempt_runner import (
+            TranslationAttemptRunner,
         )
 
         runner = TranslationAttemptRunner(processor)

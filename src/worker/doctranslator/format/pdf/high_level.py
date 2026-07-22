@@ -21,7 +21,6 @@ from pymupdf import Document
 from pymupdf import Font
 
 import src.worker.doctranslator.asynchronize as asynchronize
-from src.worker.services.dlp_service import DlpService
 from src.config.constants import settings
 from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
     ExtractTextError,
@@ -40,9 +39,15 @@ from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import 
 from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import (
     SUBSET_FONT_STAGE_NAME,
 )
-from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
-from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import reproduce_cmap
-from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import ILCreater
+from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    PDFCreater,
+)
+from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    reproduce_cmap,
+)
+from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import (
+    ILCreater,
+)
 from src.worker.doctranslator.format.pdf.document_il.midend.add_debug_information import (
     AddDebugInformation,
 )
@@ -52,19 +57,27 @@ from src.worker.doctranslator.format.pdf.document_il.midend.automatic_term_extra
 from src.worker.doctranslator.format.pdf.document_il.midend.detect_scanned_file import (
     DetectScannedFile,
 )
-from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import ILTranslator
+from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import (
+    ILTranslator,
+)
 from src.worker.doctranslator.format.pdf.document_il.midend.il_translator_llm_only import (
     ILTranslatorLLMOnly,
 )
-from src.worker.doctranslator.format.pdf.document_il.midend.layout_parser import LayoutParser
+from src.worker.doctranslator.format.pdf.document_il.midend.layout_parser import (
+    LayoutParser,
+)
 from src.worker.doctranslator.format.pdf.document_il.midend.paragraph_finder import (
     ParagraphFinder,
 )
 from src.worker.doctranslator.format.pdf.document_il.midend.styles_and_formulas import (
     StylesAndFormulas,
 )
-from src.worker.doctranslator.format.pdf.document_il.midend.table_parser import TableParser
-from src.worker.doctranslator.format.pdf.document_il.midend.typesetting import Typesetting
+from src.worker.doctranslator.format.pdf.document_il.midend.table_parser import (
+    TableParser,
+)
+from src.worker.doctranslator.format.pdf.document_il.midend.typesetting import (
+    Typesetting,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
 from src.worker.doctranslator.format.pdf.document_il.xml_converter import XMLConverter
 from src.worker.doctranslator.format.pdf.pdfinterp import PDFPageInterpreterEx
@@ -80,6 +93,7 @@ from src.worker.doctranslator.pdfminer.pdfparser import PDFParser
 from src.worker.doctranslator.progress_monitor import ProgressMonitor
 from src.worker.doctranslator.utils import memory
 from src.worker.doctranslator.utils.common import close_process_pool
+from src.worker.services.dlp_service import DlpService
 
 logger = logging.getLogger(__name__)
 

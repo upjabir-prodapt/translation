@@ -26,7 +26,9 @@ from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMa
 from src.worker.doctranslator.format.pdf.document_il.utils.formular_helper import (
     update_formula_data,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import box_to_tuple
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    box_to_tuple,
+)
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutputMode
 

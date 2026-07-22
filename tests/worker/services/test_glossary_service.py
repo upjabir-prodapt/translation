@@ -33,7 +33,8 @@ class TestGlossaryService:
         ):
             with patch.object(service, "_local_cache_fresh", return_value=True):
                 with patch(
-                    "src.worker.services.glossary_service.Path.exists", return_value=True
+                    "src.worker.services.glossary_service.Path.exists",
+                    return_value=True,
                 ):
                     with patch(
                         "src.worker.services.glossary_service.Path.read_text",
@@ -48,7 +49,8 @@ class TestGlossaryService:
         ):
             with patch.object(service, "_local_cache_fresh", return_value=True):
                 with patch(
-                    "src.worker.services.glossary_service.Path.exists", return_value=True
+                    "src.worker.services.glossary_service.Path.exists",
+                    return_value=True,
                 ):
                     with patch(
                         "src.worker.services.glossary_service.Path.read_text",

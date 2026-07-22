@@ -13,11 +13,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.worker.middleware.exception_handler import exception_handler_middleware
 from src.config.constants import settings
 from src.config.logging_config import setup_logging
 from src.config.telemetry import setup_telemetry
 from src.config.telemetry import shutdown_telemetry
+from src.worker.middleware.exception_handler import exception_handler_middleware
 from src.worker.routes.health import router as health_router
 from src.worker.routes.tasks import router as tasks_router
 from src.worker.services.startup_assets_service import StartupAssetsService

@@ -3,7 +3,9 @@ from pathlib import Path
 
 from pymupdf import Document
 
-from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import PDFCreater
+from src.worker.doctranslator.format.pdf.document_il.backend.pdf_creater import (
+    PDFCreater,
+)
 from src.worker.doctranslator.format.pdf.split_manager import SplitPoint
 from src.worker.doctranslator.format.pdf.translation_config import TranslateResult
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig

@@ -22,7 +22,9 @@ from src.worker.doctranslator.format.pdf.document_il.utils.formular_helper impor
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     HEIGHT_NOT_USFUL_CHAR_IN_CHAR,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import SPACE_REGEX
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    SPACE_REGEX,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import Layout
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     add_space_dummy_chars,
@@ -39,11 +41,15 @@ from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import 
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     get_character_layout,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import is_bullet_point
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    is_bullet_point,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     is_character_in_formula_layout,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import is_text_layout
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    is_text_layout,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_cid_paragraph,
 )

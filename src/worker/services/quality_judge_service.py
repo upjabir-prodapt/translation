@@ -98,12 +98,24 @@ class GoogleADKJudgeAgent:
     ):
         from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_MODEL
         from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_NAME
-        from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_CHARS
-        from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_HASH
-        from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_PROMPT_PREVIEW
-        from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_TEMPERATURE
-        from src.worker.doctranslator.translator.instrumentation import instrumented_llm_call
-        from src.worker.doctranslator.translator.instrumentation import prompt_fingerprint
+        from src.worker.doctranslator.translator.instrumentation import (
+            ATTR_LLM_PROMPT_CHARS,
+        )
+        from src.worker.doctranslator.translator.instrumentation import (
+            ATTR_LLM_PROMPT_HASH,
+        )
+        from src.worker.doctranslator.translator.instrumentation import (
+            ATTR_LLM_PROMPT_PREVIEW,
+        )
+        from src.worker.doctranslator.translator.instrumentation import (
+            ATTR_LLM_TEMPERATURE,
+        )
+        from src.worker.doctranslator.translator.instrumentation import (
+            instrumented_llm_call,
+        )
+        from src.worker.doctranslator.translator.instrumentation import (
+            prompt_fingerprint,
+        )
         from src.worker.doctranslator.translator.usage import TokenUsage
 
         prompt_chars, prompt_hash, prompt_preview = prompt_fingerprint(contents)

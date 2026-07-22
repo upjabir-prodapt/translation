@@ -41,7 +41,8 @@ class TestStartupAssetsService:
             assert len(res) == 2
 
     @patch(
-        "src.worker.services.startup_assets_service.download_async", new_callable=AsyncMock
+        "src.worker.services.startup_assets_service.download_async",
+        new_callable=AsyncMock,
     )
     async def test_ensure_metadata_indexes_download(self, mock_down, service, tmp_path):
         with patch(

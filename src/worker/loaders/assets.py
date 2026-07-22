@@ -9,15 +9,21 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
-from src.worker.loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
+from src.worker.loaders.constants import (
+    DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256,
+)
 from src.worker.loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
 from src.worker.loaders.exceptions import AssetIntegrityError
 from src.worker.loaders.exceptions import MetadataNotFoundError
 from src.worker.loaders.models import FontFamilyConfig
 from src.worker.loaders.models.font_families import get_font_family as _get_font_family
 from src.worker.loaders.repositories.cache_repository import verify_or_delete
-from src.worker.loaders.repositories.metadata_repository import get_cmap_metadata_by_name
-from src.worker.loaders.repositories.metadata_repository import get_font_metadata_by_name
+from src.worker.loaders.repositories.metadata_repository import (
+    get_cmap_metadata_by_name,
+)
+from src.worker.loaders.repositories.metadata_repository import (
+    get_font_metadata_by_name,
+)
 from src.worker.loaders.services.download_service import download_and_verify
 from src.worker.loaders.services.download_service import get_or_download_model
 from src.worker.loaders.utils.path_helpers import get_cache_file_path

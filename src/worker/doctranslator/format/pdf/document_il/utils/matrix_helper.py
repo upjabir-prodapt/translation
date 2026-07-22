@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import math
 
-from src.worker.doctranslator.format.pdf.document_il.il_version_1 import PdfAffineTransform
+from src.worker.doctranslator.format.pdf.document_il.il_version_1 import (
+    PdfAffineTransform,
+)
 from src.worker.doctranslator.format.pdf.document_il.il_version_1 import PdfMatrix
 
 # Local type aliases to avoid importing from pdfminer

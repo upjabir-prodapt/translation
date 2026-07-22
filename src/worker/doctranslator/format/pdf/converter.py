@@ -2,7 +2,9 @@ import logging
 
 from pymupdf import Font
 
-from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import ILCreater
+from src.worker.doctranslator.format.pdf.document_il.frontend.il_creater import (
+    ILCreater,
+)
 from src.worker.doctranslator.pdfminer.converter import PDFConverter
 from src.worker.doctranslator.pdfminer.layout import LTChar
 from src.worker.doctranslator.pdfminer.layout import LTComponent

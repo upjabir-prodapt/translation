@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.worker.doctranslator.glossary import Glossary
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
 from src.worker.services.quality_judge_service import QualityJudgeResult
-from src.worker.doctranslator.glossary import Glossary
 
 
 @dataclass(slots=True)

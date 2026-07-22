@@ -11,7 +11,9 @@ from src.worker.doctranslator.format.pdf.document_il.il_version_1 import PdfLine
 from src.worker.doctranslator.format.pdf.document_il.il_version_1 import (
     PdfParagraphComposition,
 )
-from src.worker.doctranslator.format.pdf.document_il.il_version_1 import PdfSameStyleCharacters
+from src.worker.doctranslator.format.pdf.document_il.il_version_1 import (
+    PdfSameStyleCharacters,
+)
 from src.worker.doctranslator.format.pdf.document_il.il_version_1 import PdfStyle
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
 from src.worker.doctranslator.format.pdf.document_il.utils.formular_helper import (
@@ -26,8 +28,12 @@ from src.worker.doctranslator.format.pdf.document_il.utils.formular_helper impor
 from src.worker.doctranslator.format.pdf.document_il.utils.formular_helper import (
     update_formula_data,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import LEFT_BRACKET
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import RIGHT_BRACKET
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    LEFT_BRACKET,
+)
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    RIGHT_BRACKET,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     build_layout_index,
 )
@@ -37,14 +43,18 @@ from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import 
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     calculate_y_true_iou_for_boxes,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import is_bullet_point
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    is_bullet_point,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     is_curve_in_figure_table_layout,
 )
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     is_curve_overlapping_with_paragraphs,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import is_same_style
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    is_same_style,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.spatial_analyzer import (
     is_element_contained_in_formula,
 )

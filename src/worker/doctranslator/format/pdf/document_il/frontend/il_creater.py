@@ -22,7 +22,9 @@ from src.worker.doctranslator.format.pdf.babelpdf.utils import guarded_bbox
 from src.worker.doctranslator.format.pdf.document_il import il_version_1
 from src.worker.doctranslator.format.pdf.document_il.utils import zstd_helper
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
-from src.worker.doctranslator.format.pdf.document_il.utils.matrix_helper import decompose_ctm
+from src.worker.doctranslator.format.pdf.document_il.utils.matrix_helper import (
+    decompose_ctm,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import BLACK
 from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import YELLOW
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig

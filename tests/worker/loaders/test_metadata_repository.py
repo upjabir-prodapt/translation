@@ -11,7 +11,9 @@ from src.worker.loaders.repositories.metadata_repository import _load_json_file
 from src.worker.loaders.repositories.metadata_repository import clear_metadata_cache
 from src.worker.loaders.repositories.metadata_repository import get_cmap_metadata
 from src.worker.loaders.repositories.metadata_repository import get_font_metadata
-from src.worker.loaders.repositories.metadata_repository import get_font_metadata_by_name
+from src.worker.loaders.repositories.metadata_repository import (
+    get_font_metadata_by_name,
+)
 
 
 class TestMetadataRepository:

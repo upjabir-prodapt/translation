@@ -6,7 +6,6 @@ from datetime import UTC
 from datetime import datetime
 
 from fastapi import FastAPI
-from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -71,7 +70,7 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/")
-async def root(request: Request):
+async def root():
     """Root endpoint."""
     return {
         "service": settings.API_TITLE,

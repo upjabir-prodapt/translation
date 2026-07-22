@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.services.processor_service import JobProcessor
 from src.worker.services.quality_judge_service import QualityJudgeResult
 from src.worker.services.translation_attempt_runner import TranslationAttemptRunner
-from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 
 
 @pytest.fixture

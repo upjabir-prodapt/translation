@@ -23,7 +23,9 @@ from src.worker.doctranslator.format.pdf.document_il import PdfFormula
 from src.worker.doctranslator.format.pdf.document_il import PdfParagraph
 from src.worker.doctranslator.format.pdf.document_il import PdfParagraphComposition
 from src.worker.doctranslator.format.pdf.document_il import PdfSameStyleCharacters
-from src.worker.doctranslator.format.pdf.document_il import PdfSameStyleUnicodeCharacters
+from src.worker.doctranslator.format.pdf.document_il import (
+    PdfSameStyleUnicodeCharacters,
+)
 from src.worker.doctranslator.format.pdf.document_il import PdfStyle
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
@@ -32,7 +34,9 @@ from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import 
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     get_paragraph_unicode,
 )
-from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import is_same_style
+from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
+    is_same_style,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     is_same_style_except_font,
 )

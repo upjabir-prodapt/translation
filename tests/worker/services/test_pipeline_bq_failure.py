@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.repository.repository_exception import BigQueryError
 from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 from src.worker.services.temp_workspace_service import TempWorkspaceService
-from src.repository.repository_exception import BigQueryError
 
 
 def _job_data(job_id: str = "test-job-123") -> dict:

@@ -10,12 +10,12 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind
 
+from src.config.tracing import tracer_pipeline
+from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
 from src.worker.services.quality_judge_service import QualityJudgeResult
 from src.worker.services.quality_judge_service import extract_attempt_text
-from src.config.tracing import tracer_pipeline
-from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 
 if TYPE_CHECKING:
     from src.worker.services.processor_service import JobProcessor

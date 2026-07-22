@@ -7,7 +7,10 @@ from dataclasses import field
 from typing import Any
 
 from src.config.constants import settings
-from src.worker.loaders.constants import DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256
+from src.repository.translation_storage_repository import TranslationStorageRepository
+from src.worker.loaders.constants import (
+    DOCLAYOUT_YOLO_DOCSTRUCTBENCH_IMGSZ1024ONNX_SHA3_256,
+)
 from src.worker.loaders.constants import TABLE_DETECTION_RAPIDOCR_MODEL_SHA3_256
 from src.worker.loaders.exceptions import WarmupError
 from src.worker.loaders.repositories.cache_repository import get_file_size
@@ -19,7 +22,6 @@ from src.worker.loaders.services.download_service import download_async
 from src.worker.loaders.services.download_service import get_or_download_model_async
 from src.worker.loaders.utils.path_helpers import get_cache_file_path
 from src.worker.loaders.utils.path_helpers import get_subdir_path
-from src.repository.translation_storage_repository import TranslationStorageRepository
 
 logger = logging.getLogger(__name__)
 

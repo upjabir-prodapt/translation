@@ -2,10 +2,10 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-from src.worker.services.quality_judge_service import QualityJudgeResult
-from src.worker.services.verification_service import VerificationService
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.glossary import GlossaryEntry
+from src.worker.services.quality_judge_service import QualityJudgeResult
+from src.worker.services.verification_service import VerificationService
 
 
 @pytest.fixture

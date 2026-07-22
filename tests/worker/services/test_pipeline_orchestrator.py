@@ -29,7 +29,9 @@ class TestPipelineProgressTracker:
 
 class TestPipelineOrchestrator:
     def test_extract_blob_path(self, orchestrator):
-        with patch("src.worker.services.pipeline_orchestrator.settings") as mock_settings:
+        with patch(
+            "src.worker.services.pipeline_orchestrator.settings"
+        ) as mock_settings:
             mock_settings.GCS_BUCKET_NAME = "test-bucket"
             assert (
                 orchestrator._extract_blob_path("gs://test-bucket/path/to/blob")
