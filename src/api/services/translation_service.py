@@ -1,5 +1,7 @@
 """Translation service for handling document translation requests."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import hashlib
@@ -11,11 +13,12 @@ from typing import Any
 
 from opentelemetry import context as otel_context
 from opentelemetry.trace import SpanKind
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from src.api.exceptions import ValidationError
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.responses import TranslateResponse
-from src.api.services.pipeline_orchestrator import PipelineOrchestrator
+from src.api.services.cloud_tasks_service import CloudTasksService
 from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
@@ -23,8 +26,16 @@ from src.config.translation_routing import normalize_domain
 from src.config.translation_routing import normalize_language
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
+from src.shared import job_status
 
 logger = logging.getLogger(__name__)
+
+
+def _current_traceparent() -> tuple[str | None, str | None]:
+    """Extract W3C trace context from the current span for Cloud Tasks payload."""
+    carrier: dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier)
+    return carrier.get("traceparent"), carrier.get("tracestate")
 
 
 class TranslationService:
@@ -34,15 +45,36 @@ class TranslationService:
         self,
         storage: APIStorageRepository | None = None,
         bigquery: BigQueryRepository | None = None,
-        orchestrator: PipelineOrchestrator | None = None,
+        orchestrator=None,
+        cloud_tasks: CloudTasksService | None = None,
     ):
         self.storage = storage or APIStorageRepository()
         self.bigquery = bigquery or BigQueryRepository()
-        self.orchestrator = orchestrator or PipelineOrchestrator(
-            bigquery=self.bigquery,
-            storage=self.storage,
-        )
-        self._background_tasks = set()
+        self._orchestrator = orchestrator
+        self._cloud_tasks = cloud_tasks
+        self._background_tasks: set[asyncio.Task] = set()
+
+    @property
+    def orchestrator(self):
+        """Lazy local-pipeline orchestrator (dev only: API_USE_BACKGROUND_PIPELINE)."""
+        if not settings.API_USE_BACKGROUND_PIPELINE:
+            raise RuntimeError(
+                "In-process pipeline is disabled; use Cloud Tasks worker mode"
+            )
+        if self._orchestrator is None:
+            from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
+
+            self._orchestrator = PipelineOrchestrator(
+                bigquery=self.bigquery,
+                storage=self.storage,
+            )
+        return self._orchestrator
+
+    @property
+    def cloud_tasks(self) -> CloudTasksService:
+        if self._cloud_tasks is None:
+            self._cloud_tasks = CloudTasksService()
+        return self._cloud_tasks
 
     async def submit_translation(self, request: TranslateRequest) -> TranslateResponse:
         """Submit a document for translation."""
@@ -59,7 +91,6 @@ class TranslationService:
         self, request: TranslateRequest, job_id: str
     ) -> TranslateResponse:
         try:
-            # Decode base64 content
             try:
                 content = base64.b64decode(request.document.content)
             except Exception as e:
@@ -82,11 +113,9 @@ class TranslationService:
 
             source_hash = hashlib.sha256(content).hexdigest()
 
-            # Normalize config
             config = self._normalize_config(request)
             config["job_id"] = job_id
 
-            # Return cached result immediately if an identical completed job exists
             cached_job = await self.bigquery.get_completed_job_by_hash(
                 source_hash=source_hash,
                 lang_out=config["lang_out"],
@@ -97,20 +126,18 @@ class TranslationService:
                     request, job_id, metadata, source_hash, config, cached_job
                 )
 
-            # Upload to GCS
             input_gs_uri = await self.storage.upload_input_pdf(
                 file_content=content,
                 filename=metadata["filename"],
                 job_id=job_id,
             )
 
-            # Keep output filename same as input filename.
             output_filename = metadata["filename"]
 
             now = datetime.now(UTC)
             job_data = {
                 "job_id": job_id,
-                "status": "queued",
+                "status": job_status.QUEUED,
                 "progress": 0.0,
                 "source_document": {
                     "gcs_uri": input_gs_uri,
@@ -147,21 +174,19 @@ class TranslationService:
 
             await self.bigquery.upsert_translation_job(job_data)
 
-            # Capture trace context before leaving HTTP scope — asyncio.create_task
-            # does not propagate OTel context automatically.
             parent_ctx = otel_context.get_current()
-            self._schedule_background_pipeline(job_id, job_data, parent_ctx)
+            await self._schedule_background_pipeline(job_id, job_data, parent_ctx)
 
-            logger.info(f"Submitted translation job {job_id}")
+            logger.info("Submitted translation job %s", job_id)
 
             return TranslateResponse(
                 job_id=job_id,
-                status="queued",
+                status=job_status.QUEUED,
                 status_url=f"/api/v1/translate/{job_id}",
             )
 
         except Exception as e:
-            logger.error(f"Failed to submit translation: {e}")
+            logger.error("Failed to submit translation: %s", e)
             try:
                 await self.storage.delete_job_files(job_id)
             except Exception:
@@ -177,11 +202,11 @@ class TranslationService:
         config: dict[str, Any],
         cached_job: dict[str, Any],
     ) -> TranslateResponse:
-        """Write a pre-completed job record reusing the cached result — no pipeline needed."""
+        """Write a pre-completed job record reusing the cached result."""
         now = datetime.now(UTC)
         job_data = {
             "job_id": job_id,
-            "status": "completed",
+            "status": job_status.COMPLETED,
             "source_document": {
                 "gcs_uri": (cached_job.get("source_document") or {}).get("gcs_uri", ""),
                 "format": request.document.format,
@@ -212,11 +237,13 @@ class TranslationService:
         }
         await self.bigquery.upsert_translation_job(job_data)
         logger.info(
-            f"Cache hit for job {job_id}: reusing result from {cached_job.get('job_id')}"
+            "Cache hit for job %s: reusing result from %s",
+            job_id,
+            cached_job.get("job_id"),
         )
         return TranslateResponse(
             job_id=job_id,
-            status="completed",
+            status=job_status.COMPLETED,
             status_url=f"/api/v1/translate/{job_id}",
         )
 
@@ -248,21 +275,60 @@ class TranslationService:
             "domain": domain,
         }
 
-    def _schedule_background_pipeline(
+    async def _mark_enqueue_failed(self, job_id: str, error: Exception) -> None:
+        """Compensate: job was queued in BQ but Cloud Tasks enqueue failed."""
+        now = datetime.now(UTC)
+        message = f"Failed to enqueue Cloud Task: {error}"
+        try:
+            await self.bigquery.patch_translation_job(
+                job_id,
+                {
+                    "status": job_status.FAILED,
+                    "error_message": message,
+                    "completed_at": now,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to mark job %s as failed after enqueue error: %s", job_id, e
+            )
+
+    async def _schedule_background_pipeline(
         self,
         job_id: str,
         job_data: dict[str, Any],
         parent_ctx=None,
     ) -> None:
-        """Schedule API-local background translation pipeline."""
+        """Schedule translation via in-process task (local) or Cloud Tasks (prod)."""
         if settings.API_USE_BACKGROUND_PIPELINE:
-            task = asyncio.create_task(
-                self.orchestrator.run(
-                    job_id=job_id, job_data=job_data, parent_ctx=parent_ctx
-                )
+            token = (
+                otel_context.attach(parent_ctx) if parent_ctx is not None else None
             )
+            try:
+                task = asyncio.create_task(
+                    self.orchestrator.run(
+                        job_id=job_id, job_data=job_data, parent_ctx=parent_ctx
+                    )
+                )
+            finally:
+                if token is not None:
+                    otel_context.detach(token)
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
-            logger.info(f"Scheduled in-process translation pipeline for job {job_id}")
+            logger.info("Scheduled in-process translation pipeline for job %s", job_id)
             return
-        raise RuntimeError("Cloud Tasks mode is disabled in this implementation")
+
+        traceparent, tracestate = _current_traceparent()
+        try:
+            await asyncio.to_thread(
+                self.cloud_tasks.enqueue_translate,
+                job_id,
+                traceparent=traceparent,
+                tracestate=tracestate,
+            )
+        except Exception as e:
+            logger.error("Cloud Tasks enqueue failed for job %s: %s", job_id, e)
+            await self._mark_enqueue_failed(job_id, e)
+            raise RuntimeError(f"Failed to enqueue translation job: {e}") from e
+
+        logger.info("Enqueued Cloud Tasks translation for job %s", job_id)

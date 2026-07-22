@@ -1,0 +1,81 @@
+import abc
+import logging
+from collections.abc import Generator
+
+import pymupdf
+
+from src.worker.doctranslator.format.pdf.document_il.il_version_1 import Page
+
+logger = logging.getLogger(__name__)
+
+
+class YoloResult:
+    """Helper class to store detection results from ONNX model."""
+
+    def __init__(self, names, boxes=None, boxes_data=None):
+        if boxes is not None:
+            self.boxes = boxes
+        else:
+            if boxes_data is None:
+                raise ValueError("Either boxes or boxes_data must be provided")
+            self.boxes = [YoloBox(data=d) for d in boxes_data]
+        self.boxes.sort(key=lambda x: x.conf, reverse=True)
+        self.names = names
+
+
+class YoloBox:
+    """Helper class to store detection results from ONNX model."""
+
+    def __init__(self, data=None, xyxy=None, conf=None, cls=None):
+        if data is not None:
+            self.xyxy = data[:4]
+            self.conf = data[-2]
+            self.cls = data[-1]
+            return
+        if not (xyxy is not None and conf is not None and cls is not None):
+            raise ValueError(
+                "xyxy, conf, and cls must all be provided when data is None"
+            )
+        self.xyxy = xyxy
+        self.conf = conf
+        self.cls = cls
+
+
+class DocLayoutModel(abc.ABC):
+    @staticmethod
+    def load_onnx():
+        # NOTE: Auto-download disabled - model should be loaded via loaders.assets
+        # logger.info("Loading ONNX model...")
+        # from src.worker.doctranslator.docvision.doclayout import OnnxModel
+        # model = OnnxModel.from_pretrained()
+        # return model
+        raise RuntimeError(
+            "DocLayoutModel.load_onnx() is disabled. "
+            "Load model via loaders.assets and pass to TranslationConfig directly."
+        )
+
+    @staticmethod
+    def load_available():
+        # NOTE: Auto-download disabled
+        # return DocLayoutModel.load_onnx()
+        raise RuntimeError(
+            "DocLayoutModel.load_available() is disabled. "
+            "Load model via loaders.assets and pass to TranslationConfig directly."
+        )
+
+    @property
+    @abc.abstractmethod
+    def stride(self) -> int:
+        """Stride of the model input."""
+
+    @abc.abstractmethod
+    def handle_document(
+        self,
+        pages: list[Page],
+        mupdf_doc: pymupdf.Document,
+        translate_config,
+        save_debug_image,
+    ) -> Generator[tuple[Page, YoloResult], None, None]:
+        """
+        Handle a document.
+        """

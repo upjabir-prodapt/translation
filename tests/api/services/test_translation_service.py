@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC
 from datetime import datetime
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -118,6 +119,41 @@ class TestTranslationService:
                 with pytest.raises(Exception, match="Oops"):
                     await service.submit_translation(valid_request)
                 mock_storage.delete_job_files.assert_called_once()
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_cloud_tasks_enqueue_failure_marks_job_failed(
+        self, mock_validate, mock_storage, mock_bq, valid_request, monkeypatch
+    ):
+        """If Cloud Tasks enqueue fails after BQ queued, job is marked failed."""
+        monkeypatch.setattr(
+            "src.api.services.translation_service.settings.API_USE_BACKGROUND_PIPELINE",
+            False,
+        )
+        mock_validate.return_value = (
+            b"pdf",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/test.pdf"
+        mock_tasks = MagicMock()
+        mock_tasks.enqueue_translate.side_effect = RuntimeError("queue down")
+        service = TranslationService(
+            storage=mock_storage,
+            bigquery=mock_bq,
+            cloud_tasks=mock_tasks,
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to enqueue"):
+            await service.submit_translation(valid_request)
+
+        mock_bq.patch_translation_job.assert_awaited()
+        patch_args = mock_bq.patch_translation_job.await_args
+        assert patch_args.args[1]["status"] == "failed"
+        assert "queue down" in patch_args.args[1]["error_message"]
 
 
 # ---------------------------------------------------------------------------
