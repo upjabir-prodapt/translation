@@ -34,7 +34,16 @@ async def require_cloud_tasks_oidc(request: Request) -> dict:
         )
     token = auth[len("Bearer ") :].strip()
     audience = _expected_audience()
+    logger.info(
+        "Verifying OIDC token for request %s %s audience=%s",
+        request.method,
+        request.url.path,
+        audience,
+    )
     if not audience:
+        logger.error(
+            "Worker OIDC audience is not configured; set WORKER_OIDC_AUDIENCE or CLOUD_TASKS_WORKER_URL"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Worker OIDC audience is not configured",
