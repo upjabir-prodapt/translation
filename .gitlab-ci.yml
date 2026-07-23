@@ -656,6 +656,9 @@ deploy-cloud-run:
     SECRET_VERSION="${APP_CONFIG_SECRET_VERSION:-latest}"
 
     # Worker first (assets + warmup), then API (Cloud Tasks target URL must exist)
+    WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)')"
+    TASKS_URL="${WORKER_URL}/internal/tasks/translate"
+
     gcloud beta run deploy "$WORKER_SERVICE" \
       --quiet \
       --update-labels="app=translation-worker,env=${CI_COMMIT_BRANCH},managed-by=gitlab-ci,git-sha=${CI_COMMIT_SHORT_SHA}" \
@@ -676,7 +679,7 @@ deploy-cloud-run:
       --cpu-boost \
       --no-allow-unauthenticated \
       --add-volume "mount-path=${ASSETS_MOUNT_PATH},type=cloud-storage,bucket=${GCS_BUCKET_NAME},readonly=false,mount-options=only-dir=${GCS_ASSETS_DIR}" \
-      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=/tmp" \
+      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=/tmp,CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=${CLOUD_TASKS_OIDC_SERVICE_ACCOUNT}" \
       --set-secrets="/secrets/.env=${WORKER_SECRET}:${SECRET_VERSION}"
 
     WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)')"

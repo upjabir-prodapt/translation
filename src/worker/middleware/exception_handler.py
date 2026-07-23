@@ -15,7 +15,15 @@ async def exception_handler_middleware(request: Request, call_next):
     """Map unexpected errors to JSON 500; pass through HTTPException."""
     try:
         return await call_next(request)
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            logger.exception(
+                "Worker HTTPException %s on %s %s: %s",
+                exc.status_code,
+                request.method,
+                request.url.path,
+                exc.detail,
+            )
         raise
     except Exception as exc:
         logger.exception(

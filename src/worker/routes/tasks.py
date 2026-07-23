@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 
 from src.shared.schemas.tasks import TranslateTaskPayload
@@ -25,10 +26,17 @@ router = APIRouter()
     dependencies=[Depends(require_cloud_tasks_oidc)],
 )
 async def translate_task(
+    request: Request,
     payload: TranslateTaskPayload,
     handler: TranslateTaskHandler = Depends(get_translate_task_handler),  # noqa: B008
 ):
     """Cloud Tasks target: run translation pipeline for job_id."""
+    logger.info(
+        "Received translate task request job_id=%s traceparent=%s headers=%s",
+        payload.job_id,
+        payload.traceparent,
+        dict(request.headers),
+    )
     try:
         result = await handler.handle(payload)
     except Exception as e:
@@ -38,6 +46,8 @@ async def translate_task(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Pipeline failed: {e}",
         ) from e
+
+    logger.info("Translate task completed for job %s: %s", payload.job_id, result)
 
     if result.get("status") == "not_found":
         # Permanent — 200 so Tasks does not retry forever
