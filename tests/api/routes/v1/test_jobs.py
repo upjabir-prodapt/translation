@@ -56,6 +56,31 @@ class TestGetJobStatus:
             error_message=None,
         )
 
+
+class TestGetJobsStatus:
+    def test_returns_ordered_bulk_status(self, api_client, mock_job_service):
+        resp = api_client.post(
+            "/api/v1/jobs/status", json={"job_ids": ["test-job-id-001"]}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["jobs"][0]["job_id"] == "test-job-id-001"
+        mock_job_service.get_jobs_status.assert_awaited_with(
+            ["test-job-id-001"], "user@colt.net"
+        )
+
+    def test_rejects_duplicate_job_ids(self, api_client):
+        resp = api_client.post(
+            "/api/v1/jobs/status", json={"job_ids": ["job-1", "job-1"]}
+        )
+        assert resp.status_code == 422
+
+    def test_rejects_more_than_twenty_job_ids(self, api_client):
+        resp = api_client.post(
+            "/api/v1/jobs/status",
+            json={"job_ids": [f"job-{index}" for index in range(21)]},
+        )
+        assert resp.status_code == 422
+
     def test_body_error_structure_on_404(self, api_client, mock_job_service):
         mock_job_service.get_job_status.side_effect = JobNotFoundError("ghost")
         resp = api_client.get("/api/v1/jobs/ghost")

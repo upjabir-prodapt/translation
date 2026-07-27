@@ -7,7 +7,9 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import File
 from fastapi import Form
+from fastapi import Response
 from fastapi import UploadFile
+from starlette import status
 
 from src.api.core.security import AuthenticatedUser
 from src.api.core.security import get_current_user_context
@@ -19,18 +21,24 @@ from src.api.schemas.requests import DocumentInput
 from src.api.schemas.requests import ProcessingOptions
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.requests import TranslationConfigInput
+from src.api.schemas.requests import TranslationTargetsInput
 from src.api.schemas.responses import JobDetailResponse
-from src.api.schemas.responses import TranslateResponse
+from src.api.schemas.responses import MultiTranslateResponse
 from src.config.constants import settings
 
 router = APIRouter()
 
 
-@router.post("/translate", response_model=TranslateResponse, tags=["translation"])
+@router.post(
+    "/translate",
+    response_model=MultiTranslateResponse,
+    tags=["translation"],
+)
 async def submit_translation(
     file: Annotated[UploadFile, File(...)],
-    target_language: Annotated[str, Form(...)],
     domain: Annotated[str, Form(...)],
+    response: Response,
+    target_languages: Annotated[list[str], Form(...)],
     source_language: Annotated[str | None, Form()] = None,
     enable_dlp: Annotated[bool, Form()] = True,
     enable_chunking: Annotated[bool, Form()] = True,
@@ -40,7 +48,10 @@ async def submit_translation(
     ] = None,  # noqa: B008
     handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
 ):
-    """Submit a document for translation via multipart upload and bearer auth."""
+    """Submit a document for translation via multipart upload and bearer auth.
+
+    Accepts one or more target languages and returns HTTP 202 with batch details.
+    """
     content = await file.read()
     if not content:
         raise ValidationError("Document content is empty", "document.content")
@@ -49,29 +60,39 @@ async def submit_translation(
         raise ValidationError(
             f"Document size exceeds {max_mb}MB limit", "document.size"
         )
-    request = TranslateRequest(
-        document=DocumentInput(
-            content=base64.b64encode(content).decode("utf-8"),
-            format="docx" if (file.filename or "").lower().endswith(".docx") else "pdf",
-            filename=file.filename or "document.pdf",
-        ),
-        translation_config=TranslationConfigInput(
-            source_language=source_language,
-            target_language=target_language,
-            domain=domain,
-        ),
-        cost_attribution=CostAttributionInput(
-            user_id=current_user.email,
-            business_unit=current_user.business_unit,
-            organization=current_user.organization,
-        ),
-        processing_options=ProcessingOptions(
-            enable_dlp=enable_dlp,
-            enable_chunking=enable_chunking,
-            priority=priority,  # validated by ProcessingOptions Literal type
-        ),
+    targets = TranslationTargetsInput(
+        target_languages=target_languages,
+    ).normalized_targets
+    document = DocumentInput(
+        content=base64.b64encode(content).decode("utf-8"),
+        format="docx" if (file.filename or "").lower().endswith(".docx") else "pdf",
+        filename=file.filename or "document.pdf",
     )
-    return await handler.submit_translation(request)
+    cost_attribution = CostAttributionInput(
+        user_id=current_user.email,
+        business_unit=current_user.business_unit,
+        organization=current_user.organization,
+    )
+    processing_options = ProcessingOptions(
+        enable_dlp=enable_dlp,
+        enable_chunking=enable_chunking,
+        priority=priority,
+    )
+    requests = [
+        TranslateRequest(
+            document=document,
+            translation_config=TranslationConfigInput(
+                source_language=source_language,
+                target_language=target,
+                domain=domain,
+            ),
+            cost_attribution=cost_attribution,
+            processing_options=processing_options,
+        )
+        for target in targets
+    ]
+    response.status_code = status.HTTP_202_ACCEPTED
+    return await handler.submit_translations(requests)
 
 
 @router.get(

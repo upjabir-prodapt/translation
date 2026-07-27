@@ -7,8 +7,12 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from src.config.translation_routing import normalize_language
+
+MAX_TARGET_LANGUAGES_PER_REQUEST = 5
+MAX_BATCH_STATUS_JOB_IDS = 20
 
 
 class DocumentInput(BaseModel):
@@ -57,7 +61,7 @@ class TranslationConfigInput(BaseModel):
         description=(
             "Optional source language (full name or code). "
             "Supported: English, Spanish, Italian, French, Japanese, German. "
-            "Auto-detected if omitted."
+            "Auto-detected if omitted. Cannot equal target_language."
         ),
     )
     target_language: str = Field(
@@ -121,6 +125,41 @@ class TranslationConfigInput(BaseModel):
             ) from e
         return cleaned
 
+    @model_validator(mode="after")
+    def validate_source_not_equal_target(self) -> "TranslationConfigInput":
+        """Ensure source language does not equal target language."""
+        if self.source_language is not None:
+            source_normalized = normalize_language(self.source_language)
+            target_normalized = normalize_language(self.target_language)
+            if source_normalized == target_normalized:
+                raise ValueError("Source language cannot equal target language")
+        return self
+
+
+class TranslationTargetsInput(BaseModel):
+    """API-boundary selection of one or more target languages."""
+
+    target_languages: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TARGET_LANGUAGES_PER_REQUEST,
+        description="One or more target languages for translation",
+    )
+
+    @field_validator("target_languages")
+    @classmethod
+    def validate_targets(cls, values: list[str]) -> list[str]:
+        """Normalize and validate target languages."""
+        normalized = [normalize_language(value.strip()) for value in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Target languages must be unique after normalization")
+        return normalized
+
+    @property
+    def normalized_targets(self) -> list[str]:
+        """Return normalized targets in request order."""
+        return self.target_languages
+
 
 class ProcessingOptions(BaseModel):
     """Processing options for translation job."""
@@ -181,6 +220,22 @@ class JobListRequest(BaseModel):
     )
     limit: int = Field(10, ge=1, le=100, description="Maximum number of jobs to return")
     offset: int = Field(0, ge=0, description="Number of jobs to skip")
+
+
+class MultiJobStatusRequest(BaseModel):
+    """Request status for multiple ordinary translation jobs."""
+
+    job_ids: list[str] = Field(..., min_length=1, max_length=MAX_BATCH_STATUS_JOB_IDS)
+
+    @field_validator("job_ids")
+    @classmethod
+    def validate_unique_job_ids(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("Job IDs must not be empty")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Job IDs must be unique")
+        return cleaned
 
 
 class CreateReviewRequest(BaseModel):

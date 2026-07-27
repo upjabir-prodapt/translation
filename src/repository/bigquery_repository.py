@@ -116,6 +116,8 @@ class BigQueryRepository:
             "result": self._to_json_string(job_data.get("result")),
             "error_message": job_data.get("error_message"),
             "source_hash": job_data.get("source_hash"),
+            "batch_id": job_data.get("batch_id"),
+            "batch_index": job_data.get("batch_index"),
             "submitted_at": submitted_at,
             "completed_at": completed_at,
         }
@@ -136,6 +138,8 @@ class BigQueryRepository:
                 @result AS result,
                 @error_message AS error_message,
                 @source_hash AS source_hash,
+                @batch_id AS batch_id,
+                @batch_index AS batch_index,
                 @submitted_at AS submitted_at,
                 @completed_at AS completed_at
         ) S
@@ -148,11 +152,13 @@ class BigQueryRepository:
             result = S.result,
             error_message = S.error_message,
             source_hash = S.source_hash,
+            batch_id = S.batch_id,
+            batch_index = S.batch_index,
             submitted_at = S.submitted_at,
             completed_at = S.completed_at
         WHEN NOT MATCHED THEN
-            INSERT (job_id, status, source_document, translation_config, cost_attribution, result, error_message, source_hash, submitted_at, completed_at)
-            VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.result, S.error_message, S.source_hash, S.submitted_at, S.completed_at)
+            INSERT (job_id, status, source_document, translation_config, cost_attribution, result, error_message, source_hash, batch_id, batch_index, submitted_at, completed_at)
+            VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.result, S.error_message, S.source_hash, S.batch_id, S.batch_index, S.submitted_at, S.completed_at)
         """  # noqa: S608  # nosec B608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
@@ -173,6 +179,10 @@ class BigQueryRepository:
                 ),
                 bigquery.ScalarQueryParameter(
                     "source_hash", "STRING", row["source_hash"]
+                ),
+                bigquery.ScalarQueryParameter("batch_id", "STRING", row["batch_id"]),
+                bigquery.ScalarQueryParameter(
+                    "batch_index", "INT64", row["batch_index"]
                 ),
                 bigquery.ScalarQueryParameter(
                     "submitted_at", "TIMESTAMP", row["submitted_at"]
@@ -246,6 +256,36 @@ class BigQueryRepository:
                     table=self.jobs_table,
                     query=query,
                 ) from exc
+
+    async def get_translation_jobs_by_ids(
+        self, job_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Return ordinary translation jobs matching the supplied IDs."""
+        if not job_ids:
+            return []
+        jobs_table = self._validate_table_name(self.jobs_table)
+        query = f"""
+        SELECT *
+        FROM `{jobs_table}`
+        WHERE job_id IN UNNEST(@job_ids)
+        """  # noqa: S608  # nosec B608
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ArrayQueryParameter("job_ids", "STRING", job_ids)
+            ]
+        )
+        try:
+            query_job = await asyncio.to_thread(
+                self.client.query, query, job_config=job_config
+            )
+            rows = list(await asyncio.to_thread(query_job.result))
+            return [self._deserialize_job_row(row) for row in rows]
+        except GoogleAPIError as exc:
+            raise self._make_bq_error(
+                f"Failed to query translation jobs by IDs: {exc}",
+                table=self.jobs_table,
+                query=query,
+            ) from exc
 
     async def get_completed_job_by_hash(
         self,
@@ -378,6 +418,8 @@ class BigQueryRepository:
             "result": self._deserialize_json(row.get("result")),
             "error_message": row.get("error_message"),
             "source_hash": row.get("source_hash"),
+            "batch_id": row.get("batch_id"),
+            "batch_index": row.get("batch_index"),
             "submitted_at": row.get("submitted_at"),
             "completed_at": row.get("completed_at"),
         }

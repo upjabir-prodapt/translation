@@ -11,9 +11,11 @@ from src.api.schemas.requests import CostAttributionInput
 from src.api.schemas.requests import DocumentInput
 from src.api.schemas.requests import JobCancelRequest
 from src.api.schemas.requests import JobListRequest
+from src.api.schemas.requests import MultiJobStatusRequest
 from src.api.schemas.requests import ProcessingOptions
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.requests import TranslationConfigInput
+from src.api.schemas.requests import TranslationTargetsInput
 
 # ---------------------------------------------------------------------------
 # DocumentInput
@@ -119,6 +121,63 @@ class TestTranslationConfigInput:
     def test_domain_too_long_raises(self):
         with pytest.raises(PydanticValidationError):
             TranslationConfigInput(target_language="es", domain="a" * 21)
+
+    def test_source_language_cannot_equal_target_language(self):
+        """Source and target languages must be different."""
+        with pytest.raises(PydanticValidationError, match="cannot equal"):
+            TranslationConfigInput(
+                source_language="Spanish",
+                target_language="es",
+                domain="commercial",
+            )
+
+    def test_source_language_none_allows_any_target(self):
+        """When source_language is None, any target is allowed."""
+        cfg = TranslationConfigInput(
+            source_language=None,
+            target_language="es",
+            domain="commercial",
+        )
+        assert cfg.source_language is None
+        assert cfg.target_language == "es"
+
+
+class TestTranslationTargetsInput:
+    def test_accepts_and_normalizes_single_target(self):
+        targets = TranslationTargetsInput(target_languages=["Spanish"])
+        assert targets.normalized_targets == ["es"]
+
+    def test_accepts_and_normalizes_multiple_targets(self):
+        targets = TranslationTargetsInput(target_languages=["Spanish", "French"])
+        assert targets.normalized_targets == ["es", "fr"]
+
+    def test_rejects_missing_targets(self):
+        with pytest.raises(PydanticValidationError):
+            TranslationTargetsInput()
+
+    def test_rejects_duplicate_normalized_targets(self):
+        with pytest.raises(PydanticValidationError, match="unique"):
+            TranslationTargetsInput(target_languages=["Spanish", "es"])
+
+    def test_rejects_more_than_five_targets(self):
+        with pytest.raises(PydanticValidationError):
+            TranslationTargetsInput(
+                target_languages=["en", "es", "it", "fr", "ja", "de"]
+            )
+
+
+class TestMultiJobStatusRequest:
+    def test_accepts_unique_job_ids(self):
+        request = MultiJobStatusRequest(job_ids=["job-1", "job-2"])
+        assert request.job_ids == ["job-1", "job-2"]
+
+    def test_rejects_duplicate_job_ids(self):
+        with pytest.raises(PydanticValidationError, match="unique"):
+            MultiJobStatusRequest(job_ids=["job-1", "job-1"])
+
+    def test_rejects_more_than_twenty_job_ids(self):
+        with pytest.raises(PydanticValidationError):
+            MultiJobStatusRequest(job_ids=[f"job-{index}" for index in range(21)])
 
 
 # ---------------------------------------------------------------------------

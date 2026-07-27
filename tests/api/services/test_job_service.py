@@ -41,6 +41,51 @@ class TestJobService:
         assert status.status == "completed"
         assert status.download_url == "http://download"
 
+    async def test_get_jobs_status_preserves_order_and_signs_completed(
+        self, service, mock_bq, mock_storage
+    ):
+        mock_bq.get_translation_jobs_by_ids.return_value = [
+            {
+                "job_id": "job-2",
+                "status": "processing",
+                "translation_config": {"target_language": "de"},
+                "cost_attribution": {"user_id": "user@colt.net"},
+            },
+            {
+                "job_id": "job-1",
+                "status": "completed",
+                "translation_config": {"target_language": "fr"},
+                "cost_attribution": {"user_id": "user@colt.net"},
+                "source_document": {"output_filename": "contract_fr.pdf"},
+                "result": {"output_gcs_uri": "gs://bucket/contract_fr.pdf"},
+            },
+        ]
+        mock_storage.generate_signed_url.return_value = "https://download"
+
+        response = await service.get_jobs_status(["job-1", "job-2"], "user@colt.net")
+
+        assert [job.job_id for job in response.jobs] == ["job-1", "job-2"]
+        assert response.jobs[0].download_url == "https://download"
+        assert response.jobs[0].download_filename == "contract_fr.pdf"
+        assert response.jobs[1].download_url is None
+        mock_storage.generate_signed_url.assert_awaited_once()
+
+    async def test_get_jobs_status_hides_unowned_job(self, service, mock_bq):
+        mock_bq.get_translation_jobs_by_ids.return_value = [
+            {
+                "job_id": "job-1",
+                "status": "queued",
+                "cost_attribution": {"user_id": "another@colt.net"},
+            }
+        ]
+        with pytest.raises(JobNotFoundError):
+            await service.get_jobs_status(["job-1"], "user@colt.net")
+
+    async def test_get_jobs_status_rejects_missing_job(self, service, mock_bq):
+        mock_bq.get_translation_jobs_by_ids.return_value = []
+        with pytest.raises(JobNotFoundError):
+            await service.get_jobs_status(["job-1"], "user@colt.net")
+
     async def test_cancel_job_already_completed(self, service, mock_bq):
         mock_bq.get_translation_job.return_value = {"status": "completed"}
         with pytest.raises(JobAlreadyCompletedError):
