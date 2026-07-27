@@ -17,6 +17,8 @@ from src.api.schemas.responses import DownloadResponse
 from src.api.schemas.responses import JobDetailResponse
 from src.api.schemas.responses import JobListResponse
 from src.api.schemas.responses import JobStatusResponse
+from src.api.schemas.responses import MultiJobStatusItemResponse
+from src.api.schemas.responses import MultiJobStatusResponse
 from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
@@ -103,6 +105,58 @@ class JobService:
             download_url=download_url,
             error_message=self._job_error_message(job_data),
         )
+
+    async def get_jobs_status(
+        self, job_ids: list[str], user_id: str
+    ) -> MultiJobStatusResponse:
+        """Get authorized job statuses in the caller's requested order."""
+        jobs = await self.bigquery.get_translation_jobs_by_ids(job_ids)
+        jobs_by_id = {str(job.get("job_id")): job for job in jobs}
+        if any(job_id not in jobs_by_id for job_id in job_ids):
+            raise JobNotFoundError(job_ids[0])
+        if any(
+            (jobs_by_id[job_id].get("cost_attribution") or {}).get("user_id") != user_id
+            for job_id in job_ids
+        ):
+            raise JobNotFoundError(job_ids[0])
+
+        responses: list[MultiJobStatusItemResponse] = []
+        for job_id in job_ids:
+            job = jobs_by_id[job_id]
+            status = str(job.get("status", ""))
+            result = self._result_payload(job)
+            source_document = job.get("source_document") or {}
+            download_url = None
+            download_filename = None
+            if status in ("completed", "human_review_required"):
+                output_gcs_uri = result.get("output_gcs_uri")
+                if output_gcs_uri:
+                    try:
+                        download_url = await self.storage.generate_signed_url(
+                            blob_path=output_gcs_uri, expires_in=3600
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Could not generate download URL for job %s: %s",
+                            job_id,
+                            e,
+                        )
+                download_filename = result.get(
+                    "download_filename"
+                ) or source_document.get("output_filename")
+            responses.append(
+                MultiJobStatusItemResponse(
+                    job_id=job_id,
+                    target_language=(job.get("translation_config") or {}).get(
+                        "target_language"
+                    ),
+                    status=status,
+                    download_url=download_url,
+                    download_filename=download_filename,
+                    error_message=self._job_error_message(job),
+                )
+            )
+        return MultiJobStatusResponse(jobs=responses)
 
     async def get_translation_status(self, job_id: str) -> JobDetailResponse:
         """Get full translation status and result for GET /translate/{job_id}."""

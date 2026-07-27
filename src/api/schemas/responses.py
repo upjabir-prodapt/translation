@@ -18,6 +18,24 @@ class TranslateResponse(BaseModel):
     status_url: str = Field(..., description="URL to poll for job status")
 
 
+class MultiTranslateJobResponse(BaseModel):
+    """One ordinary translation job created by a multi-target submission."""
+
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
+    target_language: str = Field(..., description="Normalized target language")
+    status: str = Field(..., description="Initial job status")
+    status_url: str = Field(..., description="URL to poll for this job")
+
+
+class MultiTranslateResponse(BaseModel):
+    """Response for a multi-target translation submission."""
+
+    batch_id: str = Field(..., description="Grouping ID for this submission")
+    jobs: list[MultiTranslateJobResponse] = Field(
+        ..., min_length=1, description="Ordinary jobs in requested target order"
+    )
+
+
 class AuthTokenResponse(BaseModel):
     """Response model for access token issuance."""
 
@@ -135,6 +153,25 @@ class JobListResponse(BaseModel):
     total: int = Field(..., description="Total number of jobs")
     limit: int = Field(..., description="Jobs per page")
     offset: int = Field(..., description="Jobs skipped")
+
+
+class MultiJobStatusItemResponse(BaseModel):
+    """Status and output metadata for one requested translation job."""
+
+    job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
+    target_language: str | None = Field(None, description="Normalized target language")
+    status: str = Field(..., description="Current job status")
+    download_url: str | None = Field(None, description="Signed output URL")
+    download_filename: str | None = Field(None, description="Output filename")
+    error_message: str | None = Field(
+        None, description="Failure or cancellation reason"
+    )
+
+
+class MultiJobStatusResponse(BaseModel):
+    """Ordered statuses for a multi-job lookup."""
+
+    jobs: list[MultiJobStatusItemResponse]
 
 
 class DownloadResponse(BaseModel):

@@ -73,6 +73,26 @@ class TestBigQueryRepository:
         mock_bq_client.query.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_upsert_translation_job_includes_batch_metadata(
+        self, repo, mock_bq_client
+    ):
+        mock_bq_client.query.return_value = MagicMock()
+        await repo.upsert_translation_job(
+            {
+                "job_id": "job1",
+                "batch_id": "batch1",
+                "batch_index": 2,
+            }
+        )
+
+        job_config = mock_bq_client.query.call_args.kwargs["job_config"]
+        parameters = {
+            parameter.name: parameter.value for parameter in job_config.query_parameters
+        }
+        assert parameters["batch_id"] == "batch1"
+        assert parameters["batch_index"] == 2
+
+    @pytest.mark.asyncio
     async def test_get_translation_job_found(self, repo, mock_bq_client):
         mock_row = MagicMock()
         mock_row.get = lambda k, d=None: {"job_id": "job1", "status": "completed"}.get(
@@ -85,6 +105,24 @@ class TestBigQueryRepository:
 
         res = await repo.get_translation_job("job1")
         assert res["job_id"] == "job1"
+
+    @pytest.mark.asyncio
+    async def test_get_translation_jobs_by_ids_uses_array_parameter(
+        self, repo, mock_bq_client
+    ):
+        mock_query_job = MagicMock()
+        mock_query_job.result.return_value = []
+        mock_bq_client.query.return_value = mock_query_job
+
+        result = await repo.get_translation_jobs_by_ids(["job1", "job2"])
+
+        assert result == []
+        query = mock_bq_client.query.call_args.args[0]
+        assert "IN UNNEST(@job_ids)" in query
+        job_config = mock_bq_client.query.call_args.kwargs["job_config"]
+        parameter = job_config.query_parameters[0]
+        assert parameter.name == "job_ids"
+        assert parameter.values == ["job1", "job2"]
 
     @pytest.mark.asyncio
     async def test_list_translation_jobs(self, repo, mock_bq_client):
@@ -115,6 +153,17 @@ class TestBigQueryRepository:
         assert repo._deserialize_json('{"a": 1}') == {"a": 1}
         assert repo._deserialize_json("not json") == "not json"
         assert repo._deserialize_json({"already": "dict"}) == {"already": "dict"}
+
+    def test_deserialize_job_row_includes_batch_metadata(self, repo):
+        row = {
+            "job_id": "job1",
+            "status": "queued",
+            "batch_id": "batch1",
+            "batch_index": 2,
+        }
+        result = repo._deserialize_job_row(row)
+        assert result["batch_id"] == "batch1"
+        assert result["batch_index"] == 2
 
     @pytest.mark.asyncio
     async def test_write_dlp_tokens(self, repo, mock_bq_client):

@@ -19,6 +19,10 @@ from src.api.main import app
 from src.api.schemas.responses import JobDetailResponse
 from src.api.schemas.responses import JobListResponse
 from src.api.schemas.responses import JobStatusResponse
+from src.api.schemas.responses import MultiJobStatusItemResponse
+from src.api.schemas.responses import MultiJobStatusResponse
+from src.api.schemas.responses import MultiTranslateJobResponse
+from src.api.schemas.responses import MultiTranslateResponse
 from src.api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
@@ -73,6 +77,17 @@ def mock_translation_service():
     service = AsyncMock()
     job_id = "test-job-id-001"
     service.submit_translation.return_value = _make_translate_response(job_id)
+    service.submit_translations.return_value = MultiTranslateResponse(
+        batch_id="test-batch-id",
+        jobs=[
+            MultiTranslateJobResponse(
+                job_id=job_id,
+                target_language="fr",
+                status="queued",
+                status_url=f"/api/v1/translate/{job_id}",
+            )
+        ],
+    )
     return service
 
 
@@ -82,6 +97,15 @@ def mock_job_service():
     service = AsyncMock()
     job_id = "test-job-id-001"
     service.get_job_status.return_value = _make_job_status(job_id, "queued")
+    service.get_jobs_status.return_value = MultiJobStatusResponse(
+        jobs=[
+            MultiJobStatusItemResponse(
+                job_id=job_id,
+                target_language="fr",
+                status="queued",
+            )
+        ]
+    )
     service.get_translation_status.return_value = _make_job_detail(job_id, "queued")
     service.list_jobs.return_value = JobListResponse(
         jobs=[_make_job_status(job_id)],

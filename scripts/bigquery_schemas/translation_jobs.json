@@ -7,6 +7,8 @@
   {"name": "result", "type": "STRING", "mode": "NULLABLE"},
   {"name": "error_message", "type": "STRING", "mode": "NULLABLE"},
   {"name": "source_hash", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "batch_id", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "batch_index", "type": "INTEGER", "mode": "NULLABLE"},
   {"name": "submitted_at", "type": "TIMESTAMP", "mode": "REQUIRED"},
   {"name": "completed_at", "type": "TIMESTAMP", "mode": "NULLABLE"}
 ]

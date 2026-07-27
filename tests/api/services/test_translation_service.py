@@ -155,6 +155,103 @@ class TestTranslationService:
         assert patch_args.args[1]["status"] == "failed"
         assert "queue down" in patch_args.args[1]["error_message"]
 
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_submit_translations_shares_input_and_creates_jobs(
+        self, mock_validate, mock_storage, mock_bq, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "src.api.services.translation_service.settings.API_USE_BACKGROUND_PIPELINE",
+            False,
+        )
+        mock_validate.return_value = (
+            b"pdf",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/shared/test.pdf"
+        mock_tasks = MagicMock()
+        service = TranslationService(
+            storage=mock_storage, bigquery=mock_bq, cloud_tasks=mock_tasks
+        )
+        requests = [
+            TranslateRequest(
+                document=DocumentInput(
+                    content=base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+                    filename="test.pdf",
+                ),
+                translation_config=TranslationConfigInput(
+                    target_language=target, domain="legal"
+                ),
+                cost_attribution=CostAttributionInput(
+                    user_id="user1", business_unit="legal", organization="colt"
+                ),
+            )
+            for target in ("fr", "de")
+        ]
+
+        response = await service.submit_translations(requests)
+
+        assert [job.target_language for job in response.jobs] == ["fr", "de"]
+        mock_storage.upload_input_pdf.assert_awaited_once()
+        assert mock_bq.upsert_translation_job.await_count == 2
+        records = [
+            call.args[0] for call in mock_bq.upsert_translation_job.await_args_list
+        ]
+        assert {record["batch_id"] for record in records} == {response.batch_id}
+        assert [record["batch_index"] for record in records] == [0, 1]
+        assert len({record["source_document"]["gcs_uri"] for record in records}) == 1
+        assert mock_tasks.enqueue_translate.call_count == 2
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_submit_translations_handles_cache_hits_per_target(
+        self, mock_validate, mock_storage, mock_bq, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "src.api.services.translation_service.settings.API_USE_BACKGROUND_PIPELINE",
+            False,
+        )
+        mock_validate.return_value = (
+            b"pdf",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        cached_job = _make_cached_job("hash")
+        mock_bq.get_completed_job_by_hash.side_effect = [cached_job, None]
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/shared/test.pdf"
+        mock_tasks = MagicMock()
+        service = TranslationService(
+            storage=mock_storage, bigquery=mock_bq, cloud_tasks=mock_tasks
+        )
+        requests = [
+            TranslateRequest(
+                document=DocumentInput(
+                    content=base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+                    filename="test.pdf",
+                ),
+                translation_config=TranslationConfigInput(
+                    target_language=target, domain="legal"
+                ),
+                cost_attribution=CostAttributionInput(
+                    user_id="user1", business_unit="legal", organization="colt"
+                ),
+            )
+            for target in ("fr", "de")
+        ]
+
+        response = await service.submit_translations(requests)
+
+        assert [job.status for job in response.jobs] == ["completed", "queued"]
+        mock_storage.upload_input_pdf.assert_awaited_once()
+        mock_tasks.enqueue_translate.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Cache-hit: submitting the same document twice reuses the prior result

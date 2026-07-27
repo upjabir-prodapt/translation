@@ -7,15 +7,30 @@ from fastapi import Body
 from fastapi import Depends
 from fastapi import Query
 
+from src.api.core.security import AuthenticatedUser
 from src.api.core.security import get_current_user_context
 from src.api.dependencies import get_jobs_handler
 from src.api.handlers.jobs_handler import JobsHandler
 from src.api.schemas.requests import JobCancelRequest
+from src.api.schemas.requests import MultiJobStatusRequest
 from src.api.schemas.responses import DownloadResponse
 from src.api.schemas.responses import JobListResponse
 from src.api.schemas.responses import JobStatusResponse
+from src.api.schemas.responses import MultiJobStatusResponse
 
 router = APIRouter(dependencies=[Depends(get_current_user_context)])
+
+
+@router.post("/jobs/status", response_model=MultiJobStatusResponse, tags=["jobs"])
+async def get_jobs_status(
+    request: MultiJobStatusRequest,
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
+    handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008
+):
+    """Get ordered statuses for multiple translation jobs."""
+    return await handler.get_jobs_status(request.job_ids, current_user.email)
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse, tags=["jobs"])

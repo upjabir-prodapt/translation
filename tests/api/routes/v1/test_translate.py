@@ -39,51 +39,52 @@ class TestHealthCheck:
 
 
 class TestSubmitTranslation:
-    def test_returns_200(self, api_client, minimal_pdf_bytes):
+    def test_returns_202(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
             data={
-                "target_language": "Spanish",
+                "target_languages": ["Spanish"],
                 "domain": "commercial",
                 "source_language": "English",
             },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 202
 
     def test_response_has_job_id(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
-        assert "job_id" in body
-        assert body["job_id"]
+        assert "jobs" in body
+        assert len(body["jobs"]) == 1
+        assert body["jobs"][0]["job_id"]
 
     def test_response_status_is_queued(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
-        assert body["status"] == "queued"
+        assert body["jobs"][0]["status"] == "queued"
 
     def test_response_has_status_url(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
-        assert "status_url" in body
-        assert "/api/v1/translate/" in body["status_url"]
+        assert "status_url" in body["jobs"][0]
+        assert "/api/v1/translate/" in body["jobs"][0]["status_url"]
 
     def test_missing_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
         )
         assert resp.status_code == 422
 
@@ -98,7 +99,7 @@ class TestSubmitTranslation:
     def test_invalid_domain_returns_422(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "science"},
+            data={"target_languages": ["Spanish"], "domain": "science"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -107,7 +108,7 @@ class TestSubmitTranslation:
         resp = api_client.post(
             "/api/v1/translate",
             headers={"x-app-auth": "Bearer invalid"},
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 401
@@ -115,7 +116,7 @@ class TestSubmitTranslation:
     def test_empty_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("empty.pdf", b"", "application/pdf")},
         )
         assert resp.status_code == 422
@@ -123,20 +124,20 @@ class TestSubmitTranslation:
     def test_empty_file_does_not_create_bq_job(
         self, api_client, mock_translation_service
     ):
-        mock_translation_service.submit_translation.reset_mock()
+        mock_translation_service.submit_translations.reset_mock()
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("empty.pdf", b"", "application/pdf")},
         )
         assert resp.status_code == 422
-        mock_translation_service.submit_translation.assert_not_called()
+        mock_translation_service.submit_translations.assert_not_called()
 
     def test_oversized_file_returns_422(self, api_client):
         oversized = b"x" * (50 * 1024 * 1024 + 1)
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("big.pdf", oversized, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -144,15 +145,31 @@ class TestSubmitTranslation:
     def test_oversized_file_does_not_create_bq_job(
         self, api_client, mock_translation_service
     ):
-        mock_translation_service.submit_translation.reset_mock()
+        mock_translation_service.submit_translations.reset_mock()
         oversized = b"x" * (50 * 1024 * 1024 + 1)
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_language": "Spanish", "domain": "commercial"},
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
             files={"file": ("big.pdf", oversized, "application/pdf")},
         )
         assert resp.status_code == 422
-        mock_translation_service.submit_translation.assert_not_called()
+        mock_translation_service.submit_translations.assert_not_called()
+
+    def test_multiple_targets_return_ordered_job_list(
+        self, api_client, minimal_pdf_bytes
+    ):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={
+                "domain": "commercial",
+                "target_languages": ["French", "German"],
+            },
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["batch_id"] == "test-batch-id"
+        assert [job["target_language"] for job in body["jobs"]] == ["fr", "de"]
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 
 from src.api.exceptions import ValidationError
 from src.api.schemas.requests import TranslateRequest
+from src.api.schemas.responses import MultiTranslateJobResponse
+from src.api.schemas.responses import MultiTranslateResponse
 from src.api.schemas.responses import TranslateResponse
 from src.api.services.cloud_tasks_service import CloudTasksService
 from src.api.utils.pdf_validator import PDFValidator
@@ -86,6 +88,126 @@ class TranslationService:
             attributes={"translation.job_id": job_id},
         ):
             return await self._do_submit(request, job_id)
+
+    async def submit_translations(
+        self, requests: list[TranslateRequest]
+    ) -> MultiTranslateResponse:
+        """Submit independent translation jobs sharing one source document."""
+        if not requests:
+            raise ValidationError("At least one target language is required")
+
+        batch_id = str(uuid.uuid4())
+        first_request = requests[0]
+        try:
+            content = base64.b64decode(first_request.document.content)
+        except Exception as e:
+            raise ValidationError(
+                "Failed to decode document content", "document.content"
+            ) from e
+
+        if first_request.document.format == "pdf":
+            _, metadata = PDFValidator.validate_pdf_bytes(
+                content, first_request.document.filename
+            )
+        else:
+            metadata = {
+                "filename": first_request.document.filename,
+                "size_bytes": len(content),
+                "checksum": hashlib.sha256(content).hexdigest(),
+                "page_count": None,
+            }
+
+        source_hash = hashlib.sha256(content).hexdigest()
+        prepared: list[
+            tuple[str, int, TranslateRequest, dict[str, Any], Any, bool]
+        ] = []
+        for batch_index, request in enumerate(requests):
+            config = self._normalize_config(request)
+            job_id = str(uuid.uuid4())
+            config["job_id"] = job_id
+            cached_job = await self.bigquery.get_completed_job_by_hash(
+                source_hash=source_hash,
+                lang_out=config["lang_out"],
+                domain=config["domain"],
+            )
+            is_cached = bool(cached_job and cached_job.get("result"))
+            prepared.append(
+                (job_id, batch_index, request, config, cached_job, is_cached)
+            )
+
+        has_cache_miss = any(not is_cached for *_, is_cached in prepared)
+        input_gs_uri = ""
+        if has_cache_miss:
+            input_gs_uri = await self.storage.upload_input_pdf(
+                file_content=content,
+                filename=metadata["filename"],
+                job_id=f"batches/{batch_id}",
+            )
+
+        now = datetime.now(UTC)
+        job_records: list[tuple[dict[str, Any], bool]] = []
+        for job_id, batch_index, request, config, cached_job, is_cached in prepared:
+            source_uri = input_gs_uri
+            if is_cached:
+                source_uri = (cached_job.get("source_document") or {}).get(
+                    "gcs_uri", ""
+                )
+            job_data = {
+                "job_id": job_id,
+                "batch_id": batch_id,
+                "batch_index": batch_index,
+                "status": job_status.COMPLETED if is_cached else job_status.QUEUED,
+                "source_document": {
+                    "gcs_uri": source_uri,
+                    "format": request.document.format,
+                    "page_count": metadata.get("page_count"),
+                    "source_language": config["lang_in"],
+                    "original_filename": metadata["filename"],
+                    "output_filename": metadata["filename"],
+                    "file_size_bytes": metadata["size_bytes"],
+                    "checksum": metadata["checksum"],
+                },
+                "translation_config": {
+                    "source_language": config["lang_in"],
+                    "target_language": config["lang_out"],
+                    "domain": config["domain"],
+                },
+                "cost_attribution": request.cost_attribution.model_dump(),
+                "processing_options": request.processing_options.model_dump(),
+                "error_message": None,
+                "result": cached_job.get("result") if is_cached else None,
+                "config": config,
+                "source_hash": source_hash,
+                "submitted_at": now,
+                "completed_at": now if is_cached else None,
+            }
+            await self.bigquery.upsert_translation_job(job_data)
+            job_records.append((job_data, is_cached))
+
+        parent_ctx = otel_context.get_current()
+        responses: list[MultiTranslateJobResponse] = []
+        for job_data, is_cached in job_records:
+            status = job_data["status"]
+            if not is_cached:
+                try:
+                    await self._schedule_background_pipeline(
+                        job_data["job_id"], job_data, parent_ctx
+                    )
+                except Exception:
+                    status = job_status.FAILED
+            responses.append(
+                MultiTranslateJobResponse(
+                    job_id=job_data["job_id"],
+                    target_language=job_data["translation_config"]["target_language"],
+                    status=status,
+                    status_url=f"/api/v1/translate/{job_data['job_id']}",
+                )
+            )
+
+        logger.info(
+            "Submitted translation batch %s with %d jobs", batch_id, len(responses)
+        )
+        return MultiTranslateResponse(batch_id=batch_id, jobs=responses)
 
     async def _do_submit(
         self, request: TranslateRequest, job_id: str
