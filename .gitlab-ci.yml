@@ -496,13 +496,26 @@ pre-commit-lint:
 
     if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
       FROM_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA}"
-      echo "Linting files changed in MR (${FROM_REF}..${CI_COMMIT_SHA})..."
-      run_pre_commit --from-ref "$FROM_REF" --to-ref "$CI_COMMIT_SHA"
-    elif [ "${CI_COMMIT_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
-      echo "Linting files changed in push (${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA})..."
-      run_pre_commit --from-ref "$CI_COMMIT_BEFORE_SHA" --to-ref "$CI_COMMIT_SHA"
+      if git rev-parse --verify "${FROM_REF}^{commit}" >/dev/null 2>&1; then
+        echo "Linting files changed in MR (${FROM_REF}..${CI_COMMIT_SHA})..."
+        run_pre_commit --from-ref "$FROM_REF" --to-ref "$CI_COMMIT_SHA"
+      else
+        echo "No valid MR diff base found; linting all files."
+        run_pre_commit --all-files
+      fi
+    elif [ -n "${CI_COMMIT_BEFORE_SHA:-}" ] \
+        && [ "${CI_COMMIT_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \
+        && git rev-parse --verify "${CI_COMMIT_BEFORE_SHA}^{commit}" >/dev/null 2>&1 \
+        && git rev-parse --verify "${CI_COMMIT_SHA}^{commit}" >/dev/null 2>&1; then
+      if git merge-base --is-ancestor "$CI_COMMIT_BEFORE_SHA" "$CI_COMMIT_SHA" 2>/dev/null; then
+        echo "Linting files changed in push (${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA})..."
+        run_pre_commit --from-ref "$CI_COMMIT_BEFORE_SHA" --to-ref "$CI_COMMIT_SHA"
+      else
+        echo "Diff base is not an ancestor of the current commit; linting all files."
+        run_pre_commit --all-files
+      fi
     else
-      echo "No diff base available; linting all files."
+      echo "No valid diff base available; linting all files."
       run_pre_commit --all-files
     fi
   rules:
@@ -730,6 +743,7 @@ resolve-dast-target:
       artifacts: false
   environment:
     name: "$CI_COMMIT_BRANCH"
+  when: manual
   script:
     - |
       set -e
@@ -763,6 +777,7 @@ dast-scan:
   needs:
     - job: resolve-dast-target
       artifacts: true
+  when: manual
   script:
     - mkdir -p /zap/wrk
     - |
