@@ -292,6 +292,9 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
     IAP_AUDIENCE: str = ""
     HUB_IAP_AUDIENCE: str = ""
+    # Entra security group required for Translation entitlement (checked against IAP JWT `groups` claim).
+    TRANSLATION_REQUIRED_GROUP: str = ""
+
 
     # -----------------------------
     # File Limits
