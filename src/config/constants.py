@@ -295,7 +295,6 @@ class Settings(BaseSettings):
     # Entra security group required for Translation entitlement (checked against IAP JWT `groups` claim).
     TRANSLATION_REQUIRED_GROUP: str = ""
 
-
     # -----------------------------
     # File Limits
     # -----------------------------

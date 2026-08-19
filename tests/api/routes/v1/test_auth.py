@@ -3,7 +3,11 @@
 from fastapi.testclient import TestClient
 from src.api.main import app
 
-DEV_IAP_HEADER = {"X-Dev-IAP-User-Email": "user@colt.net"}
+# TRANSLATION_REQUIRED_GROUP in tests/test.env is "ai-translation-users".
+DEV_IAP_HEADER = {
+    "X-Dev-IAP-User-Email": "user@colt.net",
+    "x-dev-iap-user-groups": "ai-translation-users",
+}
 
 
 class TestAuthTokenRoute:
@@ -28,7 +32,22 @@ class TestAuthTokenRoute:
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.post(
                 "/api/v1/auth/token",
-                headers={"X-Dev-IAP-User-Email": "user@example.com"},
+                headers={
+                    "X-Dev-IAP-User-Email": "user@example.com",
+                    "x-dev-iap-user-groups": "ai-translation-users",
+                },
+                json={
+                    "business_unit": "engineering",
+                    "organization": "colt",
+                },
+            )
+        assert response.status_code == 403
+
+    def test_rejects_colt_email_without_required_group(self):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/api/v1/auth/token",
+                headers={"X-Dev-IAP-User-Email": "user@colt.net"},
                 json={
                     "business_unit": "engineering",
                     "organization": "colt",
@@ -40,4 +59,12 @@ class TestAuthTokenRoute:
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.get("/api/v1/auth/whoami", headers=DEV_IAP_HEADER)
         assert response.status_code == 200
-        assert response.json() == {"email": "user@colt.net"}
+        assert response.json() == {"email": "user@colt.net", "entitled": True}
+
+    def test_whoami_rejects_missing_required_group(self):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.get(
+                "/api/v1/auth/whoami",
+                headers={"X-Dev-IAP-User-Email": "user@colt.net"},
+            )
+        assert response.status_code == 403

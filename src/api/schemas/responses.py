@@ -50,9 +50,9 @@ class WhoamiResponse(BaseModel):
 
     email: str = Field(..., description="Verified user email from IAP identity")
     entitled: bool = Field(
-        True, description="Whether the user is entitled to this service (Entra group membership)"
+        True,
+        description="Whether the user is entitled to this service (Entra group membership)",
     )
-
 
 
 # ---------------------------------------------------------------------------

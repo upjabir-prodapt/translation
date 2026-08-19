@@ -114,7 +114,9 @@ def get_iap_identity(request: Request) -> IapIdentity:
         dev_email = request.headers.get(DEV_IAP_USER_HEADER)
         if dev_email:
             dev_groups_raw = request.headers.get("x-dev-iap-user-groups", "")
-            return IapIdentity(_normalize_email(dev_email), _normalize_groups(dev_groups_raw))
+            return IapIdentity(
+                _normalize_email(dev_email), _normalize_groups(dev_groups_raw)
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
