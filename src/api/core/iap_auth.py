@@ -139,6 +139,16 @@ def get_iap_identity(request: Request) -> IapIdentity:
         HUB_FORWARDED_IAP_JWT_HEADER
     )
     if not assertion:
+        # Debug aid (Architecture B rollout): dump every header NAME we actually
+        # received so we can see exactly what nginx/GFE delivered when the
+        # assertion is missing. Never logs header VALUES (JWTs, bearer tokens,
+        # cookies) to avoid leaking credentials into logs.
+        logger.warning(
+            "IAP assertion missing on %s %s -- received header names: %s",
+            request.method,
+            request.url.path,
+            sorted(request.headers.keys()),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing X-Goog-IAP-JWT-Assertion header",
