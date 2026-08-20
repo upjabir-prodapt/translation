@@ -13,6 +13,12 @@ from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
+# Workforce-identity-federated users authenticate with their internal AD/Entra
+# UPN domain (@internal.colt.net), which differs from the external mailbox
+# domain (@colt.net) used elsewhere. Both refer to legitimate Colt users --
+# accept either domain rather than rewriting/normalizing between them.
+ALLOWED_EMAIL_DOMAINS = {"colt.net", "internal.colt.net"}
+
 IAP_JWT_HEADER = "x-goog-iap-jwt-assertion"
 # Architecture B fallback: Google Front End strips inbound X-Goog-*/X-Google-*
 # request headers at EVERY Cloud Run service's own public ingress edge (anti-
@@ -32,8 +38,11 @@ _GOOGLE_REQUEST = google_requests.Request()
 
 def _normalize_email(email: str) -> str:
     normalized = email.strip().lower()
-    if not normalized.endswith("@colt.net"):
-        logger.warning("Rejected non-colt.net email/sub claim: %r", normalized)
+    domain = normalized.rsplit("@", 1)[-1] if "@" in normalized else ""
+    if domain not in ALLOWED_EMAIL_DOMAINS:
+        logger.warning(
+            "Rejected email/sub claim with disallowed domain %r: %r", domain, normalized
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only @colt.net email addresses are allowed (you provided: {normalized})",
