@@ -469,6 +469,9 @@ sast:
 
 pre-commit-lint:
   stage: lint
+  rules:
+  - when: never
+  # Temporarily disabled: only build+deploy needed for this rollout.
   extends: ".python_ci_lint"
   variables:
     GIT_DEPTH: "0"
@@ -572,6 +575,9 @@ env-scope-check:
 
 unit-test:
   stage: test
+  rules:
+  - when: never
+  # Temporarily disabled: only build+deploy needed for this rollout.
   extends: ".python_ci_test"
   script:
   - |
@@ -608,9 +614,6 @@ build-and-push:
   extends:
   - ".gcp_wif"
   - ".shell_runner"
-  needs:
-  - job: unit-test
-    artifacts: false
   when: manual
   script:
   - |

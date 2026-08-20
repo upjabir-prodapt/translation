@@ -134,7 +134,7 @@ def get_iap_identity(request: Request) -> IapIdentity:
                 "with a @colt.net email address"
             ),
         )
-
+    logger.info("Processing IAP for headers: %s", sorted(request.headers.keys()))
     assertion = request.headers.get(IAP_JWT_HEADER) or request.headers.get(
         HUB_FORWARDED_IAP_JWT_HEADER
     )
