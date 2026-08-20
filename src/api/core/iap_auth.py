@@ -82,6 +82,7 @@ def verify_iap_jwt_claims(assertion: str, audience: str) -> dict[str, Any]:
             audience=audience,
             certs_url=IAP_CERTS_URL,
         )
+        logger.info("JWT signature verified successfully. Claims: %s", claims)
     except Exception as exc:
         logger.warning("IAP JWT verification failed for audience %s: %s", audience, exc)
         raise HTTPException(
@@ -95,6 +96,7 @@ def verify_iap_jwt_claims(assertion: str, audience: str) -> dict[str, Any]:
     )
 
     email = claims.get("email") or claims.get("sub")
+    logger.info("Extracted email/sub claim from JWT: %s", email)
     if not email or not isinstance(email, str):
         logger.warning("Verified JWT has no usable email/sub claim: claims=%s", claims)
         raise HTTPException(
