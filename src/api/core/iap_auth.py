@@ -135,7 +135,9 @@ def get_iap_identity(request: Request) -> IapIdentity:
             ),
         )
 
-    assertion = request.headers.get(IAP_JWT_HEADER)
+    assertion = request.headers.get(IAP_JWT_HEADER) or request.headers.get(
+        HUB_FORWARDED_IAP_JWT_HEADER
+    )
     if not assertion:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
