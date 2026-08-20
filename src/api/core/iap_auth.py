@@ -14,8 +14,18 @@ from src.config.constants import settings
 logger = logging.getLogger(__name__)
 
 IAP_JWT_HEADER = "x-goog-iap-jwt-assertion"
+# Architecture B fallback: Google Front End strips inbound X-Goog-*/X-Google-*
+# request headers at EVERY Cloud Run service's own public ingress edge (anti-
+# spoofing) — only IAP itself, sitting directly in front of a given backend,
+# is trusted to set those headers for that backend. When the AI Hub's own
+# nginx relays the hub's inbound IAP JWT to this service's Cloud Run URL, GFE
+# strips X-Goog-IAP-JWT-Assertion before it reaches this app. nginx therefore
+# additionally relays the same JWT value under this non-reserved header name,
+# which GFE does not strip. Same verification path (HUB_IAP_AUDIENCE) applies.
+HUB_FORWARDED_IAP_JWT_HEADER = "x-colt-hub-iap-assertion"
 DEV_IAP_USER_HEADER = "x-dev-iap-user-email"
 IAP_CERTS_URL = "https://www.gstatic.com/iap/verify/public_key"
+
 
 _GOOGLE_REQUEST = google_requests.Request()
 
