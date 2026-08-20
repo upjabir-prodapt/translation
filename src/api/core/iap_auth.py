@@ -36,7 +36,7 @@ def _normalize_email(email: str) -> str:
         logger.warning("Rejected non-colt.net email/sub claim: %r", normalized)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only @colt.net email addresses are allowed",
+            detail=f"Only @colt.net email addresses are allowed (you provided: {normalized})",
         )
     logger.info("Normalized IAP email: %s", normalized)
     return normalized
