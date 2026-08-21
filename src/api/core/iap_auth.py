@@ -9,9 +9,11 @@ from fastapi import status
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
+from src.api.core.entitlements import has_translation_access
 from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
+
 
 # Workforce-identity-federated users authenticate with their internal AD/Entra
 # UPN domain (@internal.colt.net), which differs from the external mailbox
@@ -232,8 +234,56 @@ def get_iap_identity(request: Request) -> IapIdentity:
     return IapIdentity(email=email, groups=groups)
 
 
+def require_translation_entitlement():
+    """Dependency factory: verify IAP identity AND require Firestore-backed Translation entitlement.
+
+    Replaces the Entra-groups-claim-based `require_group()` check as the
+    primary authorization gate for Translation. Entra's ID token does not
+    reliably include a `groups` claim for every user/session (see
+    entitlements.py docstring for the full explanation), so entitlement is
+    looked up directly by the already-reliably-verified email address in
+    Firestore instead of relying on the IAP JWT's `groups` claim.
+    """
+
+    async def _dependency(request: Request) -> IapIdentity:
+        identity = get_iap_identity(request)
+        if settings.IS_LOCAL:
+            # Local/dev mode: no live Firestore, and DEV_IAP_USER_HEADER-based
+            # group simulation already exists for local testing -- reuse it
+            # here so local dev/test behavior is unchanged.
+            if not identity.has_group(settings.TRANSLATION_REQUIRED_GROUP):
+                logger.warning(
+                    "[local] User %s denied Translation access — missing dev group %r (has: %s)",
+                    identity.email,
+                    settings.TRANSLATION_REQUIRED_GROUP,
+                    sorted(identity.groups),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this service. Contact your administrator.",
+                )
+            return identity
+
+        if not await has_translation_access(identity.email):
+            logger.warning(
+                "User %s denied Translation access — no Firestore entitlement",
+                identity.email,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this service. Contact your administrator.",
+            )
+        return identity
+
+    return _dependency
+
+
 def require_group(required_group: str):
-    """Dependency factory: verify IAP identity AND require membership in a specific Entra group."""
+    """Dependency factory: verify IAP identity AND require membership in a specific Entra group.
+
+    Deprecated for production use — see require_translation_entitlement().
+    Kept for any callers still relying on JWT-claim-based group checks.
+    """
 
     def _dependency(request: Request) -> IapIdentity:
         identity = get_iap_identity(request)

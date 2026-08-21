@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 
 from src.api.core.iap_auth import IapIdentity
-from src.api.core.iap_auth import require_group
+from src.api.core.iap_auth import require_translation_entitlement
 from src.api.core.security import create_access_token
 from src.api.schemas.requests import AuthTokenRequest
 from src.api.schemas.responses import AuthTokenResponse
@@ -16,7 +16,7 @@ from src.config.constants import settings
 
 router = APIRouter()
 
-_require_translation_group = require_group(settings.TRANSLATION_REQUIRED_GROUP)
+_require_translation_group = require_translation_entitlement()
 
 
 @router.get("/auth/whoami", tags=["auth"])
