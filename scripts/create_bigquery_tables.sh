@@ -250,11 +250,40 @@ PY
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "Would update schema for ${ref} (add ${missing_count} column(s))"
-  else
-    log "Updating schema for ${ref} (adding ${missing_count} column(s))"
-    run bq update "$ref" "$tmp_missing"
+    rm -f "$tmp_missing" "$tmp_drift"
+    return 0
   fi
-  rm -f "$tmp_missing" "$tmp_drift"
+
+  # `bq update <table> <schema.json>` REPLACES the table's schema with exactly
+  # what's in the file -- passing only the missing/new fields (as opposed to
+  # the full merged schema) makes BigQuery think every pre-existing column is
+  # being removed, and it rejects the update ("Field X is missing in new
+  # schema"). Build the full merged schema (live fields, unchanged, plus the
+  # new fields) before calling `bq update`.
+  local tmp_merged
+  tmp_merged="$(mktemp)"
+  python3 - "$ref" "$schema_file" "$tmp_merged" <<'PY'
+import json
+import subprocess
+import sys
+
+ref, schema_file, merged_path = sys.argv[1:4]
+desired = json.load(open(schema_file, encoding="utf-8"))
+raw = subprocess.check_output(["bq", "show", "--format=prettyjson", ref], text=True)
+live = json.loads(raw)["schema"]["fields"]
+
+existing_names = {field["name"] for field in live}
+merged = list(live)
+for field in desired:
+    if field["name"] not in existing_names:
+        merged.append(field)
+
+json.dump(merged, open(merged_path, "w", encoding="utf-8"))
+PY
+
+  log "Updating schema for ${ref} (adding ${missing_count} column(s))"
+  run bq update "$ref" "$tmp_merged"
+  rm -f "$tmp_missing" "$tmp_drift" "$tmp_merged"
 }
 
 provision_project() {
