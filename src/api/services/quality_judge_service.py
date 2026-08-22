@@ -20,6 +20,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from src.config.constants import settings
+from src.config.domain_prompts import build_domain_judge_block
+from src.config.domain_prompts import normalize_domain_key
 from src.config.retry import llm_retry
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_llm
@@ -80,10 +82,18 @@ class QualityJudgeLLMScores(BaseModel):
 
 
 class GoogleADKJudgeAgent:
-    """LLM judge via google-genai (Vertex); omission/hallucination scoring."""
+    """LLM judge via google-genai (Vertex); omission/hallucination scoring.
 
-    def __init__(self, model: str | None = None):
+    The rubric is domain-segregated: the generic scoring definitions are shared
+    across domains, and a per-domain rubric from :mod:`src.config.domain_prompts`
+    is appended so the judge weighs the failure modes that actually matter for
+    that document type (modality in legal, figures in finance, step integrity in
+    operations, and so on).
+    """
+
+    def __init__(self, model: str | None = None, domain: str | None = None):
         self.model = model or settings.JUDGE_MODEL
+        self.domain = normalize_domain_key(domain)
         self._client = None
         if genai is not None:
             self._client = genai.Client(
@@ -206,6 +216,7 @@ class GoogleADKJudgeAgent:
             '    "Glossary names and tags were not scored as errors."\n'
             "  ]\n"
             "}\n\n"
+            f"{build_domain_judge_block(self.domain)}\n"
             f"SOURCE:\n{source_text}\n\n"
             f"TRANSLATION:\n{translated_text}"
         )
@@ -250,7 +261,7 @@ class GoogleADKJudgeAgent:
         source_chars = len(source_text)
         translated_chars = len(translated_text)
         logger.debug(
-            f"Judge evaluate: model={self.model} "
+            f"Judge evaluate: model={self.model} domain={self.domain} "
             f"source_chars={source_chars} translated_chars={translated_chars}",
         )
         t0 = time.monotonic()
@@ -261,6 +272,7 @@ class GoogleADKJudgeAgent:
                 "llm.model": self.model,
                 "llm.name": self.model,
                 "llm.provider": "google_vertexai",
+                "judge.domain": self.domain,
                 "judge.source_chars": source_chars,
                 "judge.translated_chars": translated_chars,
             },
@@ -293,6 +305,7 @@ class GoogleADKJudgeAgent:
         set_root_span_attributes(
             {
                 "judge.model": self.model,
+                "judge.domain": self.domain,
                 "judge.final_score": round(final, 4),
                 "judge.passed": passed,
             }

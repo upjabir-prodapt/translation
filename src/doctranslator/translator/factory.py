@@ -15,8 +15,13 @@ def create_translator(
     lang_in: str,
     lang_out: str,
     qps: int,
+    domain: str | None = None,
 ) -> BaseTranslator:
-    """Create one translator for the given model_id string."""
+    """Create one translator for the given model_id string.
+
+    ``domain`` selects the domain-specific prompt profile used by the provider
+    when building its translation prompt.
+    """
     set_translate_rate_limiter(max(int(qps), 1))
     provider = infer_provider(model_name)
     resolved_model = model_name.strip()
@@ -27,6 +32,7 @@ def create_translator(
             lang_out=lang_out,
             model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
+            domain=domain,
         )
 
     if provider == LLMProvider.CLAUDE:
@@ -35,6 +41,7 @@ def create_translator(
             lang_out=lang_out,
             model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
+            domain=domain,
         )
 
     raise ValueError(f"No translator implementation for provider '{provider}'.")
@@ -47,6 +54,7 @@ def create_translator_from_model_list(
     lang_out: str,
     qps: int,
     model_index: int = 0,
+    domain: str | None = None,
 ) -> BaseTranslator:
     """Create one translator from an ordered model list."""
     if not model_list:
@@ -62,4 +70,5 @@ def create_translator_from_model_list(
         lang_in=lang_in,
         lang_out=lang_out,
         qps=qps,
+        domain=domain,
     )

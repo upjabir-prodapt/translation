@@ -40,7 +40,9 @@ class ModelAttemptOrchestrator:
             int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
             len(model_list),
         )
-        judge = GoogleADKJudgeAgent(config.get("judge_model"))
+        judge = GoogleADKJudgeAgent(
+            config.get("judge_model"), domain=config.get("domain")
+        )
         best_attempt_result: dict[str, Any] | None = None
         best_attempt_score = -1.0
         best_attempt_config: dict[str, Any] | None = None

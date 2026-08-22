@@ -1,8 +1,30 @@
-"""Shared LLM prompt builders for translation tasks."""
+"""Shared LLM prompt builders for translation tasks.
+
+The prompt is assembled in two layers: a domain-independent core (output
+contract, alignment/coverage/fidelity, no-translate tokens) and a
+domain-specific block rendered from :mod:`src.config.domain_prompts`. The domain
+block is placed last, immediately before the input, and is declared
+higher-priority so it overrides the generic guidance where the two differ.
+"""
+
+from src.config.domain_prompts import build_domain_translation_block
 
 
-def build_translation_prompt(text: str, lang_in: str, lang_out: str) -> str:
-    """Build the standard document translation prompt used across all LLM backends."""
+def build_translation_prompt(
+    text: str,
+    lang_in: str,
+    lang_out: str,
+    domain: str | None = None,
+) -> str:
+    """Build the document translation prompt for one domain and language pair.
+
+    Args:
+        text: Payload to translate (already-templated IL prompt or raw text).
+        lang_in: Source language.
+        lang_out: Target language.
+        domain: Routing domain (commercial, legal, finance, hr, operations).
+            ``None`` or an unknown value falls back to the generic profile.
+    """
     return (
         "# Role\n"
         "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
@@ -53,6 +75,7 @@ def build_translation_prompt(text: str, lang_in: str, lang_out: str) -> str:
         f"- Even when you rephrase idiomatically for {lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
         "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "
         "do not silently soften or strengthen them.\n\n"
+        f"{build_domain_translation_block(domain)}\n"
         "# INPUT\n"
         f"{text}"
         "# Output\n"

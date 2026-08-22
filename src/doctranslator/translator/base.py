@@ -13,6 +13,7 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind
 
+from src.config.domain_prompts import normalize_domain_key
 from src.config.tracing import set_root_span_attribute
 from src.config.tracing import tracer_llm
 from src.doctranslator.translator.instrumentation import ATTR_LLM_INPUT_CHARS
@@ -45,11 +46,14 @@ class BaseTranslator(ABC):
     lang_map: dict[str, str] = {}
     provider: str = "base"
 
-    def __init__(self, lang_in: str, lang_out: str):
+    def __init__(self, lang_in: str, lang_out: str, domain: str | None = None):
         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
         lang_out = self.lang_map.get(lang_out.lower(), lang_out)
         self.lang_in = lang_in
         self.lang_out = lang_out
+        # Routing domain (commercial/legal/finance/hr/operations); selects the
+        # domain-specific prompt profile. None falls back to the generic profile.
+        self.domain = normalize_domain_key(domain)
         self.translate_call_count = 0
 
     def __del__(self):
@@ -152,7 +156,7 @@ class BaseTranslator(ABC):
         rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []
         logger.debug(
             f"{operation}: name={self.name} model={self.model} "
-            f"{self.lang_in}->{self.lang_out} "
+            f"{self.lang_in}->{self.lang_out} domain={self.domain} "
             f"input_chars={input_chars} prompt_chars={c_len} "
             f"temperature={self.temperature} rate_limit_param_keys={rl_keys}",
         )
@@ -169,6 +173,7 @@ class BaseTranslator(ABC):
                 ATTR_LLM_PROMPT_CHARS: c_len,
                 "translation.source_lang": self.lang_in,
                 "translation.target_lang": self.lang_out,
+                "translation.domain": self.domain,
             },
         ) as span:
             response = self.invoke(contents, response_schema)

@@ -9,6 +9,10 @@ from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
 
+from src.config.domain_prompts import GENERIC_DOMAIN
+from src.config.domain_prompts import SUPPORTED_DOMAINS
+from src.config.domain_prompts import normalize_domain_key
+
 
 class DocumentInput(BaseModel):
     """Document to be translated."""
@@ -40,13 +44,9 @@ class DocumentInput(BaseModel):
 class TranslationConfigInput(BaseModel):
     """Translation configuration."""
 
-    VALID_DOMAINS: ClassVar[set[str]] = {
-        "commercial",
-        "legal",
-        "finance",
-        "hr",
-        "operations",
-    }
+    # Domains are defined by their prompt profiles, so the API accepts exactly
+    # the domains the workflow has a dedicated prompt for.
+    VALID_DOMAINS: ClassVar[frozenset[str]] = frozenset(SUPPORTED_DOMAINS)
 
     source_language: str = Field(
         "auto",
@@ -59,18 +59,18 @@ class TranslationConfigInput(BaseModel):
         ...,
         min_length=2,
         max_length=20,
-        description="Translation domain: commercial, legal, finance, hr, operations",
+        description=(
+            "Translation domain (selects the domain-specific prompt profile): "
+            + ", ".join(sorted(SUPPORTED_DOMAINS))
+        ),
     )
 
     @field_validator("domain")
     @classmethod
     def validate_domain(cls, v: str) -> str:
-        """Validate and normalize domain."""
-        normalized = v.strip().lower()
-        # Accept "oprations" as legacy alias
-        if normalized == "oprations":
-            normalized = "operations"
-        if normalized not in cls.VALID_DOMAINS:
+        """Validate and normalize domain, accepting known aliases."""
+        normalized = normalize_domain_key(v)
+        if normalized == GENERIC_DOMAIN:
             raise ValueError(
                 f"Invalid domain. Allowed: {', '.join(sorted(cls.VALID_DOMAINS))}"
             )

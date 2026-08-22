@@ -374,6 +374,7 @@ class TranslationConfig:
         skip_scanned_detection: bool = False,
         ocr_workaround: bool = False,
         custom_system_prompt: str | None = None,
+        domain: str | None = None,
         add_formula_placehold_hint: bool = False,
         glossaries: list[Glossary] | None = None,
         pool_max_workers: int | None = None,
@@ -469,6 +470,9 @@ class TranslationConfig:
         self.table_model = table_model
         self.show_char_box = show_char_box
         self.custom_system_prompt = custom_system_prompt
+        # Routing domain, used to select domain-specific prompt profiles in
+        # the paragraph translator and the automatic term extractor.
+        self.domain = domain
         self.add_formula_placehold_hint = add_formula_placehold_hint
         self.auto_enable_ocr_workaround = auto_enable_ocr_workaround
         self._init_feature_flags(
