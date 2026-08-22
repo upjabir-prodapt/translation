@@ -275,6 +275,31 @@ class JobProcessor:
         logger.info(f"Detected source language {detected_language} from {input_file}")
         return detected_language
 
+    def detect_source_language_from_text(self, text: str) -> str:
+        """Detect the dominant language of already-extracted document text.
+
+        Used by the DOCX path, where text comes from OOXML paragraphs rather
+        than PDF page blocks. Scoring is identical: per-block detection weighted
+        by block length, capped by the configured character budget.
+        """
+        document_languages: Counter[str] = Counter()
+        processed_chars = 0
+        for block in text.splitlines():
+            normalized = self._normalize_detection_text(block)
+            if not self._is_detectable_text(normalized):
+                continue
+            processed_chars += len(normalized)
+            detected_language = self._detect_language_for_text(normalized)
+            if detected_language is not None:
+                document_languages[detected_language] += len(normalized)
+            if processed_chars >= self.MAX_DETECTION_CHARS:
+                break
+        if not document_languages:
+            raise ValueError("Unable to detect source language from document text")
+        detected_language, _ = document_languages.most_common(1)[0]
+        logger.info(f"Detected source language {detected_language} from document text")
+        return detected_language
+
     def _detect_page_languages(self, page: Any) -> tuple[Counter[str], int]:
         page_languages: Counter[str] = Counter()
         page_chars = 0

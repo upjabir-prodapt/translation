@@ -23,3 +23,12 @@ class LanguageDetectionService:
 
     def detect(self, input_pdf: Path) -> str:
         return self._processor.detect_source_language(input_pdf)
+
+    def detect_docx(self, input_docx: Path) -> str:
+        """Detect the source language of a .docx from its OOXML paragraph text."""
+        from src.worker.services.docx_processor_service import extract_docx_text
+
+        text = extract_docx_text(
+            input_docx, max_chars=self._processor.MAX_DETECTION_CHARS
+        )
+        return self._processor.detect_source_language_from_text(text)

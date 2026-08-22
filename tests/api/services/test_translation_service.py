@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from fixtures.docx_builder import simple_docx
 from src.api.exceptions import ValidationError
 from src.api.schemas.requests import CostAttributionInput
 from src.api.schemas.requests import DocumentInput
@@ -84,11 +85,40 @@ class TestTranslationService:
     async def test_submit_translation_docx(self, service, mock_storage, valid_request):
         valid_request.document.format = "docx"
         valid_request.document.filename = "test.docx"
+        valid_request.document.content = base64.b64encode(simple_docx()).decode()
         mock_storage.upload_input_pdf.return_value = "gs://bucket/test.docx"
 
         with patch.object(service.orchestrator, "run", new_callable=AsyncMock):
             res = await service.submit_translation(valid_request)
             assert res.status == "queued"
+
+    async def test_submit_translation_docx_keeps_docx_output_filename(
+        self, service, mock_storage, mock_bq, valid_request
+    ):
+        """A Word source stays a Word deliverable — no .pdf rename."""
+        valid_request.document.format = "docx"
+        valid_request.document.filename = "contract.docx"
+        valid_request.document.content = base64.b64encode(simple_docx()).decode()
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/contract.docx"
+
+        with patch.object(service.orchestrator, "run", new_callable=AsyncMock):
+            await service.submit_translation(valid_request)
+
+        job_data = mock_bq.upsert_translation_job.call_args[0][0]
+        assert job_data["source_document"]["format"] == "docx"
+        assert job_data["source_document"]["output_filename"] == "contract.docx"
+        assert job_data["source_document"]["page_count"] is None
+
+    async def test_submit_translation_rejects_non_docx_content(
+        self, service, valid_request
+    ):
+        """Bytes that are not an OOXML package are rejected at submission."""
+        valid_request.document.format = "docx"
+        valid_request.document.filename = "test.docx"
+        valid_request.document.content = base64.b64encode(b"not a docx").decode()
+
+        with pytest.raises(ValidationError, match="Invalid or corrupted Word document"):
+            await service.submit_translation(valid_request)
 
     def test_normalize_config_success(self, service, valid_request):
         config = service._normalize_config(valid_request)

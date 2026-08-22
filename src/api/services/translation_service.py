@@ -21,6 +21,7 @@ from src.api.schemas.responses import MultiTranslateJobResponse
 from src.api.schemas.responses import MultiTranslateResponse
 from src.api.schemas.responses import TranslateResponse
 from src.api.services.cloud_tasks_service import CloudTasksService
+from src.api.utils.docx_validator import DOCXValidator
 from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
@@ -110,12 +111,9 @@ class TranslationService:
                 content, first_request.document.filename
             )
         else:
-            metadata = {
-                "filename": first_request.document.filename,
-                "size_bytes": len(content),
-                "checksum": hashlib.sha256(content).hexdigest(),
-                "page_count": None,
-            }
+            _, metadata = DOCXValidator.validate_docx_bytes(
+                content, first_request.document.filename
+            )
 
         source_hash = hashlib.sha256(content).hexdigest()
         prepared: list[
@@ -226,12 +224,9 @@ class TranslationService:
                     content, request.document.filename
                 )
             else:
-                metadata = {
-                    "filename": request.document.filename,
-                    "size_bytes": len(content),
-                    "checksum": hashlib.sha256(content).hexdigest(),
-                    "page_count": None,
-                }
+                _, metadata = DOCXValidator.validate_docx_bytes(
+                    content, request.document.filename
+                )
 
             source_hash = hashlib.sha256(content).hexdigest()
 

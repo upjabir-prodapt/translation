@@ -22,6 +22,7 @@ from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import BigQueryError
 from src.repository.repository_exception import StorageError
 from src.worker.services.assembly_service import AssemblyService
+from src.worker.services.docx_processor_service import DocxJobProcessor
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.intent_router_service import IntentRouterService
 from src.worker.services.language_detection_service import LanguageDetectionService
@@ -30,7 +31,6 @@ from src.worker.services.processor_service import JobProcessor
 from src.worker.services.temp_workspace_service import TempWorkspaceService
 from src.worker.services.translation_job_session import TranslationJobSessionManager
 from src.worker.utils.cost_utils import validate_job_cost
-from src.worker.utils.docx_converter import convert_docx_to_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +247,47 @@ class PipelineOrchestrator:
         totals["chunk_count"] = len(records)
         return totals
 
+    async def _compute_docx_chunk_costs(
+        self,
+        *,
+        job_id: str,
+        batch_token_counts: list[int],
+        token_usage: dict[str, Any],
+        model_id: str,
+    ) -> dict[str, float | int]:
+        """Attribute cost across the LLM batches a DOCX job was translated in.
+
+        DOCX has no page-based split, so the chunk unit is the translation batch
+        and each batch is weighted by its source token count.
+        """
+        from src.worker.doctranslator.format.pdf.split_manager import SplitPoint
+        from src.worker.utils.cost_utils import aggregate_chunk_cost_records
+
+        chunks = [
+            SplitPoint(
+                start_page=index,
+                end_page=index,
+                chunk_index=index,
+                token_count=max(1, int(tokens)),
+            )
+            for index, tokens in enumerate(batch_token_counts)
+        ]
+        if not chunks:
+            raise RuntimeError(
+                f"No translation batches recorded for DOCX job {job_id} — cannot attribute cost"
+            )
+        cost_service = get_vertex_llm_cost_service()
+        records = cost_service.compute_per_chunk_costs(
+            chunks=chunks,
+            model_id=model_id,
+            total_input_tokens=int(token_usage.get("prompt_tokens", 0)),
+            total_output_tokens=int(token_usage.get("completion_tokens", 0)),
+            cache_hit_tokens=int(token_usage.get("cache_hit_prompt_tokens", 0)),
+        )
+        totals = aggregate_chunk_cost_records(records)
+        totals["chunk_count"] = len(records)
+        return totals
+
     async def _execute_pipeline(
         self, job_id: str, job_data: dict[str, Any], pipeline_span
     ) -> None:
@@ -264,24 +305,25 @@ class PipelineOrchestrator:
                 job_id, "processing_status_patch", succeeded=True
             )
 
-            input_filename = source_doc.get("original_filename", "input.pdf")
+            is_docx = str(source_doc.get("format", "")).lower() == "docx"
+            input_filename = source_doc.get(
+                "original_filename", "input.docx" if is_docx else "input.pdf"
+            )
             local_input_path = workspace.input_dir / input_filename
             blob_path = self._extract_blob_path(source_doc["gcs_uri"])
 
             current_stage = "download_input"
             await self.storage.download_file(blob_path, local_input_path)
 
-            if source_doc.get("format") == "docx":
-                logger.info(f"Converting DOCX to PDF for job {job_id}")
-                local_input_path = convert_docx_to_pdf(
-                    local_input_path, workspace.input_dir
-                )
-
             await self.session_manager.set_input_path(job_id, local_input_path)
 
             source_lang = translation_config.get("source_language")
             if not source_lang or source_lang == "auto":
-                source_lang = self.language_detector.detect(local_input_path)
+                source_lang = (
+                    self.language_detector.detect_docx(local_input_path)
+                    if is_docx
+                    else self.language_detector.detect(local_input_path)
+                )
 
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
@@ -312,7 +354,11 @@ class PipelineOrchestrator:
             )
 
             tracker = _PipelineProgressTracker(job_id=job_id)
-            processor = JobProcessor(progress_tracker=tracker)
+            processor = (
+                DocxJobProcessor(progress_tracker=tracker)
+                if is_docx
+                else JobProcessor(progress_tracker=tracker)
+            )
             processor_config = {
                 "job_id": job_id,
                 "input_file": str(local_input_path),
@@ -324,7 +370,9 @@ class PipelineOrchestrator:
                 "model_list": model_chain,
                 "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
                 "glossaries": glossaries,
-                "add_cover_page": True,
+                # DOCX output is the original Word file with translated text, so
+                # no cover page is prepended and no dual-language PDF is built.
+                "add_cover_page": not is_docx,
                 "no_dual": True,
                 "enable_dlp": enable_dlp,
             }
@@ -337,7 +385,9 @@ class PipelineOrchestrator:
             quality_rpt = attempt_result.get("quality_report") or {}
             attempt_idx = int(attempt_result.get("attempt_index") or 1)
             token_usage = attempt_result.get("token_usage") or {}
-            mono_pdf_path = attempt_result.get("mono_pdf_path")
+            translated_output_path = attempt_result.get(
+                "output_path"
+            ) or attempt_result.get("mono_pdf_path")
 
             await self.session_manager.record_attempt(
                 job_id,
@@ -349,7 +399,7 @@ class PipelineOrchestrator:
                     "quality_score": quality_rpt.get("final_score"),
                     "token_usage": token_usage,
                     "cost_usd": token_usage.get("estimated_cost_usd"),
-                    "output_path": mono_pdf_path,
+                    "output_path": translated_output_path,
                 },
             )
 
@@ -361,36 +411,45 @@ class PipelineOrchestrator:
                 job_id, "write_dlp_tokens", succeeded=True
             )
 
-            raw_output_name = str(
+            # A Word source stays a Word deliverable; only PDF-sourced jobs are
+            # renamed, and they already carry a .pdf name.
+            preferred_output_name = str(
                 source_doc.get("output_filename")
                 or source_doc.get("original_filename")
-                or "output.pdf"
+                or ("output.docx" if is_docx else "output.pdf")
             )
-            if raw_output_name.lower().endswith(".docx"):
-                raw_output_name = raw_output_name[:-5] + ".pdf"
-            preferred_output_name = raw_output_name
             selected_output_uri = None
 
             current_stage = "upload_output"
-            if mono_pdf_path:
+            if translated_output_path:
                 selected_output_uri = await self.assembly_service.upload_output(
                     job_id=job_id,
-                    local_path=Path(str(mono_pdf_path)),
+                    local_path=Path(str(translated_output_path)),
                     preferred_filename=preferred_output_name,
                 )
                 await self.session_manager.set_output(
                     job_id,
-                    output_path=mono_pdf_path,
+                    output_path=translated_output_path,
                     output_gcs_uri=selected_output_uri,
                 )
 
             current_stage = "compute_chunk_costs"
-            accumulated_chunk_costs = await self._compute_accumulated_chunk_costs(
-                job_id=job_id,
-                local_input_path=local_input_path,
-                token_usage=token_usage,
-                model_id=str(attempt_result.get("model_id") or ""),
-            )
+            if is_docx:
+                accumulated_chunk_costs = await self._compute_docx_chunk_costs(
+                    job_id=job_id,
+                    batch_token_counts=list(
+                        attempt_result.get("batch_token_counts") or []
+                    ),
+                    token_usage=token_usage,
+                    model_id=str(attempt_result.get("model_id") or ""),
+                )
+            else:
+                accumulated_chunk_costs = await self._compute_accumulated_chunk_costs(
+                    job_id=job_id,
+                    local_input_path=local_input_path,
+                    token_usage=token_usage,
+                    model_id=str(attempt_result.get("model_id") or ""),
+                )
             attributed_input_tokens = int(accumulated_chunk_costs["input_tokens"])
             attributed_output_tokens = int(accumulated_chunk_costs["output_tokens"])
             total_cost_usd = float(accumulated_chunk_costs["cost_usd"])
