@@ -5,8 +5,8 @@ import hashlib
 import fitz  # PyMuPDF
 from fastapi import UploadFile
 
-from api.exceptions import ValidationError
-from config.constants import settings
+from src.api.exceptions import ValidationError
+from src.config.constants import settings
 
 
 class PDFValidator:
@@ -21,6 +21,12 @@ class PDFValidator:
 
         try:
             pdf_metadata = PDFValidator.extract_pdf_metadata(content)
+
+            if pdf_metadata.get("needs_pass", False):
+                raise ValidationError(
+                    "Password-protected PDFs are not supported. Please remove the password and resubmit.",
+                    "password_protected",
+                )
 
             if pdf_metadata.get("encrypted", False):
                 raise ValidationError("Encrypted PDFs are not supported", "encrypted")
@@ -61,7 +67,13 @@ class PDFValidator:
             # Extract PDF metadata (this validates the PDF)
             pdf_metadata = PDFValidator.extract_pdf_metadata(content)
 
-            # Check if PDF is encrypted - reject encrypted PDFs
+            # Check if PDF is password-protected or encrypted - reject both
+            if pdf_metadata.get("needs_pass", False):
+                raise ValidationError(
+                    "Password-protected PDFs are not supported. Please remove the password and resubmit.",
+                    "password_protected",
+                )
+
             if pdf_metadata.get("encrypted", False):
                 raise ValidationError("Encrypted PDFs are not supported", "encrypted")
 

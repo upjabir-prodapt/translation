@@ -7,7 +7,7 @@ from fastapi import status
 
 
 class BabelDocError(Exception):
-    """Base exception for BabelDOC API."""
+    """Base exception for DocTranslator API."""
 
     def __init__(self, message: str, details: dict[str, Any] | None = None):
         self.message = message
@@ -47,11 +47,11 @@ class JobAlreadyCompletedError(BabelDocError):
         super().__init__(message, {"job_id": job_id})
 
 
-class OutputFileExpiredError(BabelDocError):
-    """Raised when a job's output file retention window has passed."""
+class ReviewNotFoundError(BabelDocError):
+    """Raised when a review is not found for a job."""
 
     def __init__(self, job_id: str):
-        message = f"Output file for job {job_id} has expired"
+        message = f"No review found for job {job_id}"
         super().__init__(message, {"job_id": job_id})
 
 

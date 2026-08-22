@@ -45,6 +45,11 @@ TRANSLATE_REQUEST_VALID: dict[str, Any] = {
         "target_language": "Spanish",
         "domain": "commercial",
     },
+    "cost_attribution": {
+        "user_id": "user-12345",
+        "business_unit": "Legal-EMEA",
+        "organization": "Colt-Group",
+    },
     "processing_options": {
         "enable_dlp": True,
         "enable_chunking": True,
@@ -62,6 +67,11 @@ TRANSLATE_REQUEST_NO_OPTIONS: dict[str, Any] = {
         "source_language": "auto",
         "target_language": "fr",
         "domain": "legal",
+    },
+    "cost_attribution": {
+        "user_id": "user-12345",
+        "business_unit": "Legal-EMEA",
+        "organization": "Colt-Group",
     },
 }
 

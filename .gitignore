@@ -16,8 +16,6 @@ memray*
 **/*.so
 *.pdf
 *.docx
-*.json
-!src/config/language_mapper.json
 **/*.pyc
 .venv
 .idea
@@ -25,6 +23,7 @@ memray*
 .DS_Store
 .vscode
 __pycache__
+.ipynb_checkpoints/
 .ruff_cache
 yadt.toml
 examples/
@@ -36,7 +35,7 @@ examples/
 /.cursor
 /xnotes
 /docs/workflow-rules.md
-babeldoc/format/txt
+doctranslator/format/txt
 /profile.svg
 assets/
 
@@ -44,14 +43,14 @@ assets/
 # Claude Code memory file
 CLAUDE.md
 /.claude
-babeldoc/format/playground
+doctranslator/format/playground
 temp.jpg
 AGENTS.md
 
 # Service account keys (NEVER commit these!)
 *-sa-key.json
 *-service-account.json
-babeldoc-dev-sa-key.json
+doctranslator-dev-sa-key.json
 *.key.json
 
 # Environment files with secrets
@@ -64,3 +63,82 @@ deployment/terraform/*.tfstate
 deployment/terraform/*.tfstate.backup
 deployment/terraform/.terraform/
 deployment/terraform/terraform.tfvars
+# Logs
+web/logs
+web/*.log
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+web/lerna-debug.log*
+
+web/node_modules
+web/dist
+web/dist-ssr
+web/*.local
+
+memray*
+**/*.so
+*.pdf
+*.docx
+**/*.pyc
+.venv
+.idea
+*.egg-info
+.DS_Store
+.vscode
+__pycache__
+.ipynb_checkpoints/
+.ruff_cache
+yadt.toml
+examples/
+/make_gif.py
+/dist
+.cache
+.coverage
+.cursor/rules/_*.mdc
+/.cursor
+/xnotes
+/docs/workflow-rules.md
+doctranslator/format/txt
+/profile.svg
+assets/
+
+
+# Claude Code memory file
+CLAUDE.md
+/.claude
+doctranslator/format/playground
+temp.jpg
+AGENTS.md
+
+# Service account keys (NEVER commit these!)
+*-sa-key.json
+*-service-account.json
+doctranslator-dev-sa-key.json
+*.key.json
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# Terraform state files
+deployment/terraform/*.tfstate
+deployment/terraform/*.tfstate.backup
+deployment/terraform/.terraform/
+deployment/terraform/terraform.tfvars
+service_account.json
+.scannerwork/
+
+# Coverage
+coverage.xml
+
+# SonarQube
+sonar-project.properties
+sonar-proper
+sonar_issues.json
+sonar_measures.json
+sonarqube-report.md
+tmp/
+secret-manager.json

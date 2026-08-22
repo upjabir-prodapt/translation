@@ -1,21 +1,25 @@
 """Global exception handling middleware."""
 
+import asyncio
+import logging
+
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from api.exceptions import BabelDocError
-from api.exceptions import ConfigurationError
-from api.exceptions import FileProcessingError
-from api.exceptions import JobAlreadyCompletedError
-from api.exceptions import JobNotFoundError
-from api.exceptions import OutputFileExpiredError
-from api.exceptions import StorageError
-from api.exceptions import TranslationError
-from api.exceptions import ValidationError
-from config.logging_config import logger
+from src.api.exceptions import BabelDocError
+from src.api.exceptions import ConfigurationError
+from src.api.exceptions import FileProcessingError
+from src.api.exceptions import JobAlreadyCompletedError
+from src.api.exceptions import JobNotFoundError
+from src.api.exceptions import ReviewNotFoundError
+from src.api.exceptions import StorageError
+from src.api.exceptions import TranslationError
+from src.api.exceptions import ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 async def exception_handler_middleware(request: Request, call_next):
@@ -23,11 +27,24 @@ async def exception_handler_middleware(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as exc:
+        # Handle coroutines that were raised instead of exceptions
+        if asyncio.iscoroutine(exc):
+            try:
+                await exc
+            except Exception as nested_exc:
+                return handle_exception(nested_exc)
+            return handle_exception(RuntimeError("Coroutine was raised as exception"))
         return handle_exception(exc)
 
 
 def handle_exception(exc: Exception) -> JSONResponse:
     """Handle exceptions and return appropriate JSON responses."""
+
+    # Safely convert exception to string
+    try:
+        exc_str = str(exc)
+    except Exception:
+        exc_str = repr(exc)
 
     # Pass through FastAPI/Starlette HTTP exceptions unchanged
     if isinstance(exc, HTTPException):
@@ -44,7 +61,7 @@ def handle_exception(exc: Exception) -> JSONResponse:
             {"field": ".".join(str(loc) for loc in err["loc"]), "message": err["msg"]}
             for err in exc.errors()
         ]
-        logger.warning(f"Request validation error: {errors}")
+        logger.warning("Request validation error: %s", errors)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -66,9 +83,9 @@ def handle_exception(exc: Exception) -> JSONResponse:
 
     # Input validation errors
     if isinstance(exc, ValidationError):
-        logger.warning(f"Validation error: {exc.message}")
+        logger.warning("Validation error: %s", exc.message)
         return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"error": {"message": exc.message, "code": "VALIDATION_ERROR"}},
         )
 
@@ -86,6 +103,13 @@ def handle_exception(exc: Exception) -> JSONResponse:
             content={"error": {"message": exc.message, "code": "JOB_NOT_FOUND"}},
         )
 
+    if isinstance(exc, ReviewNotFoundError):
+        logger.warning(f"Review not found: {exc.message}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": {"message": exc.message, "code": "REVIEW_NOT_FOUND"}},
+        )
+
     if isinstance(exc, JobAlreadyCompletedError):
         logger.warning(f"Job already completed: {exc.message}")
         return JSONResponse(
@@ -93,13 +117,6 @@ def handle_exception(exc: Exception) -> JSONResponse:
             content={
                 "error": {"message": exc.message, "code": "JOB_ALREADY_COMPLETED"}
             },
-        )
-
-    if isinstance(exc, OutputFileExpiredError):
-        logger.warning(f"Output file expired: {exc.message}")
-        return JSONResponse(
-            status_code=status.HTTP_410_GONE,
-            content={"error": {"message": exc.message, "code": "OUTPUT_FILE_EXPIRED"}},
         )
 
     if isinstance(exc, StorageError):
@@ -125,22 +142,22 @@ def handle_exception(exc: Exception) -> JSONResponse:
 
     # ValueError from language/domain normalization surfaced outside service layer
     if isinstance(exc, ValueError):
-        logger.warning(f"Value error: {exc}")
+        logger.warning("Value error: %s", exc_str)
         return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": {"message": str(exc), "code": "VALIDATION_ERROR"}},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"error": {"message": exc_str, "code": "VALIDATION_ERROR"}},
         )
 
     # RuntimeError from missing config (e.g. language_mapper.json not found)
     if isinstance(exc, RuntimeError):
-        logger.error(f"Runtime error: {exc}", exc_info=True)
+        logger.error(f"Runtime error: {exc_str}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": {"message": str(exc), "code": "CONFIGURATION_ERROR"}},
+            content={"error": {"message": exc_str, "code": "CONFIGURATION_ERROR"}},
         )
 
     # Unknown exceptions
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    logger.error("Unhandled exception: %s", exc_str, exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

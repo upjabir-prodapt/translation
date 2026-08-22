@@ -1,0 +1,409 @@
+import io
+import logging
+import zlib
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Optional
+from typing import Protocol
+from typing import cast
+from warnings import warn
+
+from src.worker.doctranslator.pdfminer import pdfexceptions
+from src.worker.doctranslator.pdfminer import settings
+from src.worker.doctranslator.pdfminer.ascii85 import ascii85decode
+from src.worker.doctranslator.pdfminer.ascii85 import asciihexdecode
+from src.worker.doctranslator.pdfminer.ccitt import ccittfaxdecode
+from src.worker.doctranslator.pdfminer.lzw import lzwdecode
+from src.worker.doctranslator.pdfminer.psparser import LIT
+from src.worker.doctranslator.pdfminer.psparser import PSObject
+from src.worker.doctranslator.pdfminer.runlength import rldecode
+from src.worker.doctranslator.pdfminer.utils import apply_png_predictor
+
+if TYPE_CHECKING:
+    from src.worker.doctranslator.pdfminer.pdfdocument import PDFDocument
+
+logger = logging.getLogger(__name__)
+
+LITERAL_CRYPT = LIT("Crypt")
+
+# Abbreviation of Filter names in PDF 4.8.6. "Inline Images"
+LITERALS_FLATE_DECODE = (LIT("FlateDecode"), LIT("Fl"))
+LITERALS_LZW_DECODE = (LIT("LZWDecode"), LIT("LZW"))
+LITERALS_ASCII85_DECODE = (LIT("ASCII85Decode"), LIT("A85"))
+LITERALS_ASCIIHEX_DECODE = (LIT("ASCIIHexDecode"), LIT("AHx"))
+LITERALS_RUNLENGTH_DECODE = (LIT("RunLengthDecode"), LIT("RL"))
+LITERALS_CCITTFAX_DECODE = (LIT("CCITTFaxDecode"), LIT("CCF"))
+LITERALS_DCT_DECODE = (LIT("DCTDecode"), LIT("DCT"))
+LITERALS_JBIG2_DECODE = (LIT("JBIG2Decode"),)
+LITERALS_JPX_DECODE = (LIT("JPXDecode"),)
+
+
+class DecipherCallable(Protocol):
+    """Fully typed a decipher callback, with optional parameter."""
+
+    def __call__(
+        self,
+        objid: int,
+        genno: int,
+        data: bytes,
+        attrs: dict[str, Any] | None = None,
+    ) -> bytes:
+        raise NotImplementedError
+
+
+class PDFObject(PSObject):
+    pass
+
+
+# Adding aliases for these exceptions for backwards compatibility
+PDFException = pdfexceptions.PDFException
+PDFTypeError = pdfexceptions.PDFTypeError
+PDFValueError = pdfexceptions.PDFValueError
+PDFObjectNotFound = pdfexceptions.PDFObjectNotFound
+PDFNotImplementedError = pdfexceptions.PDFNotImplementedError
+
+_DEFAULT = object()
+
+
+class PDFObjRef(PDFObject):
+    def __init__(
+        self,
+        doc: Optional["PDFDocument"],
+        objid: int,
+        _: Any = _DEFAULT,
+    ) -> None:
+        """Reference to a PDF object.
+
+        :param doc: The PDF document.
+        :param objid: The object number.
+        :param _: Unused argument for backwards compatibility.
+        """
+        if _ is not _DEFAULT:
+            warn(
+                "The third argument of PDFObjRef is unused and will be removed after "
+                "2024",
+                DeprecationWarning,
+            )
+
+        if objid == 0 and settings.STRICT:
+            raise PDFValueError("PDF object id cannot be 0.")
+
+        self.doc = doc
+        self.objid = objid
+
+    def __repr__(self) -> str:
+        return "<PDFObjRef:%d>" % (self.objid)
+
+    def resolve(self, default: object = None) -> Any:
+        if self.doc is None:
+            raise RuntimeError("Unexpected state")
+        try:
+            return self.doc.getobj(self.objid)
+        except PDFObjectNotFound:
+            return default
+
+
+def resolve1(x: object, default: object = None) -> Any:
+    """Resolves an object.
+
+    If this is an array or dictionary, it may still contains
+    some indirect objects inside.
+    """
+    while isinstance(x, PDFObjRef):
+        x = x.resolve(default=default)
+    return x
+
+
+def resolve_all(x: object, default: object = None) -> Any:
+    """Recursively resolves the given object and all the internals.
+
+    Make sure there is no indirect reference within the nested object.
+    This procedure might be slow.
+    """
+    while isinstance(x, PDFObjRef):
+        x = x.resolve(default=default)
+    if isinstance(x, list):
+        x = [resolve_all(v, default=default) for v in x]
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            x[k] = resolve_all(v, default=default)
+    return x
+
+
+def decipher_all(decipher: DecipherCallable, objid: int, genno: int, x: object) -> Any:
+    """Recursively deciphers the given object."""
+    if isinstance(x, bytes):
+        if len(x) == 0:
+            return x
+        return decipher(objid, genno, x)
+    if isinstance(x, list):
+        x = [decipher_all(decipher, objid, genno, v) for v in x]
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            x[k] = decipher_all(decipher, objid, genno, v)
+    return x
+
+
+def int_value(x: object) -> int:
+    x = resolve1(x)
+    if not isinstance(x, int):
+        if settings.STRICT:
+            raise PDFTypeError("Integer required: %r" % x)
+        return 0
+    return x
+
+
+def float_value(x: object) -> float:
+    x = resolve1(x)
+    if not isinstance(x, float):
+        if settings.STRICT:
+            raise PDFTypeError("Float required: %r" % x)
+        return 0.0
+    return x
+
+
+def num_value(x: object) -> float:
+    x = resolve1(x)
+    if not isinstance(x, (int, float)):  # == utils.isnumber(x)
+        if settings.STRICT:
+            raise PDFTypeError("Int or Float required: %r" % x)
+        return 0
+    return x
+
+
+def uint_value(x: object, n_bits: int) -> int:
+    """Resolve number and interpret it as a two's-complement unsigned number"""
+    xi = int_value(x)
+    if xi > 0:
+        return xi
+    else:
+        return xi + cast(int, 2**n_bits)
+
+
+def str_value(x: object) -> bytes:
+    x = resolve1(x)
+    if not isinstance(x, bytes):
+        if settings.STRICT:
+            raise PDFTypeError("String required: %r" % x)
+        return b""
+    return x
+
+
+def list_value(x: object) -> list[Any] | tuple[Any, ...]:
+    x = resolve1(x)
+    if not isinstance(x, (list, tuple)):
+        if settings.STRICT:
+            raise PDFTypeError("List required: %r" % x)
+        return []
+    return x
+
+
+def dict_value(x: object) -> dict[Any, Any]:
+    x = resolve1(x)
+    if not isinstance(x, dict):
+        if settings.STRICT:
+            logger.error(f"PDFTypeError : Dict required: {x!r}")
+            raise PDFTypeError("Dict required: %r" % x)
+        return {}
+    return x
+
+
+def stream_value(x: object) -> "PDFStream":
+    x = resolve1(x)
+    if not isinstance(x, PDFStream):
+        if settings.STRICT:
+            raise PDFTypeError("PDFStream required: %r" % x)
+        return PDFStream({}, b"")
+    return x
+
+
+def decompress_corrupted(data: bytes) -> bytes:
+    """Called on some data that can't be properly decoded because of CRC checksum
+    error. Attempt to decode it skipping the CRC.
+    """
+    d = zlib.decompressobj()
+    f = io.BytesIO(data)
+    result_str = b""
+    buffer = f.read(1)
+    i = 0
+    try:
+        while buffer:
+            result_str += d.decompress(buffer)
+            buffer = f.read(1)
+            i += 1
+    except zlib.error:
+        # Let the error propagates if we're not yet in the CRC checksum
+        if i < len(data) - 3:
+            logger.warning("Data-loss while decompressing corrupted data")
+    return result_str
+
+
+class PDFStream(PDFObject):
+    def __init__(
+        self,
+        attrs: dict[str, Any],
+        rawdata: bytes,
+        decipher: DecipherCallable | None = None,
+    ) -> None:
+        if not isinstance(attrs, dict):
+            raise TypeError(str(type(attrs)))
+        self.attrs = attrs
+        self.rawdata: bytes | None = rawdata
+        self.decipher = decipher
+        self.data: bytes | None = None
+        self.objid: int | None = None
+        self.genno: int | None = None
+
+    def set_objid(self, objid: int, genno: int) -> None:
+        self.objid = objid
+        self.genno = genno
+
+    def __repr__(self) -> str:
+        if self.data is None:
+            if self.rawdata is None:
+                raise RuntimeError("Unexpected state")
+            return "<PDFStream(%r): raw=%d, %r>" % (
+                self.objid,
+                len(self.rawdata),
+                self.attrs,
+            )
+        else:
+            if self.data is None:
+                raise RuntimeError("Unexpected state")
+            return "<PDFStream(%r): len=%d, %r>" % (
+                self.objid,
+                len(self.data),
+                self.attrs,
+            )
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.attrs
+
+    def __getitem__(self, name: str) -> Any:
+        return self.attrs[name]
+
+    def get(self, name: str, default: object = None) -> Any:
+        return self.attrs.get(name, default)
+
+    def get_any(self, names: Iterable[str], default: object = None) -> Any:
+        for name in names:
+            if name in self.attrs:
+                return self.attrs[name]
+        return default
+
+    def get_filters(self) -> list[tuple[Any, Any]]:
+        filters = resolve1(self.get_any(("F", "Filter"), []))
+        params = resolve1(self.get_any(("DP", "DecodeParms", "FDecodeParms"), {}))
+        if not filters:
+            return []
+        if not isinstance(filters, list):
+            filters = [filters]
+        if not isinstance(params, list):
+            # Make sure the parameters list is the same as filters.
+            params = [params] * len(filters)
+        if settings.STRICT and len(params) != len(filters):
+            raise PDFException("Parameters len filter mismatch")
+
+        resolved_filters = [resolve1(f) for f in filters]
+        resolved_params = [resolve1(param) for param in params]
+        return list(zip(resolved_filters, resolved_params, strict=False))
+
+    def _apply_stream_predictor(self, data: bytes, params: dict) -> bytes:
+        """Apply a PNG/LZW predictor to already-decoded stream data."""
+        pred = int_value(params["Predictor"])
+        if pred == 1:
+            # no predictor
+            return data
+        elif pred >= 10:
+            # PNG predictor
+            colors = int_value(params.get("Colors", 1))
+            columns = int_value(params.get("Columns", 1))
+            raw_bits_per_component = params.get("BitsPerComponent", 8)
+            bitspercomponent = int_value(raw_bits_per_component)
+            return apply_png_predictor(pred, colors, columns, bitspercomponent, data)
+        else:
+            error_msg = "Unsupported predictor: %r" % pred
+            raise PDFNotImplementedError(error_msg)
+
+    def _apply_flate_decode(self, data: bytes) -> bytes:
+        """Decompress zlib/deflate data, falling back to corruption recovery on error."""
+        try:
+            return zlib.decompress(data)
+        except zlib.error as e:
+            if settings.STRICT:
+                raise PDFException(f"Invalid zlib bytes: {e!r}, {data!r}")
+            try:
+                return decompress_corrupted(data)
+            except zlib.error:
+                return b""
+
+    def _is_passthrough_filter(self, f: object) -> bool:
+        """Return True if the filter produces data that should be passed through as-is."""
+        return (
+            f in LITERALS_DCT_DECODE
+            or f in LITERALS_JBIG2_DECODE
+            or f in LITERALS_JPX_DECODE
+        )
+
+    def _decode_compressed_data(self, data: bytes, f: object, params: object) -> bytes:
+        """Apply a single compression filter (non-passthrough) and return decoded bytes."""
+        if f in LITERALS_FLATE_DECODE:
+            return self._apply_flate_decode(data)
+        if f in LITERALS_LZW_DECODE:
+            return lzwdecode(data)
+        if f in LITERALS_ASCII85_DECODE:
+            return ascii85decode(data)
+        if f in LITERALS_ASCIIHEX_DECODE:
+            return asciihexdecode(data)
+        if f in LITERALS_RUNLENGTH_DECODE:
+            return rldecode(data)
+        if f in LITERALS_CCITTFAX_DECODE:
+            return ccittfaxdecode(data, params)
+        if f == LITERAL_CRYPT:
+            raise PDFNotImplementedError("/Crypt filter is unsupported")
+        raise PDFNotImplementedError("Unsupported filter: %r" % f)
+
+    def _apply_single_stream_filter(
+        self, data: bytes, f: object, params: object
+    ) -> bytes:
+        """Apply one filter to stream data and return the decoded bytes."""
+        if not self._is_passthrough_filter(f):
+            data = self._decode_compressed_data(data, f, params)
+
+        # apply predictors
+        if params and "Predictor" in params:
+            data = self._apply_stream_predictor(data, params)
+
+        return data
+
+    def decode(self) -> None:
+        if not (self.data is None and self.rawdata is not None):
+            raise RuntimeError(str((self.data, self.rawdata)))
+        data = self.rawdata
+        if self.decipher:
+            # Handle encryption
+            if self.objid is None:
+                raise RuntimeError("Unexpected state")
+            if self.genno is None:
+                raise RuntimeError("Unexpected state")
+            data = self.decipher(self.objid, self.genno, data, self.attrs)
+        filters = self.get_filters()
+        if not filters:
+            self.data = data
+            self.rawdata = None
+            return
+        for f, params in filters:
+            data = self._apply_single_stream_filter(data, f, params)
+        self.data = data
+        self.rawdata = None
+
+    def get_data(self) -> bytes:
+        if self.data is None:
+            self.decode()
+            if self.data is None:
+                raise RuntimeError("Unexpected state")
+        return self.data
+
+    def get_rawdata(self) -> bytes | None:
+        return self.rawdata

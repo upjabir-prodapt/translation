@@ -1,14 +1,17 @@
 """Language normalization and model-chain routing utilities."""
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from config.constants import settings
-from config.domain_prompts import GENERIC_DOMAIN
-from config.domain_prompts import SUPPORTED_DOMAINS as _PROFILE_DOMAINS
-from config.domain_prompts import normalize_domain_key
+from src.config.constants import settings
+from src.config.domain_prompts import GENERIC_DOMAIN
+from src.config.domain_prompts import SUPPORTED_DOMAINS as _PROFILE_DOMAINS
+from src.config.domain_prompts import normalize_domain_key
+
+logger = logging.getLogger(__name__)
 
 # Single source of truth: a domain exists iff it has a prompt profile.
 SUPPORTED_DOMAINS = set(_PROFILE_DOMAINS)
@@ -65,13 +68,34 @@ def normalize_domain(value: str) -> str:
 @lru_cache(maxsize=1)
 def get_model_selection_entries() -> list[dict[str, Any]]:
     """Load model routing entries from assets/model_selection.json."""
-    model_selection_path = Path(str(settings.CACHE_FOLDER)) / "model_selection.json"
+    model_selection_path = settings.assets_root_path / settings.MODEL_SELECTION_FILENAME
     raw_data = _load_json(model_selection_path)
+    raw_entries: list[dict[str, Any]]
     if isinstance(raw_data, dict):
-        return [raw_data]
-    if isinstance(raw_data, list):
-        return [item for item in raw_data if isinstance(item, dict)]
-    raise ValueError("model_selection.json must contain an object or a list of objects")
+        raw_entries = [raw_data]
+    elif isinstance(raw_data, list):
+        raw_entries = [item for item in raw_data if isinstance(item, dict)]
+    else:
+        raise ValueError(
+            "model_selection.json must contain an object or a list of objects"
+        )
+
+    normalized_entries: list[dict[str, Any]] = []
+    for entry in raw_entries:
+        try:
+            normalized_in = normalize_language(str(entry.get("source_language", "")))
+            normalized_out = normalize_language(str(entry.get("target_language", "")))
+            normalized_domain = normalize_domain(str(entry.get("domain", "")))
+        except ValueError:
+            continue
+
+        normalized_entry = dict(entry)
+        normalized_entry["source_language"] = normalized_in
+        normalized_entry["target_language"] = normalized_out
+        normalized_entry["domain"] = normalized_domain
+        normalized_entries.append(normalized_entry)
+
+    return normalized_entries
 
 
 def _extract_model_list(entry: dict[str, Any]) -> list[str]:
@@ -90,19 +114,21 @@ def _extract_model_list(entry: dict[str, Any]) -> list[str]:
 
 
 def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[str]:
-    """Resolve a model list by source, target and domain."""
-    normalized_in = normalize_language(lang_in)
-    normalized_out = normalize_language(lang_out)
-    normalized_domain = normalize_domain(domain)
+    """Resolve model list by direct route match in model_selection.json.
+
+    This lookup is intentionally lightweight: it compares source/target/domain
+    case-insensitively against entries in model_selection.json and returns the
+    chain sorted by priority.
+    """
+    normalized_in = str(lang_in).strip().lower()
+    normalized_out = str(lang_out).strip().lower()
+    normalized_domain = str(domain).strip().lower()
 
     entries = get_model_selection_entries()
     for entry in entries:
-        try:
-            entry_in = normalize_language(str(entry.get("source_language", "")))
-            entry_out = normalize_language(str(entry.get("target_language", "")))
-            entry_domain = normalize_domain(str(entry.get("domain", "")))
-        except ValueError:
-            continue
+        entry_in = str(entry.get("source_language", "")).strip().lower()
+        entry_out = str(entry.get("target_language", "")).strip().lower()
+        entry_domain = str(entry.get("domain", "")).strip().lower()
 
         if (
             entry_in == normalized_in
@@ -111,9 +137,14 @@ def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[str]:
         ):
             models = _extract_model_list(entry)
             if models:
-                return models[:2]
+                return models[: max(1, settings.MAX_MODEL_ATTEMPTS)]
 
-    raise ValueError(
-        "No model route found for "
-        f"source='{normalized_in}', target='{normalized_out}', domain='{normalized_domain}'"
+    logger.warning(
+        "No model route found for source='%s', target='%s', domain='%s'. "
+        "Falling back to default Gemini model '%s'.",
+        normalized_in,
+        normalized_out,
+        normalized_domain,
+        settings.GEMINI_MODEL,
     )
+    return [settings.GEMINI_MODEL]

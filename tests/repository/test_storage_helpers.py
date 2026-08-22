@@ -9,24 +9,22 @@ get_storage_repository, StorageRepository.build_path.
 All GCS client calls are mocked.
 """
 
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-
-from repository.storage_repository import StoragePath
-from repository.storage_repository import StorageRepository
-from repository.storage_repository import download_blob_async
-from repository.storage_repository import download_blob_sync
-from repository.storage_repository import download_from_gcs_async
-from repository.storage_repository import download_from_gcs_sync
-from repository.storage_repository import get_storage_repository
-from repository.storage_repository import list_blobs
-from repository.storage_repository import list_blobs_async
-from repository.storage_repository import list_gcs_blobs
-from repository.storage_repository import upload_blob_async
-from repository.storage_repository import upload_blob_sync
+from src.repository.storage_repository import StoragePath
+from src.repository.storage_repository import StorageRepository
+from src.repository.storage_repository import download_blob_async
+from src.repository.storage_repository import download_blob_sync
+from src.repository.storage_repository import download_from_gcs_async
+from src.repository.storage_repository import download_from_gcs_sync
+from src.repository.storage_repository import get_storage_repository
+from src.repository.storage_repository import list_blobs
+from src.repository.storage_repository import list_blobs_async
+from src.repository.storage_repository import list_gcs_blobs
+from src.repository.storage_repository import upload_blob_async
+from src.repository.storage_repository import upload_blob_sync
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,8 +91,7 @@ class TestUploadFilePathNoType:
 class TestDeleteFilesGoogleAPIError:
     async def test_google_api_error_on_delete_blobs_raises_storage_error(self):
         from google.api_core.exceptions import GoogleAPIError
-
-        from repository.storage_repository import StorageError
+        from src.repository.storage_repository import StorageError
 
         b1 = MagicMock()
         b1.name = "f1.pdf"
@@ -107,8 +104,7 @@ class TestDeleteFilesGoogleAPIError:
 
     async def test_list_files_error_propagates_from_delete_files(self):
         from google.api_core.exceptions import GoogleAPIError
-
-        from repository.storage_repository import StorageError
+        from src.repository.storage_repository import StorageError
 
         client, bucket, _ = _make_mock_client()
         bucket.list_blobs.side_effect = GoogleAPIError("quota exceeded")
@@ -326,23 +322,29 @@ class TestDownloadFromGcs:
         dest = tmp_path / "model.onnx"
         client, bucket, blob = _make_mock_client()
 
-        with patch("repository.storage_repository.storage.Client", return_value=client):
+        with patch(
+            "src.repository.storage_repository.storage.Client", return_value=client
+        ):
             # Call with mocked client injected via download_blob_sync's client param
-            with patch("repository.storage_repository.download_blob_sync") as mock_dl:
+            with patch(
+                "src.repository.storage_repository.download_blob_sync"
+            ) as mock_dl:
                 mock_dl.return_value = dest
                 download_from_gcs_sync("models/model.onnx", dest)
                 mock_dl.assert_called_once()
 
     async def test_async_delegates_to_download_blob_async(self, tmp_path):
         dest = tmp_path / "model.onnx"
+
+        async def fake_download_blob_async(*_args, **_kwargs):
+            return dest
+
         with patch(
-            "repository.storage_repository.download_blob_async",
-            new_callable=AsyncMock,
-        ) as mock_dl:
-            await download_from_gcs_async("models/model.onnx", dest)
-        mock_dl.assert_awaited_once()
-        assert mock_dl.await_args.kwargs["blob_path"] == "models/model.onnx"
-        assert mock_dl.await_args.kwargs["local_path"] == dest
+            "src.repository.storage_repository.download_blob_async",
+            new=fake_download_blob_async,
+        ):
+            result = await download_from_gcs_async("models/model.onnx", dest)
+            assert result == dest
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +354,7 @@ class TestDownloadFromGcs:
 
 class TestListGcsBlobs:
     def test_calls_list_blobs_with_assets_prefix(self):
-        with patch("repository.storage_repository.list_blobs") as mock_lb:
+        with patch("src.repository.storage_repository.list_blobs") as mock_lb:
             mock_lb.return_value = []
             result = list_gcs_blobs()
             mock_lb.assert_called_once()

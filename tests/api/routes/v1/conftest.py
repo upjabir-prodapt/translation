@@ -12,14 +12,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-
-from api.dependencies import get_job_service
-from api.dependencies import get_translation_service
-from api.main import app
-from api.schemas.responses import JobDetailResponse
-from api.schemas.responses import JobListResponse
-from api.schemas.responses import JobStatusResponse
-from api.schemas.responses import TranslateResponse
+from src.api.core.security import create_access_token
+from src.api.dependencies import get_job_service
+from src.api.dependencies import get_translation_service
+from src.api.main import app
+from src.api.schemas.responses import JobDetailResponse
+from src.api.schemas.responses import JobListResponse
+from src.api.schemas.responses import JobStatusResponse
+from src.api.schemas.responses import MultiJobStatusItemResponse
+from src.api.schemas.responses import MultiJobStatusResponse
+from src.api.schemas.responses import MultiTranslateJobResponse
+from src.api.schemas.responses import MultiTranslateResponse
+from src.api.schemas.responses import TranslateResponse
 
 # ---------------------------------------------------------------------------
 # Service mocks
@@ -73,6 +77,26 @@ def mock_translation_service():
     service = AsyncMock()
     job_id = "test-job-id-001"
     service.submit_translation.return_value = _make_translate_response(job_id)
+
+    # submit_translations should return jobs matching the number of requests
+    def submit_translations_side_effect(requests: list) -> MultiTranslateResponse:
+        jobs = []
+        for i, req in enumerate(requests):
+            target_lang = req.translation_config.target_language
+            jobs.append(
+                MultiTranslateJobResponse(
+                    job_id=f"test-job-{i}",
+                    target_language=target_lang,
+                    status="queued",
+                    status_url=f"/api/v1/translate/test-job-{i}",
+                )
+            )
+        return MultiTranslateResponse(
+            batch_id="test-batch-id",
+            jobs=jobs,
+        )
+
+    service.submit_translations.side_effect = submit_translations_side_effect
     return service
 
 
@@ -82,6 +106,15 @@ def mock_job_service():
     service = AsyncMock()
     job_id = "test-job-id-001"
     service.get_job_status.return_value = _make_job_status(job_id, "queued")
+    service.get_jobs_status.return_value = MultiJobStatusResponse(
+        jobs=[
+            MultiJobStatusItemResponse(
+                job_id=job_id,
+                target_language="fr",
+                status="queued",
+            )
+        ]
+    )
     service.get_translation_status.return_value = _make_job_detail(job_id, "queued")
     service.list_jobs.return_value = JobListResponse(
         jobs=[_make_job_status(job_id)],
@@ -105,7 +138,16 @@ def api_client(mock_translation_service, mock_job_service):
     app.dependency_overrides[get_translation_service] = lambda: mock_translation_service
     app.dependency_overrides[get_job_service] = lambda: mock_job_service
 
+    token = create_access_token(
+        {
+            "sub": "user@colt.net",
+            "business_unit": "engineering",
+            "organization": "colt",
+        }
+    )
+
     with TestClient(app, raise_server_exceptions=False) as client:
+        client.headers.update({"x-app-auth": f"Bearer {token}"})
         yield client
 
     app.dependency_overrides.clear()

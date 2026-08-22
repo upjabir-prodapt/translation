@@ -8,10 +8,15 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from src.config.domain_prompts import GENERIC_DOMAIN
 from src.config.domain_prompts import SUPPORTED_DOMAINS
 from src.config.domain_prompts import normalize_domain_key
+from src.config.translation_routing import normalize_language
+
+MAX_TARGET_LANGUAGES_PER_REQUEST = 5
+MAX_BATCH_STATUS_JOB_IDS = 20
 
 
 class DocumentInput(BaseModel):
@@ -47,22 +52,31 @@ class TranslationConfigInput(BaseModel):
     # Domains are defined by their prompt profiles, so the API accepts exactly
     # the domains the workflow has a dedicated prompt for.
     VALID_DOMAINS: ClassVar[frozenset[str]] = frozenset(SUPPORTED_DOMAINS)
+    SUPPORTED_LANGUAGE_LABELS: ClassVar[str] = (
+        "English (en), Spanish (es), Italian (it), French (fr), Japanese (ja), German (de)"
+    )
 
-    source_language: str = Field(
-        "auto",
-        description="Source language (full name like 'English', code like 'en', or 'auto')",
+    source_language: str | None = Field(
+        None,
+        description=(
+            "Optional source language (full name or code). "
+            "Supported: English, Spanish, Italian, French, Japanese, German. "
+            "Auto-detected if omitted. Cannot equal target_language."
+        ),
     )
     target_language: str = Field(
-        ..., min_length=2, description="Target language (full name or code)"
+        ...,
+        min_length=2,
+        description=(
+            "Target language (full name or code). "
+            "Supported: English, Spanish, Italian, French, Japanese, German."
+        ),
     )
     domain: str = Field(
         ...,
         min_length=2,
         max_length=20,
-        description=(
-            "Translation domain (selects the domain-specific prompt profile): "
-            + ", ".join(sorted(SUPPORTED_DOMAINS))
-        ),
+        description="Translation domain: commercial, legal, finance, hr, operations",
     )
 
     @field_validator("domain")
@@ -76,18 +90,77 @@ class TranslationConfigInput(BaseModel):
             )
         return normalized
 
-    @field_validator("source_language", "target_language")
+    @field_validator("target_language")
     @classmethod
     def validate_language_codes(cls, v: str) -> str:
-        """Normalize language input — accepts full names or short codes."""
-        return v.strip()
+        """Validate target language input: full name or code only."""
+        cleaned = v.strip()
+        try:
+            normalize_language(cleaned)
+        except ValueError as e:
+            raise ValueError(
+                f"{e}. Supported languages: {cls.SUPPORTED_LANGUAGE_LABELS}"
+            ) from e
+        return cleaned
+
+    @field_validator("source_language")
+    @classmethod
+    def validate_source_language(cls, v: str | None) -> str | None:
+        """Validate optional source language input: full name or code only."""
+        if v is None:
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return None
+        try:
+            normalize_language(cleaned)
+        except ValueError as e:
+            raise ValueError(
+                f"{e}. Supported languages: {cls.SUPPORTED_LANGUAGE_LABELS}"
+            ) from e
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_source_not_equal_target(self) -> "TranslationConfigInput":
+        """Ensure source language does not equal target language."""
+        if self.source_language is not None:
+            source_normalized = normalize_language(self.source_language)
+            target_normalized = normalize_language(self.target_language)
+            if source_normalized == target_normalized:
+                raise ValueError("Source language cannot equal target language")
+        return self
+
+
+class TranslationTargetsInput(BaseModel):
+    """API-boundary selection of one or more target languages."""
+
+    target_languages: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TARGET_LANGUAGES_PER_REQUEST,
+        description="One or more target languages for translation",
+    )
+
+    @field_validator("target_languages")
+    @classmethod
+    def validate_targets(cls, values: list[str]) -> list[str]:
+        """Normalize and validate target languages."""
+        normalized = [normalize_language(value.strip()) for value in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Target languages must be unique after normalization")
+        return normalized
+
+    @property
+    def normalized_targets(self) -> list[str]:
+        """Return normalized targets in request order."""
+        return self.target_languages
 
 
 class ProcessingOptions(BaseModel):
     """Processing options for translation job."""
 
     enable_dlp: bool = Field(
-        True, description="Enable Data Loss Prevention scanning (always applied)"
+        True, description="Enable Data Loss Prevention masking before translation"
     )
     enable_chunking: bool = Field(
         True, description="Enable chunked processing for large documents"
@@ -97,11 +170,32 @@ class ProcessingOptions(BaseModel):
     )
 
 
+class CostAttributionInput(BaseModel):
+    """Billing ownership metadata for cost attribution."""
+
+    user_id: str = Field(..., min_length=1, description="Submitting user ID")
+    business_unit: str = Field(..., min_length=1, description="Business unit name")
+    organization: str = Field(..., min_length=1, description="Organization name")
+
+
+class AuthTokenRequest(BaseModel):
+    """Request payload for token issuance (email derived from IAP JWT)."""
+
+    email: str | None = Field(
+        default=None,
+        min_length=3,
+        description="Deprecated — email is taken from verified IAP identity",
+    )
+    business_unit: str = Field(..., min_length=1, description="Business unit name")
+    organization: str = Field(..., min_length=1, description="Organization name")
+
+
 class TranslateRequest(BaseModel):
     """Request model for document translation."""
 
     document: DocumentInput
     translation_config: TranslationConfigInput
+    cost_attribution: CostAttributionInput
     processing_options: ProcessingOptions = Field(default_factory=ProcessingOptions)
 
 
@@ -121,3 +215,30 @@ class JobListRequest(BaseModel):
     )
     limit: int = Field(10, ge=1, le=100, description="Maximum number of jobs to return")
     offset: int = Field(0, ge=0, description="Number of jobs to skip")
+
+
+class MultiJobStatusRequest(BaseModel):
+    """Request status for multiple ordinary translation jobs."""
+
+    job_ids: list[str] = Field(..., min_length=1, max_length=MAX_BATCH_STATUS_JOB_IDS)
+
+    @field_validator("job_ids")
+    @classmethod
+    def validate_unique_job_ids(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("Job IDs must not be empty")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Job IDs must be unique")
+        return cleaned
+
+
+class CreateReviewRequest(BaseModel):
+    """Request model for submitting a translation review."""
+
+    rating: int = Field(
+        ..., ge=1, le=5, description="Rating from 1 (worst) to 5 (best)"
+    )
+    comment: str | None = Field(
+        None, max_length=2000, description="Optional review comment"
+    )

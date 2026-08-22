@@ -21,17 +21,23 @@ def client():
 class TestTranslateRoutes:
     def test_submit_translation(self, client):
         mock_handler = AsyncMock()
-        mock_handler.submit_translation.return_value = {
-            "job_id": "job1",
-            "status": "queued",
-            "status_url": "/api/v1/jobs/job1",
+        mock_handler.submit_translations.return_value = {
+            "batch_id": "batch1",
+            "jobs": [
+                {
+                    "job_id": "job1",
+                    "target_language": "fr",
+                    "status": "queued",
+                    "status_url": "/api/v1/translate/job1",
+                }
+            ],
         }
         app.dependency_overrides[get_translation_handler] = lambda: mock_handler
 
         file_content = b"%PDF-1.4 test"
         files = {"file": ("test.pdf", io.BytesIO(file_content), "application/pdf")}
-        data = {"target_language": "French", "domain": "legal"}
+        data = {"target_languages": ["French"], "domain": "legal"}
 
         response = client.post("/api/v1/translate", files=files, data=data)
-        assert response.status_code == 200
-        assert response.json()["job_id"] == "job1"
+        assert response.status_code == 202
+        assert response.json()["batch_id"] == "batch1"

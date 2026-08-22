@@ -15,6 +15,7 @@ stages:
 - test
 - build
 - deploy
+- dast
 - promote
 
 variables:
@@ -397,7 +398,7 @@ variables:
     export TMPDIR="${CI_WORK_TMP:-${CI_PROJECT_DIR}/.ci-work}"
     mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$TMPDIR"
     # Tests import src/ — must install project + dev deps (cannot use --only-group dev)
-    uv sync --frozen
+    uv sync --frozen --extra worker
 
 # Security scanners: docker executor runners (template runs /analyzer in analyzer image).
 # App build/test/deploy jobs use Shell1 — do not route DS/SAST/secret jobs to shell tags.
@@ -495,13 +496,26 @@ pre-commit-lint:
 
     if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
       FROM_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA}"
-      echo "Linting files changed in MR (${FROM_REF}..${CI_COMMIT_SHA})..."
-      run_pre_commit --from-ref "$FROM_REF" --to-ref "$CI_COMMIT_SHA"
-    elif [ "${CI_COMMIT_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
-      echo "Linting files changed in push (${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA})..."
-      run_pre_commit --from-ref "$CI_COMMIT_BEFORE_SHA" --to-ref "$CI_COMMIT_SHA"
+      if git rev-parse --verify "${FROM_REF}^{commit}" >/dev/null 2>&1; then
+        echo "Linting files changed in MR (${FROM_REF}..${CI_COMMIT_SHA})..."
+        run_pre_commit --from-ref "$FROM_REF" --to-ref "$CI_COMMIT_SHA"
+      else
+        echo "No valid MR diff base found; linting all files."
+        run_pre_commit --all-files
+      fi
+    elif [ -n "${CI_COMMIT_BEFORE_SHA:-}" ] \
+        && [ "${CI_COMMIT_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] \
+        && git rev-parse --verify "${CI_COMMIT_BEFORE_SHA}^{commit}" >/dev/null 2>&1 \
+        && git rev-parse --verify "${CI_COMMIT_SHA}^{commit}" >/dev/null 2>&1; then
+      if git merge-base --is-ancestor "$CI_COMMIT_BEFORE_SHA" "$CI_COMMIT_SHA" 2>/dev/null; then
+        echo "Linting files changed in push (${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA})..."
+        run_pre_commit --from-ref "$CI_COMMIT_BEFORE_SHA" --to-ref "$CI_COMMIT_SHA"
+      else
+        echo "Diff base is not an ancestor of the current commit; linting all files."
+        run_pre_commit --all-files
+      fi
     else
-      echo "No diff base available; linting all files."
+      echo "No valid diff base available; linting all files."
       run_pre_commit --all-files
     fi
   rules:
@@ -527,6 +541,9 @@ env-scope-check:
       CLOUD_RUN_NETWORK CLOUD_RUN_SUBNET CLOUD_RUN_SA CLOUD_RUN_SERVICE \
       APP_CONFIG_SECRET_NAME APP_CONFIG_SECRET_VERSION \
       GCS_BUCKET_NAME ASSETS_MOUNT_PATH GCS_ASSETS_DIR"
+    optional_vars="CLOUD_RUN_API_SERVICE CLOUD_RUN_WORKER_SERVICE \
+      APP_CONFIG_API_SECRET_NAME APP_CONFIG_WORKER_SECRET_NAME \
+      CLOUD_TASKS_QUEUE CLOUD_TASKS_OIDC_SERVICE_ACCOUNT"
     missing=0
     for var in $required_vars; do
       if [ -n "$(printenv "$var")" ]; then
@@ -534,6 +551,13 @@ env-scope-check:
       else
         echo "MISSING - $var is not set for environment ${CI_COMMIT_BRANCH}"
         missing=1
+      fi
+    done
+    for var in $optional_vars; do
+      if [ -n "$(printenv "$var")" ]; then
+        echo "OK - $var is set (optional)"
+      else
+        echo "NOTE - $var not set (deploy uses CLOUD_RUN_SERVICE / APP_CONFIG_SECRET_NAME fallbacks)"
       fi
     done
     if [ "$missing" -eq 1 ]; then
@@ -599,8 +623,8 @@ build-and-push:
       exit 1
     fi
 
-    IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-    # oauth2accesstoken login is enough for push; avoid gcloud configure-docker writing to a full $HOME/.docker
+    API_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-api:${IMAGE_TAG}"
+    WORKER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-worker:${IMAGE_TAG}"
     gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin \
       "https://${GCP_REGION}-docker.pkg.dev"
 
@@ -613,9 +637,12 @@ build-and-push:
     fi
 
     # shellcheck disable=SC2086
-    docker build $PROXY_ARGS -t "$IMAGE_URI" .
+    docker build $PROXY_ARGS -f Dockerfile.api -t "$API_IMAGE_URI" .
+    # shellcheck disable=SC2086
+    docker build $PROXY_ARGS -f Dockerfile.worker -t "$WORKER_IMAGE_URI" .
 
-    docker push "$IMAGE_URI"
+    docker push "$API_IMAGE_URI"
+    docker push "$WORKER_IMAGE_URI"
   rules:
   - if: $CI_COMMIT_BRANCH == "sandbox"
   - if: $CI_COMMIT_BRANCH == "dev"
@@ -633,11 +660,30 @@ deploy-cloud-run:
   when: manual
   script:
   - |
-    IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-    gcloud beta run deploy "$CLOUD_RUN_SERVICE" \
+    API_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-api:${IMAGE_TAG}"
+    WORKER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-worker:${IMAGE_TAG}"
+
+    API_SERVICE="${CLOUD_RUN_API_SERVICE:-${CLOUD_RUN_SERVICE}-api}"
+    WORKER_SERVICE="${CLOUD_RUN_WORKER_SERVICE:-${CLOUD_RUN_SERVICE}-worker}"
+    API_SECRET="${APP_CONFIG_API_SECRET_NAME:-${APP_CONFIG_SECRET_NAME}}"
+    WORKER_SECRET="${APP_CONFIG_WORKER_SECRET_NAME:-${APP_CONFIG_SECRET_NAME}}"
+    SECRET_VERSION="${APP_CONFIG_SECRET_VERSION:-latest}"
+
+    # Worker first (assets + warmup), then API (Cloud Tasks target URL must exist).
+    # The worker service can be absent on the very first deployment, so resolve the URL only when available.
+    WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)' 2>/dev/null || true)"
+    if [ -n "${WORKER_URL:-}" ]; then
+      TASKS_URL="${WORKER_URL}/internal/tasks/translate"
+      echo "Using existing worker service URL: ${WORKER_URL}"
+    else
+      TASKS_URL=""
+      echo "Worker service ${WORKER_SERVICE} not found; deploying it first and then resolving the service URL."
+    fi
+
+    gcloud beta run deploy "$WORKER_SERVICE" \
       --quiet \
-      --update-labels="app=translation,env=${CI_COMMIT_BRANCH},managed-by=gitlab-ci,git-sha=${CI_COMMIT_SHORT_SHA},pipeline=${CI_PIPELINE_IID}" \
-      --image "$IMAGE_URI" \
+      --update-labels="app=translation-worker,env=${CI_COMMIT_BRANCH},managed-by=gitlab-ci,git-sha=${CI_COMMIT_SHORT_SHA}" \
+      --image "$WORKER_IMAGE_URI" \
       --platform=managed \
       --region="$GCP_REGION" \
       --project="$GCP_PROJECT_ID" \
@@ -647,18 +693,125 @@ deploy-cloud-run:
       --min-instances=1 \
       --concurrency=1 \
       --port=8000 \
-      --timeout=600 \
+      --timeout=3600 \
       --memory=4Gi \
       --cpu=4 \
       --no-cpu-throttling \
       --cpu-boost \
+      --no-allow-unauthenticated \
       --add-volume "mount-path=${ASSETS_MOUNT_PATH},type=cloud-storage,bucket=${GCS_BUCKET_NAME},readonly=false,mount-options=only-dir=${GCS_ASSETS_DIR}" \
-      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=/tmp" \
-      --set-secrets="/secrets/.env=${APP_CONFIG_SECRET_NAME}:${APP_CONFIG_SECRET_VERSION}"
+      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=/tmp,CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=${CLOUD_TASKS_OIDC_SERVICE_ACCOUNT}" \
+      --set-secrets="/secrets/.env=${WORKER_SECRET}:${SECRET_VERSION}"
+
+    for attempt in $(seq 1 30); do
+      WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)' 2>/dev/null || true)"
+      if [ -n "${WORKER_URL:-}" ]; then
+        echo "Worker service ${WORKER_SERVICE} ready: ${WORKER_URL}"
+        break
+      fi
+      echo "Waiting for worker service ${WORKER_SERVICE} to become ready (${attempt}/30)..."
+      sleep 10
+    done
+
+    WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)' 2>/dev/null || true)"
+    if [ -z "${WORKER_URL:-}" ]; then
+      echo "ERROR - could not resolve Cloud Run worker URL after deployment for ${WORKER_SERVICE}"
+      exit 1
+    fi
+    TASKS_URL="${WORKER_URL}/internal/tasks/translate"
+
+    gcloud beta run deploy "$API_SERVICE" \
+      --quiet \
+      --update-labels="app=translation-api,env=${CI_COMMIT_BRANCH},managed-by=gitlab-ci,git-sha=${CI_COMMIT_SHORT_SHA}" \
+      --image "$API_IMAGE_URI" \
+      --platform=managed \
+      --region="$GCP_REGION" \
+      --project="$GCP_PROJECT_ID" \
+      --network="$CLOUD_RUN_NETWORK" \
+      --subnet="$CLOUD_RUN_SUBNET" \
+      --service-account="$CLOUD_RUN_SA" \
+      --min-instances=1 \
+      --concurrency=20 \
+      --port=8000 \
+      --timeout=60 \
+      --memory=1Gi \
+      --cpu=1 \
+      --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=api,API_USE_BACKGROUND_PIPELINE=false,TEMP_DIR=/tmp,CLOUD_TASKS_LOCATION=${GCP_REGION},CLOUD_TASKS_QUEUE=${CLOUD_TASKS_QUEUE},CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=${CLOUD_TASKS_OIDC_SERVICE_ACCOUNT},CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS=1800" \
+      --set-secrets="/secrets/.env=${API_SECRET}:${SECRET_VERSION}"
+resolve-dast-target:
+  stage: dast
+  extends:
+    - ".gcp_wif"
+    - ".shell_runner"
+  needs:
+    - job: deploy-cloud-run
+      artifacts: false
+  environment:
+    name: "$CI_COMMIT_BRANCH"
+  when: manual
+  script:
+    - |
+      set -e
+      API_SERVICE="${CLOUD_RUN_API_SERVICE:-${CLOUD_RUN_SERVICE}-api}"
+      echo "Resolving deployed URL for: $API_SERVICE (region: $GCP_REGION, project: $GCP_PROJECT_ID)..."
+      TARGET_URL="$(gcloud run services describe "$API_SERVICE" \
+        --region="$GCP_REGION" \
+        --project="$GCP_PROJECT_ID" \
+        --format='value(status.url)')"
+      if [ -z "$TARGET_URL" ]; then
+        echo "ERROR: could not resolve URL for $API_SERVICE - has it been deployed on this branch?"
+        exit 1
+      fi
+      echo "Resolved target: $TARGET_URL"
+      echo "TARGET_URL=$TARGET_URL" > dast.env
+  artifacts:
+    reports:
+      dotenv: dast.env
   rules:
-  - if: $CI_COMMIT_BRANCH == "sandbox"
-  - if: $CI_COMMIT_BRANCH == "dev"
-  - if: $CI_COMMIT_BRANCH == "prod"
+    - if: $CI_COMMIT_BRANCH == "sandbox"
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "prod"
+
+dast-scan:
+  stage: dast
+  tags:
+    - container
+  image:
+    name: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: [""]
+  needs:
+    - job: resolve-dast-target
+      artifacts: true
+  when: manual
+  script:
+    - mkdir -p /zap/wrk
+    - |
+      echo "=== Connectivity diagnostic before running ZAP ==="
+      echo "Testing plain curl against the target (bypasses ZAP/Java entirely)..."
+      curl -v --max-time 15 -o /dev/null -s -w "HTTP status: %{http_code}\n" "$TARGET_URL" \
+        && echo "curl SUCCEEDED - if ZAP still times out below, it's a Java/proxy config gap, not a network block." \
+        || echo "curl ALSO FAILED - this is a network/firewall issue on the container runner, not something our script can fix. ZAP will likely fail the same way below."
+      echo "=================================================="
+    - |
+      zap-baseline.py \
+        -t "$TARGET_URL" \
+        -r dast-report.html \
+        -J dast-report.json \
+        -w dast-report.md \
+        -I
+      # -I = report-only mode, findings won't fail the pipeline yet.
+      # Remove once you're ready for real findings to block deploys/promotion.
+  artifacts:
+    when: always
+    paths:
+      - dast-report.html
+      - dast-report.json
+      - dast-report.md
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == "sandbox"
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "prod"
 
 promote-sandbox-to-dev:
   extends:

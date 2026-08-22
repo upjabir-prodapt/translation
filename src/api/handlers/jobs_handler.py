@@ -4,6 +4,7 @@ from src.api.schemas.requests import JobCancelRequest
 from src.api.schemas.responses import DownloadResponse
 from src.api.schemas.responses import JobListResponse
 from src.api.schemas.responses import JobStatusResponse
+from src.api.schemas.responses import MultiJobStatusResponse
 from src.api.services.job_service import JobService
 
 
@@ -15,6 +16,11 @@ class JobsHandler:
 
     async def get_job_status(self, job_id: str) -> JobStatusResponse:
         return await self.job_service.get_job_status(job_id)
+
+    async def get_jobs_status(
+        self, job_ids: list[str], user_id: str
+    ) -> MultiJobStatusResponse:
+        return await self.job_service.get_jobs_status(job_ids, user_id)
 
     async def list_jobs(
         self, status: str | None, limit: int, offset: int
