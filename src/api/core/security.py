@@ -30,6 +30,11 @@ app_auth_scheme = APIKeyHeader(
     ),
 )
 
+# httpOnly session cookie name — preferred credential transport. The
+# `x-app-auth` header above is kept as a fallback during the migration
+# window so any older/cached clients continue to work; see verify_token().
+SESSION_COOKIE_NAME = "colt_session"  # noqa: S105
+
 
 class AuthenticatedUser(BaseModel):
     """Authenticated user context extracted from JWT claims."""
@@ -97,7 +102,7 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
 
 
 def _extract_bearer_token(header_value: str | None) -> str:
-    """Parse JWT from x-app-auth (Bearer prefix optional for Swagger UI)."""
+    """Parse JWT from x-app-auth or the session cookie (Bearer prefix optional)."""
     if not header_value or not header_value.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,10 +116,19 @@ def _extract_bearer_token(header_value: str | None) -> str:
 
 
 def verify_token(
+    request: Request,
     api_key: str | None = Depends(app_auth_scheme),  # noqa: B008
 ) -> dict[str, Any]:
-    """Verify bearer token and return JWT payload."""
-    return decode_and_verify_token(_extract_bearer_token(api_key))
+    """Verify bearer token and return JWT payload.
+
+    Accepts the JWT from either the legacy `x-app-auth` header or the
+    httpOnly `colt_session` cookie (preferred, set by POST /auth/token).
+    The header takes priority so older/cached clients keep working during
+    the migration window; once all clients are confirmed cookie-only, the
+    header path can be removed as a cleanup pass.
+    """
+    token_source = api_key or request.cookies.get(SESSION_COOKIE_NAME)
+    return decode_and_verify_token(_extract_bearer_token(token_source))
 
 
 def get_current_user(
