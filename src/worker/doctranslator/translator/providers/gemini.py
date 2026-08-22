@@ -56,8 +56,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         lang_out,
         model,
         temperature=0.0,
+        domain: str | None = None,
     ):
-        super().__init__(lang_in, lang_out)
+        super().__init__(lang_in, lang_out, domain=domain)
         if genai is None:
             raise ImportError(
                 "google-genai is required for Gemini translator. "
@@ -77,7 +78,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         self.cache_hit_prompt_token_count = AtomicInteger()
 
     def prompt(self, text: str) -> str:
-        return build_translation_prompt(text, self.lang_in, self.lang_out)
+        return build_translation_prompt(
+            text, self.lang_in, self.lang_out, domain=self.domain
+        )
 
     def extract_text(self, response, response_schema=None) -> str:
         parsed = getattr(response, "parsed", None)

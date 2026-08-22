@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
+from src.config.domain_prompts import GENERIC_DOMAIN
+from src.config.domain_prompts import SUPPORTED_DOMAINS as _PROFILE_DOMAINS
+from src.config.domain_prompts import normalize_domain_key
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_DOMAINS = {"commercial", "legal", "finance", "hr", "operations"}
+# Single source of truth: a domain exists iff it has a prompt profile.
+SUPPORTED_DOMAINS = set(_PROFILE_DOMAINS)
 
 
 def _load_json(path: Path) -> Any:
@@ -49,9 +53,14 @@ def normalize_language(value: str) -> str:
 
 
 def normalize_domain(value: str) -> str:
-    """Normalize domain name into lowercase domain key."""
-    normalized = str(value).strip().lower()
-    if normalized not in SUPPORTED_DOMAINS:
+    """Normalize a domain name (including known aliases) into its domain key.
+
+    Raises:
+        ValueError: if the value does not resolve to a supported domain, i.e. a
+            domain that has both a prompt profile and routing entries.
+    """
+    normalized = normalize_domain_key(value)
+    if normalized == GENERIC_DOMAIN:
         raise ValueError(f"Unsupported domain '{value}'")
     return normalized
 

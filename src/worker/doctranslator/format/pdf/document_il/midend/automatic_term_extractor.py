@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import tiktoken
 from tqdm import tqdm
 
+from src.config.domain_prompts import build_domain_term_extraction_block
 from src.worker.doctranslator.format.pdf.document_il import (
     Document as ILDocument,  # Renamed to avoid conflict
 )
@@ -51,6 +52,7 @@ You are an expert multilingual terminologist. Extract key terms from the text an
 3. Keep proper names in original language unless a well-known translation exists.
 4. Ensure consistent translations.
 
+{domain_focus_section}
 {reference_glossary_section}
 
 ### Output Format
@@ -399,6 +401,9 @@ class AutomaticTermExtractor:
                 target_language=self.translation_config.lang_out,
                 text_to_process="\n\n".join(inputs),
                 reference_glossary_section=reference_glossary_section,
+                domain_focus_section=build_domain_term_extraction_block(
+                    getattr(self.translation_config, "domain", None)
+                ),
                 example_output="""[
   {"src": "LLM", "tgt": "大语言模型"},
   {"src": "GPT", "tgt": "GPT"}

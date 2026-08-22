@@ -15,6 +15,8 @@ from langdetect import detect_langs
 from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
+from src.config.domain_prompts import build_domain_role_block
+from src.config.domain_prompts import normalize_domain_key
 from src.config.tracing import tracer_pipeline
 from src.repository.translation_storage_repository import (
     get_translation_storage_repository,
@@ -344,11 +346,13 @@ class JobProcessor:
             }
         )
         selected_model = str(config.get("selected_model", "")).strip()
+        domain = normalize_domain_key(config.get("domain"))
         translator = create_translator(
             selected_model or base_config.model_list[0],
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
             qps=base_config.qps,
+            domain=domain,
         )
         glossaries = config.get("glossaries")
 
@@ -363,6 +367,8 @@ class JobProcessor:
             output_dir=output_dir,
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
+            domain=domain,
+            custom_system_prompt=build_domain_role_block(domain, base_config.lang_out),
             doc_layout_model=doc_layout_model,
             table_model=None,
             working_dir=working_dir,

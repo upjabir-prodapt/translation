@@ -1,6 +1,7 @@
 """API request schemas."""
 
 import base64
+import binascii
 from typing import ClassVar
 from typing import Literal
 
@@ -9,6 +10,9 @@ from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from src.config.domain_prompts import GENERIC_DOMAIN
+from src.config.domain_prompts import SUPPORTED_DOMAINS
+from src.config.domain_prompts import normalize_domain_key
 from src.config.translation_routing import normalize_language
 
 MAX_TARGET_LANGUAGES_PER_REQUEST = 5
@@ -28,7 +32,7 @@ class DocumentInput(BaseModel):
         """Validate that content is valid base64."""
         try:
             base64.b64decode(v, validate=True)
-        except ValueError as e:
+        except (binascii.Error, ValueError) as e:
             raise ValueError("content must be valid base64-encoded data") from e
         return v
 
@@ -45,13 +49,9 @@ class DocumentInput(BaseModel):
 class TranslationConfigInput(BaseModel):
     """Translation configuration."""
 
-    VALID_DOMAINS: ClassVar[set[str]] = {
-        "commercial",
-        "legal",
-        "finance",
-        "hr",
-        "operations",
-    }
+    # Domains are defined by their prompt profiles, so the API accepts exactly
+    # the domains the workflow has a dedicated prompt for.
+    VALID_DOMAINS: ClassVar[frozenset[str]] = frozenset(SUPPORTED_DOMAINS)
     SUPPORTED_LANGUAGE_LABELS: ClassVar[str] = (
         "English (en), Spanish (es), Italian (it), French (fr), Japanese (ja), German (de)"
     )
@@ -82,14 +82,9 @@ class TranslationConfigInput(BaseModel):
     @field_validator("domain")
     @classmethod
     def validate_domain(cls, v: str) -> str:
-        """Validate and normalize domain."""
-        normalized = v.strip().lower()
-
-        # Handle legacy alias
-        if normalized == "oprations":
-            normalized = "operations"
-
-        if normalized not in cls.VALID_DOMAINS:
+        """Validate and normalize domain, accepting known aliases."""
+        normalized = normalize_domain_key(v)
+        if normalized == GENERIC_DOMAIN:
             raise ValueError(
                 f"Invalid domain. Allowed: {', '.join(sorted(cls.VALID_DOMAINS))}"
             )
