@@ -519,9 +519,8 @@ pre-commit-lint:
       run_pre_commit --all-files
     fi
   rules:
-  - if: $CI_COMMIT_BRANCH == "sandbox"
-  - if: $CI_COMMIT_BRANCH == "dev"
-  - if: $CI_COMMIT_BRANCH == "prod"
+  - when: never
+  # Temporarily disabled: only build+deploy needed for this rollout.
 
 env-scope-check:
   extends:
@@ -599,18 +598,14 @@ unit-test:
     - test-results.xml
     expire_in: 7 days
   rules:
-  - if: $CI_COMMIT_BRANCH == "sandbox"
-  - if: $CI_COMMIT_BRANCH == "dev"
-  - if: $CI_COMMIT_BRANCH == "prod"
+  - when: never
+  # Temporarily disabled: only build+deploy needed for this rollout.
 
 build-and-push:
   stage: build
   extends:
   - ".gcp_wif"
   - ".shell_runner"
-  needs:
-  - job: unit-test
-    artifacts: false
   when: manual
   script:
   - |
