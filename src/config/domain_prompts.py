@@ -553,7 +553,7 @@ def build_domain_role_block(domain: str | None, lang_out: str) -> str:
     """Render the role/system block used by the IL paragraph translators.
 
     This block sits inside the payload that
-    :func:`~src.doctranslator.translator.prompts.build_translation_prompt` wraps,
+    :func:`~src.worker.doctranslator.translator.prompts.build_translation_prompt` wraps,
     so it deliberately does not repeat the rule lists rendered by
     :func:`build_domain_translation_block` - it establishes the domain persona,
     register, and precedence, and defers to the single authoritative rule set in

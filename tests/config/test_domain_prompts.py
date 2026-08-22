@@ -10,7 +10,7 @@ from src.config.domain_prompts import build_domain_term_extraction_block
 from src.config.domain_prompts import build_domain_translation_block
 from src.config.domain_prompts import get_domain_profile
 from src.config.domain_prompts import normalize_domain_key
-from src.doctranslator.translator.prompts import build_translation_prompt
+from src.worker.doctranslator.translator.prompts import build_translation_prompt
 
 ALL_DOMAINS = sorted(SUPPORTED_DOMAINS)
 
