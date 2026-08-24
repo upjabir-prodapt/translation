@@ -51,9 +51,12 @@ class ClaudeVertexAITranslator(BaseTranslator):
 
         self.model = model
         self.temperature = temperature
+        # Match the Gemini provider's client-side deadline so one slow
+        # generation cannot occupy a pool worker indefinitely.
         self.client = AnthropicVertex(
             project_id=settings.GOOGLE_CLOUD_PROJECT,
             region=settings.CLAUDE_VERTEX_REGION,
+            timeout=float(settings.LLM_CALL_TIMEOUT_SECONDS),
         )
         self.token_count = AtomicInteger()
         self.prompt_token_count = AtomicInteger()

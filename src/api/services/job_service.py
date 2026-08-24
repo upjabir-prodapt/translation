@@ -5,6 +5,8 @@ import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
@@ -23,6 +25,7 @@ from src.api.schemas.responses import TranslatedDocumentResult
 from src.api.schemas.responses import TranslationLabels
 from src.api.schemas.responses import TranslationMetadata
 from src.api.schemas.responses import TranslationResult
+from src.api.services.cloud_tasks_service import CloudTasksService
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 
@@ -36,9 +39,12 @@ class JobService:
         self,
         storage: APIStorageRepository | None = None,
         bigquery: BigQueryRepository | None = None,
+        cloud_tasks: CloudTasksService | None = None,
     ):
         self.storage = storage or APIStorageRepository()
         self.bigquery = bigquery or BigQueryRepository()
+        # Used only to delete a queued task when a job is cancelled.
+        self.cloud_tasks = cloud_tasks or CloudTasksService()
 
     async def _get_job_data(self, job_id: str) -> dict[str, Any] | None:
         return await self.bigquery.get_translation_job(job_id)
@@ -250,11 +256,24 @@ class JobService:
         )
 
     async def list_jobs(
-        self, status: str | None = None, limit: int = 10, offset: int = 0
+        self,
+        status: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        user_id: str | None = None,
     ) -> JobListResponse:
-        """List jobs with filtering and pagination."""
+        """List jobs with filtering and pagination, scoped to the requesting user.
+
+        Only jobs submitted within the last 7 days are returned, matching the
+        retention window the UI advertises for job history.
+        """
+        submitted_after = datetime.now(UTC) - timedelta(days=7)
         jobs = await self.bigquery.list_translation_jobs(
-            status=status, limit=limit, offset=offset
+            status=status,
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+            submitted_after=submitted_after,
         )
 
         # Convert to response format
@@ -263,7 +282,25 @@ class JobService:
             progress, current_stage = self._progress_and_stage(
                 str(job.get("status", ""))
             )
-            cost_attribution = job.get("cost_attribution", {})
+            cost_attribution = job.get("cost_attribution", {}) or {}
+            source_document = job.get("source_document", {}) or {}
+            translation_config = job.get("translation_config", {}) or {}
+            result_payload = self._result_payload(job)
+            status_value = str(job.get("status", ""))
+            download_url: str | None = None
+            if status_value in ("completed", "human_review_required"):
+                output_gcs_uri = result_payload.get("output_gcs_uri")
+                if output_gcs_uri:
+                    try:
+                        download_url = await self.storage.generate_signed_url(
+                            blob_path=output_gcs_uri, expires_in=3600
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Could not generate download URL for job %s: %s",
+                            job.get("job_id"),
+                            e,
+                        )
             job_responses.append(
                 JobStatusResponse(
                     job_id=job["job_id"],
@@ -275,7 +312,12 @@ class JobService:
                     created_at=job.get("submitted_at"),
                     updated_at=job.get("completed_at") or job.get("submitted_at"),
                     completed_at=job.get("completed_at"),
+                    download_url=download_url,
                     error_message=self._job_error_message(job),
+                    filename=source_document.get("original_filename"),
+                    source_language=translation_config.get("source_language")
+                    or source_document.get("source_language"),
+                    target_language=translation_config.get("target_language"),
                 )
             )
 
@@ -286,12 +328,30 @@ class JobService:
             jobs=job_responses, total=total, limit=limit, offset=offset
         )
 
-    async def cancel_job(self, job_id: str, request: JobCancelRequest) -> None:
-        """Cancel a translation job."""
+    async def cancel_job(
+        self, job_id: str, request: JobCancelRequest, user_id: str
+    ) -> None:
+        """Cancel a translation job owned by `user_id`.
+
+        Ownership is enforced here, mirroring `get_jobs_status`: a job
+        belonging to another user raises `JobNotFoundError` rather than 403,
+        so this endpoint cannot be used to probe which job IDs exist.
+        """
         # Get current job status
         job_data = await self._get_job_data(job_id)
 
         if not job_data:
+            raise JobNotFoundError(job_id)
+
+        owner = (job_data.get("cost_attribution") or {}).get("user_id")
+        if owner != user_id:
+            # Deliberately indistinguishable from "no such job".
+            logger.warning(
+                "Rejected cancel of job %s: requested by %s, owned by %s",
+                job_id,
+                user_id,
+                owner,
+            )
             raise JobNotFoundError(job_id)
 
         status = job_data["status"]
@@ -317,6 +377,21 @@ class JobService:
                 "error_message": updates["error_message"],
             },
         )
+
+        # Remove the queued Cloud Task *after* the status patch, so a Cloud
+        # Tasks outage can never leave a job un-cancelled. Without this the
+        # task still dispatches and the worker no-ops -- wasteful in general,
+        # and on the high-priority queue it burns one of only a few reserved
+        # dispatch slots. Best-effort by design: never fails the cancel.
+        priority = (job_data.get("processing_options") or {}).get("priority")
+        try:
+            await asyncio.to_thread(
+                self.cloud_tasks.delete_translate_task, job_id, priority
+            )
+        except Exception as exc:  # noqa: BLE001 - cancel must still succeed
+            logger.warning(
+                "Cloud Task cleanup failed for cancelled job %s: %s", job_id, exc
+            )
 
         logger.info(f"Cancelled job {job_id}")
 
@@ -357,10 +432,15 @@ class JobService:
         # Get file info
         file_info = await self.storage.get_file_info(gcs_uri)
 
+        # Preserve the actual output extension (.pdf / .docx / .txt) instead
+        # of assuming .pdf -- the DOCX and TXT pipelines both produce
+        # non-PDF outputs.
+        output_ext = Path(gcs_uri).suffix or ".pdf"
+
         return DownloadResponse(
             download_url=download_url,
             expires_in=3600,
-            filename=f"{job_id}_{file_type}.pdf",
+            filename=f"{job_id}_{file_type}{output_ext}",
             file_size=file_info["size"],
         )
 

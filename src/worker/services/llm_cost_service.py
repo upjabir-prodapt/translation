@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,8 @@ from src.worker.doctranslator.translator.usage import TokenUsage
 
 if TYPE_CHECKING:
     from src.worker.doctranslator.format.pdf.split_manager import SplitPoint
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,14 +61,17 @@ class VertexLLMCostService:
     def __init__(self, catalog: tuple[ModelRateEntry, ...] | None = None):
         self._catalog = catalog or build_rate_catalog_from_settings(settings)
 
-    def resolve_rate_entry(self, model_id: str) -> ModelRateEntry:
+    def resolve_rate_entry(
+        self, model_id: str, region: str | None = None
+    ) -> ModelRateEntry:
         provider = infer_provider(model_id).value
         normalized = model_id.strip().lower()
-        region = (
-            settings.CLAUDE_VERTEX_REGION
-            if provider == "claude"
-            else settings.GOOGLE_CLOUD_LOCATION
-        )
+        if region is None:
+            region = (
+                settings.CLAUDE_VERTEX_REGION
+                if provider == "claude"
+                else settings.GOOGLE_CLOUD_LOCATION
+            )
 
         matches = [
             entry
@@ -75,6 +81,11 @@ class VertexLLMCostService:
             and (entry.region is None or entry.region == region)
         ]
         if matches:
+            # Region-specific entries MUST be ordered before the region=None
+            # fallback in pricing_catalog.json, because this returns the first
+            # match. Logging the resolved entry makes a silent fallback to
+            # global (cheaper, wrong) pricing visible instead of invisible.
+            self._log_resolved_entry(matches[0], model_id, region, exact=True)
             return matches[0]
 
         prefix_matches = [
@@ -85,39 +96,44 @@ class VertexLLMCostService:
             and (entry.region is None or entry.region == region)
         ]
         if prefix_matches:
-            return max(prefix_matches, key=lambda e: len(e.model_id))
+            best = max(prefix_matches, key=lambda e: len(e.model_id))
+            self._log_resolved_entry(best, model_id, region, exact=False)
+            return best
 
-        return self._env_fallback_entry(provider, normalized, region)
-
-    def _env_fallback_entry(
-        self, provider: str, model_id: str, region: str | None
-    ) -> ModelRateEntry:
-        if provider == "gemini_vertexai":
-            return ModelRateEntry(
-                provider=provider,
-                model_id=model_id,
-                region=region,
-                tiers=(
-                    RateTier(
-                        max_input_tokens=None,
-                        input_cost_per_1k=float(settings.GEMINI_INPUT_COST_PER_1K),
-                        output_cost_per_1k=float(settings.GEMINI_OUTPUT_COST_PER_1K),
-                    ),
-                ),
-            )
-        return ModelRateEntry(
-            provider=provider,
-            model_id=model_id,
-            region=region,
-            tiers=(
-                RateTier(
-                    max_input_tokens=None,
-                    input_cost_per_1k=float(settings.CLAUDE_INPUT_COST_PER_1K),
-                    output_cost_per_1k=float(settings.CLAUDE_OUTPUT_COST_PER_1K),
-                    cache_hit_cost_per_1k=float(settings.CLAUDE_CACHE_HIT_COST_PER_1K),
-                ),
-            ),
+        raise ValueError(
+            f"No pricing catalog entry found for model '{model_id}' "
+            f"(provider={provider}, region={region}). Add a matching entry "
+            "(or a generic provider-level fallback entry) to "
+            "pricing_catalog.json."
         )
+
+    @staticmethod
+    def _log_resolved_entry(
+        entry: ModelRateEntry,
+        requested_model: str,
+        requested_region: str | None,
+        *,
+        exact: bool,
+    ) -> None:
+        """Record which catalog entry priced a call (Phase-0 provenance).
+
+        A `region=None` entry matching a regional request is legitimate
+        (global pricing) but is also exactly what an out-of-order catalog
+        looks like, so it is logged at WARNING to surface the ambiguity.
+        """
+        first_tier = entry.tiers[0] if entry.tiers else None
+        message = (
+            f"pricing resolved: requested_model={requested_model} "
+            f"requested_region={requested_region} "
+            f"entry_model={entry.model_id} entry_region={entry.region} "
+            f"match={'exact' if exact else 'prefix'} "
+            f"input_rate_per_1k={getattr(first_tier, 'input_cost_per_1k', None)} "
+            f"output_rate_per_1k={getattr(first_tier, 'output_cost_per_1k', None)}"
+        )
+        if entry.region is None and requested_region:
+            logger.warning(f"{message} (global-rate fallback for a regional request)")
+        else:
+            logger.debug(message)
 
     def select_tier(self, entry: ModelRateEntry, input_tokens: int) -> RateTier:
         tiered = [t for t in entry.tiers if t.max_input_tokens is not None]
@@ -136,8 +152,9 @@ class VertexLLMCostService:
         *,
         model_id: str,
         usage: TokenUsage,
+        region: str | None = None,
     ) -> CostBreakdown:
-        entry = self.resolve_rate_entry(model_id)
+        entry = self.resolve_rate_entry(model_id, region)
         tier = self.select_tier(entry, usage.input_tokens)
 
         billable_input = max(usage.input_tokens - usage.cache_hit_input_tokens, 0)
@@ -172,13 +189,14 @@ class VertexLLMCostService:
         prompt_tokens: int,
         completion_tokens: int,
         cache_hit_tokens: int = 0,
+        region: str | None = None,
     ) -> CostBreakdown:
         usage = TokenUsage(
             input_tokens=prompt_tokens,
             output_tokens=completion_tokens,
             cache_hit_input_tokens=cache_hit_tokens,
         )
-        return self.calculate_cost(model_id=model_id, usage=usage)
+        return self.calculate_cost(model_id=model_id, usage=usage, region=region)
 
     def compute_per_chunk_costs(
         self,
@@ -188,6 +206,7 @@ class VertexLLMCostService:
         total_input_tokens: int,
         total_output_tokens: int,
         cache_hit_tokens: int = 0,
+        region: str | None = None,
     ) -> list[dict]:
         """Distribute total token usage proportionally across chunks."""
         total_breakdown = self.calculate_attempt_cost(
@@ -195,6 +214,7 @@ class VertexLLMCostService:
             prompt_tokens=total_input_tokens,
             completion_tokens=total_output_tokens,
             cache_hit_tokens=cache_hit_tokens,
+            region=region,
         )
         total_chunk_tokens = sum(c.token_count for c in chunks)
         records: list[dict] = []
@@ -225,6 +245,7 @@ class VertexLLMCostService:
                 prompt_tokens=chunk_input,
                 completion_tokens=chunk_output,
                 cache_hit_tokens=chunk_cache,
+                region=region,
             )
             records.append(
                 {

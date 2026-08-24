@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 import logging
 import shutil
@@ -6,8 +8,10 @@ import threading
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.config.constants import settings
+from src.config.translation_routing import get_language_display_name
 from src.worker.doctranslator.format.pdf.split_manager import BaseSplitStrategy
 from src.worker.doctranslator.format.pdf.split_manager import PageCountStrategy
 from src.worker.doctranslator.glossary import Glossary
@@ -49,6 +53,22 @@ class SharedContextCrossSplitPart:
         # Statistics for valid characters/text across the whole file
         self.valid_char_count_total: int = 0
         self.total_valid_text_token_count: int = 0
+        self._cached_il_docs: dict[int, Any] = {}
+
+    def get_cached_il_doc(self, part_index: int = 0) -> Any | None:
+        """Retrieve cached parsed IL document for a part, if previously stored."""
+        with self._lock:
+            return self._cached_il_docs.get(part_index)
+
+    def set_cached_il_doc(self, part_index: int, doc: Any) -> None:
+        """Store a parsed IL document snapshot for cross-attempt reuse."""
+        with self._lock:
+            self._cached_il_docs[part_index] = doc
+
+    def has_cached_il_docs(self) -> bool:
+        """Check whether any parsed IL documents have been cached."""
+        with self._lock:
+            return bool(self._cached_il_docs)
 
     def initialize_glossaries(self, initial_glossaries: list[Glossary] | None):
         with self._lock:
@@ -161,6 +181,13 @@ class TranslationCoverPageMetadata:
     translated_sections: str
     judge_model: str | None = None
 
+    #: Shown on the cover page of every AI-translated output so a human
+    #: reviewer is always warned before relying on the translation.
+    DISCLAIMER = (
+        "This is an AI generated translation that may have mistakes and "
+        "needs to be reviewed by a human native language speaker."
+    )
+
     def iter_rows(self) -> list[tuple[str, str]]:
         confidence = "N/A"
         if self.confidence_score is not None:
@@ -171,8 +198,14 @@ class TranslationCoverPageMetadata:
             confidence = f"{confidence} via {self.judge_model}"
 
         return [
-            ("Original language", self.original_language or "N/A"),
-            ("Target language", self.target_language or "N/A"),
+            (
+                "Original language",
+                get_language_display_name(self.original_language),
+            ),
+            (
+                "Target language",
+                get_language_display_name(self.target_language),
+            ),
             ("Model used", self.model_used or "N/A"),
             ("Domain", self.domain or "N/A"),
             ("Translation date", self.translation_date or "N/A"),
@@ -187,7 +220,7 @@ class TranslationConfig:
         return PageCountStrategy(max_pages_per_part)
 
     def _init_working_dir(
-        self, working_dir: "str | Path | None", debug: bool, input_file: "str | Path"
+        self, working_dir: str | Path | None, debug: bool, input_file: str | Path
     ) -> Path:
         """Create and return the working directory, setting _is_temp_dir."""
         if working_dir is None:
@@ -203,7 +236,7 @@ class TranslationConfig:
         return working_dir
 
     def _init_pool_settings(
-        self, pool_max_workers: "int | None", term_pool_max_workers: "int | None"
+        self, pool_max_workers: int | None, term_pool_max_workers: int | None
     ) -> None:
         """Configure pool sizes from explicit args or settings defaults."""
         self.pool_max_workers = (
@@ -249,10 +282,10 @@ class TranslationConfig:
 
     def _init_dirs(
         self,
-        working_dir: "str | Path | None",
-        output_dir: "str | Path | None",
+        working_dir: str | Path | None,
+        output_dir: str | Path | None,
         debug: bool,
-        input_file: "str | Path",
+        input_file: str | Path,
     ) -> None:
         """Resolve, create, and store working and output directories."""
         working_dir = self._init_working_dir(working_dir, debug, input_file)
@@ -268,8 +301,8 @@ class TranslationConfig:
         auto_extract_glossary: bool,
         skip_translation: bool,
         only_parse_generate_pdf: bool,
-        primary_font_family: "str | None",
-        only_include_translated_page: "bool | None",
+        primary_font_family: str | None,
+        only_include_translated_page: bool | None,
         save_auto_extracted_glossary: bool,
         enable_graphic_element_process: bool,
         skip_form_render: bool,
@@ -302,7 +335,7 @@ class TranslationConfig:
         self.figure_table_protection_threshold = figure_table_protection_threshold
         self.skip_formula_offset_calculation = skip_formula_offset_calculation
 
-    def _init_dlp_fields(self, dlp_config: "DlpConfig | None") -> None:
+    def _init_dlp_fields(self, dlp_config: DlpConfig | None) -> None:
         """Initialise DLP-related instance fields."""
         cfg = dlp_config or DlpConfig()
         self.enable_dlp = bool(cfg.enable_dlp)
@@ -400,6 +433,7 @@ class TranslationConfig:
         cover_page_metadata: TranslationCoverPageMetadata | None = None,
         dlp_config: DlpConfig
         | None = None,  # NOSONAR - public configuration object; param count cannot be reduced below 13 without breaking callers
+        shared_context_cross_split_part: SharedContextCrossSplitPart | None = None,
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator
@@ -457,10 +491,14 @@ class TranslationConfig:
             )
         self.doc_layout_model = doc_layout_model
 
-        self.shared_context_cross_split_part = SharedContextCrossSplitPart()
-        self.shared_context_cross_split_part.initialize_glossaries(
-            initial_user_glossaries
-        )
+        if shared_context_cross_split_part is not None:
+            self.shared_context_cross_split_part = shared_context_cross_split_part
+        else:
+            self.shared_context_cross_split_part = SharedContextCrossSplitPart()
+            self.shared_context_cross_split_part.initialize_glossaries(
+                initial_user_glossaries
+            )
+        self.split_part_index = 0
 
         self.split_strategy = split_strategy
         self._part_working_dirs: dict[int, Path] = {}

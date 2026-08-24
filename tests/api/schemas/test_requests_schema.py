@@ -37,18 +37,27 @@ class TestDocumentInput:
         with pytest.raises(PydanticValidationError, match="valid base64"):
             DocumentInput(content="not-valid-base64!!!", filename="file.pdf")
 
-    @pytest.mark.parametrize("filename", ["file.txt", "file.exe", "file", "file.PDF"])
+    def test_valid_txt_format(self):
+        content = base64.b64encode(b"dummy").decode()
+        doc = DocumentInput(content=content, filename="report.txt", format="txt")
+        assert doc.format == "txt"
+
+    @pytest.mark.parametrize("filename", ["file.exe", "file", "file.PDF"])
     def test_invalid_filename_extension_raises(self, filename):
-        """Only .pdf and .docx extensions are accepted (case-insensitive strip)."""
+        """Only .pdf, .docx, and .txt extensions are accepted (case-insensitive strip)."""
         content = base64.b64encode(b"data").decode()
         # .PDF should fail because the validator lowercases the stripped value
         # but .pdf (lowercase) should pass — here we test rejection cases
-        if filename.lower().endswith(".pdf") or filename.lower().endswith(".docx"):
+        if (
+            filename.lower().endswith(".pdf")
+            or filename.lower().endswith(".docx")
+            or filename.lower().endswith(".txt")
+        ):
             # These should pass
             doc = DocumentInput(content=content, filename=filename)
             assert doc is not None
         else:
-            with pytest.raises(PydanticValidationError, match=".pdf or .docx"):
+            with pytest.raises(PydanticValidationError, match=".pdf, .docx, or .txt"):
                 DocumentInput(content=content, filename=filename)
 
     def test_filename_stripped_of_whitespace(self):

@@ -1,6 +1,10 @@
 .env
 *-credentials.json
 *service_account*.json
+# Env files must never enter an image: both Dockerfiles do `COPY . .`, and in
+# Cloud Run the real config arrives at /secrets/.env from Secret Manager.
+.env
+.env.*
 .git
 .venv
 **/__pycache__

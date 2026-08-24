@@ -153,6 +153,23 @@ class Settings(BaseSettings):
     BIGQUERY_DLP_TABLE: str
     BIGQUERY_REVIEWS_TABLE: str
 
+    # -----------------------------
+    # Redis (Memorystore via PSC) — LLM translation cache
+    # -----------------------------
+
+    REDIS_HOST: str = ""
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_TLS_ENABLED: bool = True
+    REDIS_PASSWORD: str = ""
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 2.0
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = 2.0
+    REDIS_CACHE_TTL_SECONDS: int = 604800  # 7 days
+    # Namespaces all cache keys so this service's keys do not collide with
+    # other services sharing the same Redis Cluster (no DB/AUTH isolation
+    # is available in Redis Cluster mode). Keep the trailing separator.
+    REDIS_KEY_PREFIX: str = "translation-cache:"
+
     API_USE_BACKGROUND_PIPELINE: bool
 
     # -----------------------------
@@ -165,6 +182,15 @@ class Settings(BaseSettings):
     CLOUD_TASKS_PROJECT: str = ""
     CLOUD_TASKS_LOCATION: str = ""
     CLOUD_TASKS_QUEUE: str = ""
+    # Optional second queue for latency-sensitive work. Cloud Tasks has no
+    # per-task priority field, so separate queues with independent dispatch
+    # budgets are the only supported way to prioritise. Empty = feature off;
+    # every job then uses CLOUD_TASKS_QUEUE. See docs/cloud-tasks-queues.md.
+    CLOUD_TASKS_QUEUE_HIGH: str = ""
+    # Document formats auto-promoted to the high-priority queue. Server-side
+    # only -- clients cannot request priority (see ProcessingOptions.priority).
+    HIGH_PRIORITY_FORMATS: list[str] = ["txt"]
+    HIGH_PRIORITY_ROUTING_ENABLED: bool = True
     CLOUD_TASKS_WORKER_URL: str = ""
     CLOUD_TASKS_OIDC_SERVICE_ACCOUNT: str = ""
     CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS: int = 3600
@@ -177,37 +203,19 @@ class Settings(BaseSettings):
     # Gemini / Judge
     # -----------------------------
 
-    GEMINI_INPUT_COST_PER_1K: float
-    GEMINI_OUTPUT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_INPUT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_OUTPUT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_CACHE_HIT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_LITE_INPUT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_LITE_OUTPUT_COST_PER_1K: float
-    GEMINI_2_5_FLASH_LITE_CACHE_HIT_COST_PER_1K: float
-    GEMINI_2_5_PRO_SHORT_INPUT_COST_PER_1K: float
-    GEMINI_2_5_PRO_SHORT_OUTPUT_COST_PER_1K: float
-    GEMINI_2_5_PRO_SHORT_CACHE_HIT_COST_PER_1K: float
-    GEMINI_2_5_PRO_LONG_INPUT_COST_PER_1K: float
-    GEMINI_2_5_PRO_LONG_OUTPUT_COST_PER_1K: float
-    GEMINI_2_5_PRO_LONG_CACHE_HIT_COST_PER_1K: float
-    LLM_RATE_CATALOG_OVERRIDE_JSON: str
     JUDGE_MODEL: str
+    JUDGE_MODEL_REGION: str = ""
     QUALITY_THRESHOLD: float
     QUALITY_EARLY_ACCEPT_THRESHOLD: float
     MAX_MODEL_ATTEMPTS: int
     GEMINI_MODEL: str
+    GEMINI_MODEL_REGION: str = ""
 
     # -----------------------------
     # Claude / Anthropic (Vertex AI Model Garden)
     # -----------------------------
 
     CLAUDE_MODEL: str
-    CLAUDE_INPUT_COST_PER_1K: float
-    CLAUDE_OUTPUT_COST_PER_1K: float
-    CLAUDE_CACHE_HIT_COST_PER_1K: float
-    CLAUDE_CACHE_WRITE_5M_COST_PER_1K: float
-    CLAUDE_CACHE_WRITE_1H_COST_PER_1K: float
     CLAUDE_VERTEX_REGION: str
 
     # -----------------------------
@@ -234,6 +242,39 @@ class Settings(BaseSettings):
     LLM_TRANSLATION_MIN_TEXT_LENGTH: int
     LLM_DISABLE_SAME_TEXT_FALLBACK: bool
 
+    # --- Thinking / reasoning budget -------------------------------------
+    # Gemini defaults to *dynamic* thinking, which produced 450s+ single
+    # calls in the 2026-08-24 baseline. 0 disables thinking where the model
+    # supports it; -1 restores the SDK's dynamic default. Pro-class models
+    # cannot fully disable thinking, so they get their own (small) budget.
+    LLM_THINKING_BUDGET: int = 0
+    LLM_THINKING_BUDGET_PRO: int = 512
+
+    # --- Client-side deadlines -------------------------------------------
+    # Without these a hung/slow generation is simply waited out; "timeout"
+    # is already in the retryable-substring list so tenacity picks it up.
+    LLM_CALL_TIMEOUT_SECONDS: float = 90.0
+    LLM_JUDGE_TIMEOUT_SECONDS: float = 60.0
+
+    # --- Adaptive batch sizing (see doctranslator/batching.py) -----------
+    LLM_ADAPTIVE_BATCHING_ENABLED: bool = True
+    LLM_ADAPTIVE_BATCH_MIN_TOKENS: int = 600
+    LLM_ADAPTIVE_BATCH_MAX_TOKENS: int = 2500
+
+    # Failed units are re-batched in groups of this size before falling back
+    # to genuinely one-at-a-time translation.
+    LLM_FALLBACK_BATCH_SIZE: int = 10
+
+    # Process-wide ceiling on simultaneously in-flight LLM calls, enforced in
+    # BaseTranslator._run_translation_batch(). The DOCX path nests pools
+    # (batch pool -> per-batch fallback pool), so at
+    # TRANSLATION_POOL_MAX_WORKERS=12 a single job can theoretically put
+    # 12 + 12*12 = 156 concurrent Vertex requests in flight on a
+    # cpu=4 / containerConcurrency=1 instance. 16 matches TRANSLATION_MAX_QPS
+    # and keeps one full wave (12) running while leaving headroom for
+    # fallbacks. Set to 0 to disable the guard entirely.
+    LLM_MAX_INFLIGHT_CALLS: int = 16
+
     ONNX_LAYOUT_BATCH_SIZE: int
     ONNX_INTRA_OP_NUM_THREADS: int
     ONNX_INTER_OP_NUM_THREADS: int
@@ -254,6 +295,7 @@ class Settings(BaseSettings):
     TIKTOKEN_DIR: str
     GLOSSARIES_DIR: str
     MODEL_SELECTION_FILENAME: str
+    PRICING_CATALOG_FILENAME: str = "pricing_catalog.json"
 
     # -----------------------------
     # Job Config

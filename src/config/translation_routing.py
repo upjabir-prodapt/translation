@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,20 @@ from src.config.constants import settings
 logger = logging.getLogger(__name__)
 
 SUPPORTED_DOMAINS = {"commercial", "legal", "finance", "hr", "operations"}
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRoute:
+    """One model-chain entry: which model to use and (optionally) which
+    Vertex AI region to pin it to.
+
+    `region=None` means "use the process-wide default region"
+    (`settings.GOOGLE_CLOUD_LOCATION`), preserving existing behavior for
+    every model that doesn't declare a `"region"` in model_selection.json.
+    """
+
+    model_id: str
+    region: str | None = None
 
 
 def _load_json(path: Path) -> Any:
@@ -46,6 +61,38 @@ def normalize_language(value: str) -> str:
     if normalized in mapper:
         return mapper[normalized]
     raise ValueError(f"Unsupported language '{value}'")
+
+
+# Plain-language display names for the canonical language codes produced by
+# normalize_language()/language_mapper.json. Used anywhere a human-readable
+# language name is shown to end users (e.g. document cover pages) instead of
+# the internal short code ("en", "fr", ...).
+LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "ja": "Japanese",
+    "zh": "Chinese",
+}
+
+
+def get_language_display_name(value: str | None) -> str:
+    """Return a plain-language display name for a language code or name.
+
+    Accepts either a canonical code ("fr"), an alias/full name known to
+    language_mapper.json ("french"), or an already-plain value ("auto").
+    Falls back to a title-cased version of the input rather than exposing a
+    raw internal code to end users.
+    """
+    if not value or not str(value).strip():
+        return "N/A"
+    try:
+        code = normalize_language(value)
+    except ValueError:
+        code = str(value).strip().lower()
+    return LANGUAGE_DISPLAY_NAMES.get(code) or str(value).strip().title()
 
 
 def normalize_domain(value: str) -> str:
@@ -89,22 +136,28 @@ def get_model_selection_entries() -> list[dict[str, Any]]:
     return normalized_entries
 
 
-def _extract_model_list(entry: dict[str, Any]) -> list[str]:
-    """Extract ordered model IDs from route entry."""
+def _extract_model_list(entry: dict[str, Any]) -> list[ModelRoute]:
+    """Extract ordered model routes (model_id + optional region) from route entry."""
     chain = entry.get("model_chain")
     if not isinstance(chain, list) or not chain:
         return []
 
     sorted_chain = sorted(chain, key=lambda item: item.get("priority", 999))
-    model_list: list[str] = []
+    model_list: list[ModelRoute] = []
     for item in sorted_chain:
         model_id = item.get("model_id")
         if isinstance(model_id, str) and model_id.strip():
-            model_list.append(model_id.strip())
+            region = item.get("region")
+            model_list.append(
+                ModelRoute(
+                    model_id=model_id.strip(),
+                    region=str(region).strip() if region else None,
+                )
+            )
     return model_list
 
 
-def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[str]:
+def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[ModelRoute]:
     """Resolve model list by direct route match in model_selection.json.
 
     This lookup is intentionally lightweight: it compares source/target/domain
@@ -132,10 +185,16 @@ def select_model_list(lang_in: str, lang_out: str, domain: str) -> list[str]:
 
     logger.warning(
         "No model route found for source='%s', target='%s', domain='%s'. "
-        "Falling back to default Gemini model '%s'.",
+        "Falling back to default Gemini model '%s' (region: %s).",
         normalized_in,
         normalized_out,
         normalized_domain,
         settings.GEMINI_MODEL,
+        settings.GEMINI_MODEL_REGION or "default",
     )
-    return [settings.GEMINI_MODEL]
+    return [
+        ModelRoute(
+            model_id=settings.GEMINI_MODEL,
+            region=settings.GEMINI_MODEL_REGION or None,
+        )
+    ]

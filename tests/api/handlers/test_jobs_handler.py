@@ -21,13 +21,19 @@ class TestJobsHandler:
         mock_service.get_job_status.assert_called_once_with("job1")
 
     async def test_list_jobs(self, handler, mock_service):
-        await handler.list_jobs(status="completed", limit=10, offset=0)
-        mock_service.list_jobs.assert_called_once_with("completed", 10, 0)
+        await handler.list_jobs(
+            status="completed", limit=10, offset=0, user_id="user@example.com"
+        )
+        mock_service.list_jobs.assert_called_once_with(
+            "completed", 10, 0, user_id="user@example.com"
+        )
 
     async def test_cancel_job(self, handler, mock_service):
         req = MagicMock()
-        await handler.cancel_job("job1", req)
-        mock_service.cancel_job.assert_called_once_with("job1", req)
+        await handler.cancel_job("job1", req, "user@example.com")
+        mock_service.cancel_job.assert_called_once_with(
+            "job1", req, "user@example.com"
+        )
 
     async def test_download_output(self, handler, mock_service):
         await handler.download_output("job1")

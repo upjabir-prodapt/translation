@@ -14,6 +14,7 @@ os.environ.setdefault("DOTENV_PATH", str(Path(__file__).resolve().parent / "test
 
 import base64
 import io
+import json
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -23,6 +24,109 @@ from unittest.mock import MagicMock
 
 import fitz  # PyMuPDF
 import pytest
+
+# Seed a minimal pricing_catalog.json into the test asset cache root so that
+# real (non-mocked) construction of VertexLLMCostService/DocxJobProcessor/
+# TranslationAttemptRunner in unit tests doesn't hit the FileNotFoundError
+# that build_rate_catalog_from_settings() now raises when the file is
+# missing. pricing_catalog.json is the sole source of LLM pricing (see
+# src/config/llm_rate_catalog.py) -- there is no env-var fallback.
+from src.config.constants import settings as _settings  # noqa: E402
+
+_test_pricing_catalog_path = _settings.assets_root_path / _settings.PRICING_CATALOG_FILENAME
+if not _test_pricing_catalog_path.is_file():
+    _test_pricing_catalog_path.write_text(
+        json.dumps(
+            [
+                {
+                    "provider": "gemini_vertexai",
+                    "model_id": "gemini-2.5-pro",
+                    "region": None,
+                    "tiers": [
+                        {
+                            "max_input_tokens": 200000,
+                            "input_cost_per_1k": 0.00125,
+                            "output_cost_per_1k": 0.01,
+                            "cache_hit_cost_per_1k": 0.00013,
+                        },
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0025,
+                            "output_cost_per_1k": 0.015,
+                            "cache_hit_cost_per_1k": 0.00025,
+                        },
+                    ],
+                },
+                {
+                    "provider": "gemini_vertexai",
+                    "model_id": "gemini-2.5-flash",
+                    "region": None,
+                    "tiers": [
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0003,
+                            "output_cost_per_1k": 0.0025,
+                            "cache_hit_cost_per_1k": 0.00003,
+                        }
+                    ],
+                },
+                {
+                    "provider": "gemini_vertexai",
+                    "model_id": "gemini-2.5-flash-lite",
+                    "region": None,
+                    "tiers": [
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0001,
+                            "output_cost_per_1k": 0.0004,
+                            "cache_hit_cost_per_1k": 0.00001,
+                        }
+                    ],
+                },
+                {
+                    "provider": "gemini_vertexai",
+                    "model_id": "gemini",
+                    "region": None,
+                    "tiers": [
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0003,
+                            "output_cost_per_1k": 0.0025,
+                        }
+                    ],
+                },
+                {
+                    "provider": "claude",
+                    "model_id": "claude-sonnet-4-6",
+                    "region": "europe-west1",
+                    "tiers": [
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0033,
+                            "output_cost_per_1k": 0.0165,
+                            "cache_hit_cost_per_1k": 0.00033,
+                            "cache_write_5m_cost_per_1k": 0.00413,
+                            "cache_write_1h_cost_per_1k": 0.0066,
+                        }
+                    ],
+                },
+                {
+                    "provider": "claude",
+                    "model_id": "claude",
+                    "region": None,
+                    "tiers": [
+                        {
+                            "max_input_tokens": None,
+                            "input_cost_per_1k": 0.0033,
+                            "output_cost_per_1k": 0.0165,
+                            "cache_hit_cost_per_1k": 0.00033,
+                        }
+                    ],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers

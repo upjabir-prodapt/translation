@@ -215,20 +215,33 @@ stages:
                   --subnet="$(SUBNET)"  \
                   --service-account="$(CLOUD_RUN_SA)" \
                   --min-instances=1 \
+                  --max-instances=30 \
                   --concurrency=1 \
                   --port=8000 \
                   --timeout=3600 \
-                  --memory=4Gi \
+                  --memory=16Gi \
                   --cpu=4 \
                   --no-cpu-throttling \
                   --cpu-boost \
                   --no-allow-unauthenticated \
                   --add-volume mount-path=$(ASSETS_MOUNT_PATH),type=cloud-storage,bucket=$(GCS_BUCKET_NAME),readonly=false,mount-options="only-dir=$(GCS_ASSETS_DIR)" \
-                  --set-env-vars="GOOGLE_CLOUD_PROJECT=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp" \
+                  --set-env-vars="GOOGLE_CLOUD_PROJECT=$(PROJECT_ID),GOOGLE_CLOUD_LOCATION=$(REGION),IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=$(ASSETS_MOUNT_PATH),TEMP_DIR=/tmp,REDIS_HOST=$(REDIS_HOST),REDIS_PORT=$(REDIS_PORT)" \
                   --set-secrets="/secrets/.env=${WORKER_SECRET}:${SECRET_VERSION}"
 
                 WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$(REGION)" --project="$(PROJECT_ID)" --format='value(status.url)')"
                 TASKS_URL="${WORKER_URL}/internal/tasks/translate"
+
+                # Keep the Cloud Tasks queue's dispatch throughput in sync with the worker's
+                # scaling capacity (max-instances=30 above) -- otherwise the queue caps
+                # concurrent dispatches far below what the worker fleet can handle.
+                if [ -n "$(CLOUD_TASKS_QUEUE)" ]; then
+                  gcloud tasks queues update "$(CLOUD_TASKS_QUEUE)" \
+                    --location="$(REGION)" \
+                    --project="$(PROJECT_ID)" \
+                    --max-concurrent-dispatches=30 \
+                    --max-dispatches-per-second=10 \
+                    --quiet
+                fi
 
                 gcloud beta run deploy "$API_SERVICE" \
                   --quiet \

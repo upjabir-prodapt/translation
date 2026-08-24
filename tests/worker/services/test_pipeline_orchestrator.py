@@ -39,6 +39,21 @@ class TestPipelineOrchestrator:
             )
             assert orchestrator._extract_blob_path("path/to/blob") == "path/to/blob"
 
+    def test_convert_txt_to_docx_produces_docx_sibling_file(self, orchestrator, tmp_path):
+        txt_path = tmp_path / "input.txt"
+        txt_path.write_text("Hello world.\nSecond line.", encoding="utf-8")
+
+        docx_path = orchestrator._convert_txt_to_docx(txt_path)
+
+        assert docx_path.suffix == ".docx"
+        assert docx_path.exists()
+
+        from docx import Document as open_docx
+
+        document = open_docx(str(docx_path))
+        paragraphs = [p.text for p in document.paragraphs]
+        assert paragraphs == ["Hello world.", "Second line."]
+
     async def test_update_status(self, orchestrator, mock_bq):
         await orchestrator._update_status(
             "job1", status="completed", error_message="none"

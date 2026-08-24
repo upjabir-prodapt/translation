@@ -23,12 +23,16 @@ class JobsHandler:
         return await self.job_service.get_jobs_status(job_ids, user_id)
 
     async def list_jobs(
-        self, status: str | None, limit: int, offset: int
+        self, status: str | None, limit: int, offset: int, user_id: str
     ) -> JobListResponse:
-        return await self.job_service.list_jobs(status, limit, offset)
+        return await self.job_service.list_jobs(
+            status, limit, offset, user_id=user_id
+        )
 
-    async def cancel_job(self, job_id: str, request: JobCancelRequest) -> None:
-        await self.job_service.cancel_job(job_id, request)
+    async def cancel_job(
+        self, job_id: str, request: JobCancelRequest, user_id: str
+    ) -> None:
+        await self.job_service.cancel_job(job_id, request, user_id)
 
     async def download_output(self, job_id: str) -> DownloadResponse:
         return await self.job_service.get_download_url(job_id, "mono")

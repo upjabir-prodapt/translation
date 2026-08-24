@@ -266,12 +266,28 @@ class TestChunkingCostIsZero:
 
     def test_no_api_calls_means_zero_token_consumption(self, multi_section_pdf):
         """Running chunking should record zero prompt/completion tokens."""
+        from src.config.llm_rate_catalog import ModelRateEntry
+        from src.config.llm_rate_catalog import RateTier
         from src.worker.services.llm_cost_service import VertexLLMCostService
 
         strategy = StructureAwareSplitStrategy(min_pages_to_split=10)
         chunks = strategy.determine_split_points(_config(multi_section_pdf))
 
-        service = VertexLLMCostService()
+        catalog = (
+            ModelRateEntry(
+                provider="gemini_vertexai",
+                model_id="gemini-2.5-flash",
+                region=None,
+                tiers=(
+                    RateTier(
+                        max_input_tokens=None,
+                        input_cost_per_1k=0.0003,
+                        output_cost_per_1k=0.0025,
+                    ),
+                ),
+            ),
+        )
+        service = VertexLLMCostService(catalog=catalog)
         breakdown = service.calculate_attempt_cost(
             model_id="gemini-2.5-flash",
             prompt_tokens=0,
@@ -283,9 +299,25 @@ class TestChunkingCostIsZero:
     def test_chunking_cost_is_exactly_zero_regardless_of_model_rate(
         self, multi_section_pdf
     ):
+        from src.config.llm_rate_catalog import ModelRateEntry
+        from src.config.llm_rate_catalog import RateTier
         from src.worker.services.llm_cost_service import VertexLLMCostService
 
-        service = VertexLLMCostService()
+        catalog = (
+            ModelRateEntry(
+                provider="gemini_vertexai",
+                model_id="gemini-2.5-flash",
+                region=None,
+                tiers=(
+                    RateTier(
+                        max_input_tokens=None,
+                        input_cost_per_1k=0.0003,
+                        output_cost_per_1k=0.0025,
+                    ),
+                ),
+            ),
+        )
+        service = VertexLLMCostService(catalog=catalog)
         breakdown = service.calculate_attempt_cost(
             model_id="gemini-2.5-flash",
             prompt_tokens=0,

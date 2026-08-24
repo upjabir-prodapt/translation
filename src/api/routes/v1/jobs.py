@@ -48,20 +48,30 @@ async def list_jobs(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     offset: Annotated[int, Query(ge=0)] = 0,
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
     handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008
 ):
-    """List translation jobs with optional filtering."""
-    return await handler.list_jobs(status, limit, offset)
+    """List the current user's translation jobs (last 7 days), optionally filtered."""
+    return await handler.list_jobs(status, limit, offset, current_user.email)
 
 
 @router.delete("/jobs/{job_id}", tags=["jobs"])
 async def cancel_job(
     job_id: str,
     request: Annotated[JobCancelRequest, Body()] = JobCancelRequest(reason=None),  # noqa: B008
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
     handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008
 ):
-    """Cancel a translation job."""
-    await handler.cancel_job(job_id, request)
+    """Cancel a translation job.
+
+    Only the job's owner may cancel it; another user's job returns 404 rather
+    than 403 so this endpoint cannot enumerate job IDs.
+    """
+    await handler.cancel_job(job_id, request, current_user.email)
     return {"message": "Job cancelled successfully"}
 
 

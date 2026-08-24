@@ -1,12 +1,32 @@
 """Vertex LLM cost service tests."""
 
+import json
 from dataclasses import dataclass
 
 import pytest
+from src.config.constants import settings
 from src.config.llm_rate_catalog import ModelRateEntry
 from src.config.llm_rate_catalog import RateTier
 from src.worker.doctranslator.translator.usage import TokenUsage
 from src.worker.services.llm_cost_service import VertexLLMCostService
+
+
+def _regional_test_catalog() -> tuple[ModelRateEntry, ...]:
+    return (
+        ModelRateEntry(
+            provider="gemini_vertexai",
+            model_id="gemini-3.5-flash",
+            region="europe-west3",
+            tiers=(
+                RateTier(
+                    max_input_tokens=None,
+                    input_cost_per_1k=0.00165,
+                    output_cost_per_1k=0.0099,
+                    cache_hit_cost_per_1k=0.000165,
+                ),
+            ),
+        ),
+    )
 
 
 def _default_test_catalog() -> tuple[ModelRateEntry, ...]:
@@ -180,10 +200,103 @@ class TestVertexLLMCostService:
             assert rec["tokens_output"] == 0
             assert rec["cost_usd"] == 0.0
 
-    def test_env_fallback_for_unknown_model(self, service, monkeypatch):
-        entry = service._env_fallback_entry("gemini_vertexai", "gemini-custom", "eu")
-        assert entry.tiers[0].input_cost_per_1k == float(
-            __import__(
-                "src.config.constants", fromlist=["settings"]
-            ).settings.GEMINI_INPUT_COST_PER_1K
+    def test_unknown_model_raises_value_error(self, service):
+        with pytest.raises(ValueError, match="No pricing catalog entry found"):
+            service.calculate_attempt_cost(
+                model_id="gemini-9.9-nonexistent",
+                prompt_tokens=100,
+                completion_tokens=50,
+            )
+
+    def test_explicit_region_override_resolves_regional_entry(self):
+        service = VertexLLMCostService(catalog=_regional_test_catalog())
+        breakdown = service.calculate_attempt_cost(
+            model_id="gemini-3.5-flash",
+            prompt_tokens=1000,
+            completion_tokens=500,
+            region="europe-west3",
         )
+        assert breakdown.region == "europe-west3"
+        assert breakdown.input_rate_per_1k == pytest.approx(0.00165)
+        assert breakdown.output_rate_per_1k == pytest.approx(0.0099)
+        assert breakdown.total_cost_usd == pytest.approx(0.00165 + 0.00495)
+
+    def test_region_none_falls_back_to_process_default(self, monkeypatch):
+        service = VertexLLMCostService(catalog=_regional_test_catalog())
+        monkeypatch.setattr(
+            "src.worker.services.llm_cost_service.settings.GOOGLE_CLOUD_LOCATION",
+            "europe-west3",
+        )
+        entry = service.resolve_rate_entry("gemini-3.5-flash")
+        assert entry.region == "europe-west3"
+
+
+class TestRegionalEntryOrdering:
+    """Guards a silent-mispricing trap in resolve_rate_entry().
+
+    The lookup returns `matches[0]` and its filter accepts
+    `entry.region is None or entry.region == region`. If a global
+    (`region: null`) entry is listed *before* the region-specific one in
+    pricing_catalog.json, the cheaper global rate silently wins and every
+    cost figure is quietly wrong -- with no error anywhere.
+    """
+
+    @staticmethod
+    def _entry(region, input_rate, output_rate):
+        return ModelRateEntry(
+            provider="gemini_vertexai",
+            model_id="gemini-3.5-flash",
+            region=region,
+            tiers=(
+                RateTier(
+                    max_input_tokens=None,
+                    input_cost_per_1k=input_rate,
+                    output_cost_per_1k=output_rate,
+                ),
+            ),
+        )
+
+    def test_regional_entry_first_wins(self):
+        catalog = (
+            self._entry("europe-west3", 0.00165, 0.0099),
+            self._entry(None, 0.0015, 0.009),
+        )
+        entry = VertexLLMCostService(catalog=catalog).resolve_rate_entry(
+            "gemini-3.5-flash", "europe-west3"
+        )
+        assert entry.region == "europe-west3"
+        assert entry.tiers[0].input_cost_per_1k == pytest.approx(0.00165)
+
+    def test_global_entry_first_silently_shadows_the_regional_rate(self):
+        """Documents the failure mode this ordering requirement prevents."""
+        catalog = (
+            self._entry(None, 0.0015, 0.009),
+            self._entry("europe-west3", 0.00165, 0.0099),
+        )
+        entry = VertexLLMCostService(catalog=catalog).resolve_rate_entry(
+            "gemini-3.5-flash", "europe-west3"
+        )
+        # Wrong rate, no exception -- hence the ordering rule and the
+        # WARNING emitted by _log_resolved_entry().
+        assert entry.region is None
+        assert entry.tiers[0].input_cost_per_1k == pytest.approx(0.0015)
+
+    def test_shipped_catalog_orders_regional_before_global(self):
+        """The real mounted catalog must satisfy the ordering rule."""
+        catalog_path = (
+            settings.assets_root_path / settings.PRICING_CATALOG_FILENAME
+        )
+        if not catalog_path.is_file():
+            pytest.skip("pricing_catalog.json not present in this environment")
+        entries = json.loads(catalog_path.read_text(encoding="utf-8"))
+        seen_global = {}
+        for entry in entries:
+            key = (entry.get("provider"), entry.get("model_id"))
+            if entry.get("region") is None:
+                seen_global[key] = True
+            elif seen_global.get(key):
+                pytest.fail(
+                    f"pricing_catalog.json lists a global entry for {key} before "
+                    f"its region={entry['region']} entry; the regional rate will "
+                    "be silently ignored by resolve_rate_entry()."
+                )

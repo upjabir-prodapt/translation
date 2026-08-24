@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
+from src.config.translation_routing import ModelRoute
 from src.config.translation_routing import select_model_list
 from src.repository import get_storage_client
 from src.worker.loaders.utils.path_helpers import get_cache_file_path
@@ -104,6 +105,6 @@ class IntentRouterService:
 
     def get_model_chain(
         self, *, domain: str, source_lang: str, target_lang: str
-    ) -> list[str]:
+    ) -> list[ModelRoute]:
         # model_selection.json is authoritative and uses source/target/domain matching.
         return select_model_list(source_lang, target_lang, domain)

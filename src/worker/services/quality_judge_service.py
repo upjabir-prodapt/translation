@@ -82,14 +82,22 @@ class QualityJudgeLLMScores(BaseModel):
 class GoogleADKJudgeAgent:
     """LLM judge via google-genai (Vertex); omission/hallucination scoring."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, region: str | None = None):
         self.model = model or settings.JUDGE_MODEL
+        self.region = region or settings.JUDGE_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
         self._client = None
         if genai is not None:
+            # Judge calls get their own (shorter) deadline. Thinking is
+            # deliberately NOT constrained here -- the judge runs once per
+            # attempt at ~12-19s and its reasoning quality gates the whole
+            # pipeline, so it is not worth trading accuracy for.
             self._client = genai.Client(
                 vertexai=True,
                 project=settings.GOOGLE_CLOUD_PROJECT,
-                location=settings.GOOGLE_CLOUD_LOCATION,
+                location=self.region,
+                http_options=genai_types.HttpOptions(
+                    timeout=int(float(settings.LLM_JUDGE_TIMEOUT_SECONDS) * 1000)
+                ),
             )
 
     @llm_retry(logger=logger)

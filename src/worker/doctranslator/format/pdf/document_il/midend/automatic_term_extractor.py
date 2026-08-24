@@ -310,10 +310,16 @@ class AutomaticTermExtractor:
         executor: PriorityThreadPoolExecutor,
         pbar: tqdm | None = None,
         tracker: PageTermExtractTracker = None,
-    ):
+    ) -> int:
+        """Submit term-extraction batches for one page.
+
+        Returns the number of batches submitted (E1 instrumentation), used
+        by procress() to log per-document batch counts.
+        """
         self.translation_config.raise_if_cancelled()
         paragraphs = []
         total_token_count = 0
+        batch_count = 0
         for paragraph in page.pdf_paragraph:
             if self._should_skip_paragraph(paragraph, pbar):
                 continue
@@ -323,11 +329,14 @@ class AutomaticTermExtractor:
                 self._submit_batch(
                     paragraphs, tracker, executor, pbar, total_token_count
                 )
+                batch_count += 1
                 paragraphs = []
                 total_token_count = 0
 
         if paragraphs:
             self._submit_batch(paragraphs, tracker, executor, pbar, total_token_count)
+            batch_count += 1
+        return batch_count
 
     def _build_reference_glossary_section(self, inputs: list[str]) -> str:
         """Build the reference glossary section string for the LLM prompt."""
@@ -443,6 +452,7 @@ class AutomaticTermExtractor:
         )
         tracker = DocumentTermExtractTracker()
         total = sum(len(page.pdf_paragraph) for page in doc_il.page)
+        batch_count = 0
         with self.translation_config.progress_monitor.stage_start(
             self.stage_name,
             total,
@@ -455,7 +465,9 @@ class AutomaticTermExtractor:
                 max_workers=max_workers,
             ) as executor:
                 for page in doc_il.page:
-                    self.process_page(page, executor, pbar, tracker.new_page())
+                    batch_count += self.process_page(
+                        page, executor, pbar, tracker.new_page()
+                    )
 
         self.shared_context.finalize_auto_extracted_glossary()
         end_total, end_prompt, end_completion, end_cache_hit_prompt = (
@@ -466,6 +478,11 @@ class AutomaticTermExtractor:
             end_prompt - start_prompt,
             end_completion - start_completion,
             end_cache_hit_prompt - start_cache_hit_prompt,
+        )
+        logger.info(
+            f"{self.stage_name}: term extraction completed. "
+            f"Paragraphs: {total}, Batches (approx): {batch_count}, "
+            f"max_workers={max_workers}"
         )
 
         if (

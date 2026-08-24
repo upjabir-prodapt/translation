@@ -1,7 +1,9 @@
-"""Translation processing service for API-only runtime."""
+"""Translation processing service used by the worker's translation pipeline."""
+
 
 import logging
 import re
+import threading
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -16,6 +18,7 @@ from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
+from src.config.translation_routing import ModelRoute
 from src.repository.translation_storage_repository import (
     get_translation_storage_repository,
 )
@@ -25,6 +28,9 @@ from src.worker.doctranslator.format.pdf.split_manager import (
     StructureAwareSplitStrategy,
 )
 from src.worker.doctranslator.format.pdf.translation_config import DlpConfig
+from src.worker.doctranslator.format.pdf.translation_config import (
+    SharedContextCrossSplitPart,
+)
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.format.pdf.translation_config import (
     TranslationCoverPageMetadata,
@@ -39,6 +45,30 @@ from src.worker.services.task_models import DocTranslatorTranslationConfig
 logger = logging.getLogger(__name__)
 
 DetectorFactory.seed = 0
+
+# Process-wide singleton for the DocLayout ONNX model. Previously each
+# JobProcessor instance (created fresh per job in PipelineOrchestrator)
+# loaded its own onnxruntime.InferenceSession, meaning N concurrent jobs in
+# one process re-read the model file from disk and duplicated the loaded
+# session in memory N times. OnnxModel already guards inference calls with
+# an internal lock, so sharing one instance across concurrent jobs/threads
+# is safe.
+_doc_layout_model_lock = threading.Lock()
+_doc_layout_model_singleton: OnnxModel | None = None
+
+
+def _get_shared_doc_layout_model() -> OnnxModel:
+    """Return the process-wide DocLayout ONNX model, loading it once."""
+    global _doc_layout_model_singleton
+    if _doc_layout_model_singleton is None:
+        with _doc_layout_model_lock:
+            if _doc_layout_model_singleton is None:
+                model_path = get_doclayout_onnx_model_path()
+                _doc_layout_model_singleton = OnnxModel(str(model_path))
+                logger.info(
+                    f"Loaded DocLayout model from {model_path} (process-wide singleton)"
+                )
+    return _doc_layout_model_singleton
 
 
 def _job_runtime_root(job_id: str) -> Path:
@@ -69,16 +99,12 @@ class JobProcessor:
 
     def __init__(self, progress_tracker: Any):
         self.progress_tracker = progress_tracker
-        self._doc_layout_model: OnnxModel | None = None
         self._current_attempt_chunks: int = 0
         self._model_orchestrator = ModelAttemptOrchestrator(self)
 
     def _get_doc_layout_model(self) -> OnnxModel:
-        if self._doc_layout_model is None:
-            model_path = get_doclayout_onnx_model_path()
-            self._doc_layout_model = OnnxModel(str(model_path))
-            logger.info(f"Loaded DocLayout model from {model_path}")
-        return self._doc_layout_model
+        return _get_shared_doc_layout_model()
+
 
     async def _load_glossary_from_gcs(
         self, job_id: str, glossary_filename: str, lang_out: str
@@ -242,6 +268,17 @@ class JobProcessor:
             page.insert_textbox(value_rect, value, fontsize=12, fontname="helv")
             y_position += row_height
 
+        disclaimer_rect = pymupdf.Rect(
+            margin, y_position + 12, page_rect.width - margin, y_position + 60
+        )
+        page.insert_textbox(
+            disclaimer_rect,
+            metadata.DISCLAIMER,
+            fontsize=10,
+            fontname="helv",
+            color=(0.55, 0.15, 0.15),
+        )
+
     def _counter_value(self, value: Any) -> int:
         if hasattr(value, "value"):
             return int(value.value)
@@ -320,7 +357,10 @@ class JobProcessor:
         return self.DETECTED_LANGUAGE_ALIASES.get(normalized, normalized)
 
     def _build_translation_config(
-        self, config: dict[str, Any], output_dir: Path
+        self,
+        config: dict[str, Any],
+        output_dir: Path,
+        shared_context: SharedContextCrossSplitPart | None = None,
     ) -> TranslationConfig:
         doc_layout_model = self._get_doc_layout_model()
         job_id = config.get("job_id", str(uuid.uuid4()))
@@ -330,13 +370,18 @@ class JobProcessor:
         )
         working_dir.mkdir(parents=True, exist_ok=True)
 
+        raw_model_list = config.get("model_list", [])
+        model_ids = [
+            item.model_id if isinstance(item, ModelRoute) else str(item)
+            for item in raw_model_list
+        ]
         base_config = DocTranslatorTranslationConfig.model_validate(
             {
                 "input_file": Path(config["input_file"]),
                 "output_dir": output_dir,
                 "lang_in": config["lang_in"],
                 "lang_out": config["lang_out"],
-                "model_list": config.get("model_list", []),
+                "model_list": model_ids,
                 "working_dir": working_dir,
                 "add_cover_page": bool(config.get("add_cover_page", True)),
                 "no_dual": bool(config.get("no_dual", True)),
@@ -344,11 +389,17 @@ class JobProcessor:
             }
         )
         selected_model = str(config.get("selected_model", "")).strip()
+        # "selected_model_region" is threaded in by TranslationAttemptRunner
+        # from the matching ModelRoute (docs/plan.md Section 3.3) so
+        # gemini-3.5-flash's europe-west3 pinning survives the trip from
+        # model_selection.json through to the Vertex AI client construction.
+        selected_region = config.get("selected_model_region")
         translator = create_translator(
             selected_model or base_config.model_list[0],
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
             qps=base_config.qps,
+            region=selected_region,
         )
         glossaries = config.get("glossaries")
 
@@ -386,6 +437,7 @@ class JobProcessor:
                 dlp_source_language=str(config.get("lang_in", "")).strip() or None,
                 dlp_post_translation=bool(config.get("dlp_post_translation", False)),
             ),
+            shared_context_cross_split_part=shared_context,
         )
 
     async def _handle_translation_event(

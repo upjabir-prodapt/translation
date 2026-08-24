@@ -1,8 +1,18 @@
-"""API-only background translation orchestration."""
+"""Translation pipeline orchestration.
+
+Always executed by the Cloud Tasks worker (TranslateTaskHandler -> here).
+The API_USE_BACKGROUND_PIPELINE dev/local flag additionally allows the API
+process to invoke this same orchestrator in-process (bypassing Cloud Tasks)
+purely for local testing convenience -- it is not a separate "API-only"
+runtime mode.
+"""
+
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import shutil
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -21,20 +31,32 @@ from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import BigQueryError
 from src.repository.repository_exception import StorageError
+from src.worker.doctranslator.format.txt.txt_docx_bridge import docx_path_to_txt_bytes
+from src.worker.doctranslator.format.txt.txt_docx_bridge import txt_bytes_to_docx_bytes
 from src.worker.services.assembly_service import AssemblyService
+from src.worker.services.docx_job_processor import DocxJobProcessor
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.intent_router_service import IntentRouterService
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.processor_service import JobProcessor
+from src.worker.services.shared_document_prep import PreparedDocument
+from src.worker.services.shared_document_prep import get_shared_document_prep_cache
 from src.worker.services.temp_workspace_service import TempWorkspaceService
 from src.worker.services.translation_job_session import TranslationJobSessionManager
 from src.worker.utils.cost_utils import validate_job_cost
-from src.worker.utils.docx_converter import convert_docx_to_pdf
 
 logger = logging.getLogger(__name__)
 
 _OMIT = object()
+
+# Process-wide bound on concurrent in-process pipeline executions. This was
+# previously defined in Settings (MAX_CONCURRENT_JOBS) but never actually
+# enforced anywhere, so in dev mode (API_USE_BACKGROUND_PIPELINE=true) an
+# unbounded number of concurrent asyncio tasks could each spin up their own
+# thread pools / ONNX inference calls, risking memory blowup under load.
+_pipeline_semaphore = asyncio.Semaphore(max(1, int(settings.MAX_CONCURRENT_JOBS)))
+
 
 
 def _extract_model_version(model_id: str) -> str | None:
@@ -82,7 +104,8 @@ class _PipelineProgressTracker:
 
 
 class PipelineOrchestrator:
-    """Execute translation pipeline in API background process."""
+    """Execute the translation pipeline for one job (always worker-driven)."""
+
 
     def __init__(
         self,
@@ -188,10 +211,16 @@ class PipelineOrchestrator:
     async def run(self, job_id: str, job_data: dict[str, Any], parent_ctx=None) -> None:
         token = otel_context.attach(parent_ctx) if parent_ctx is not None else None
         try:
-            await self._run_pipeline(job_id, job_data)
+            # Bound the number of pipelines executing concurrently in this
+            # process (MAX_CONCURRENT_JOBS). Jobs beyond the limit simply
+            # wait here rather than each spinning up their own thread
+            # pools / ONNX inference sessions unbounded.
+            async with _pipeline_semaphore:
+                await self._run_pipeline(job_id, job_data)
         finally:
             if token is not None:
                 otel_context.detach(token)
+
 
     async def _run_pipeline(self, job_id: str, job_data: dict[str, Any]) -> None:
         translation_config = job_data["translation_config"]
@@ -247,13 +276,144 @@ class PipelineOrchestrator:
         totals["chunk_count"] = len(records)
         return totals
 
+    def _convert_txt_to_docx(self, txt_path: Path) -> Path:
+        """Wrap a downloaded `.txt` file's content in a `.docx` and return its path.
+
+        Plain-text documents are translated by reusing the native DOCX
+        pipeline (see `src/worker/doctranslator/format/txt/txt_docx_bridge.py`)
+        rather than a bespoke format-specific translator.
+        """
+        docx_path = txt_path.with_suffix(".docx")
+        docx_bytes = txt_bytes_to_docx_bytes(txt_path.read_bytes())
+        docx_path.write_bytes(docx_bytes)
+        return docx_path
+
+    async def _prepare_input_solo(
+        self,
+        *,
+        job_id: str,
+        blob_path: str,
+        source_doc: dict[str, Any],
+        workspace_input_dir: Path,
+        local_input_path: Path,
+        requested_source_lang: str | None,
+    ) -> tuple[Path, str]:
+        """Download/detect for a job with no sibling batch jobs.
+
+        DOCX files are translated natively (no PDF conversion) -- see
+        docs/architecture/pdf-vs-docx-translation-architecture.md. Source
+        language auto-detection for DOCX uses a lightweight text-extraction
+        variant since LanguageDetectionService's default path is pymupdf/PDF
+        specific.
+        """
+        del job_id
+        await self.storage.download_file(blob_path, local_input_path)
+
+        if source_doc.get("format") == "txt":
+            local_input_path = self._convert_txt_to_docx(local_input_path)
+
+        source_lang = requested_source_lang
+        if not source_lang or source_lang == "auto":
+            source_lang = self.language_detector.detect(
+                local_input_path, is_docx=source_doc.get("format") in ("docx", "txt")
+            )
+        return local_input_path, source_lang
+
+
+    async def _prepare_input_shared(
+        self,
+        *,
+        job_id: str,
+        source_hash: str,
+        source_doc: dict[str, Any],
+        workspace_input_dir: Path,
+        local_input_path: Path,
+        requested_source_lang: str | None,
+    ) -> tuple[Path, str]:
+        """Download/convert/detect once per `source_hash`, shared across sibling jobs.
+
+        Sibling jobs from the same multi-target-language batch (same
+        source_hash, different target language) that happen to run
+        concurrently in this process reuse one another's download/convert/
+        detect work instead of repeating it. The shared cache stores its
+        prepared file under a shared scratch dir; each job copies it into
+        its own workspace so subsequent per-job mutation (DLP masking,
+        typesetting, etc) never touches the shared file.
+        """
+        cache = get_shared_document_prep_cache()
+        blob_path = self._extract_blob_path(source_doc["gcs_uri"])
+        shared_scratch_root = (
+            settings.temp_root_path / settings.TEMP_JOBS_ROOT / "_shared_prep"
+        )
+
+        async def _do_prepare() -> PreparedDocument:
+            scratch_dir = shared_scratch_root / source_hash
+            scratch_dir.mkdir(parents=True, exist_ok=True)
+            filename = source_doc.get("original_filename", "input.pdf")
+            shared_path = scratch_dir / filename
+            await self.storage.download_file(blob_path, shared_path)
+
+            if source_doc.get("format") == "txt":
+                shared_path = self._convert_txt_to_docx(shared_path)
+
+            detected_lang: str | None = None
+            if not requested_source_lang or requested_source_lang == "auto":
+                detected_lang = self.language_detector.detect(
+                    shared_path, is_docx=source_doc.get("format") in ("docx", "txt")
+                )
+
+            return PreparedDocument(
+                local_path=shared_path, detected_source_language=detected_lang
+            )
+
+
+        try:
+            prepared = await cache.get_or_prepare(
+                source_hash=source_hash,
+                job_id=job_id,
+                job_local_dir=workspace_input_dir,
+                prepare_fn=_do_prepare,
+            )
+        except Exception:
+            # If the shared prep failed (e.g. the first job's download
+            # failed), fall back to doing it solo for this job rather than
+            # letting every sibling job fail from one shared error.
+            logger.warning(
+                "[shared_prep] shared prep failed for source_hash=%s; "
+                "falling back to solo prep for job=%s",
+                source_hash,
+                job_id,
+                exc_info=True,
+            )
+            return await self._prepare_input_solo(
+                job_id=job_id,
+                blob_path=blob_path,
+                source_doc=source_doc,
+                workspace_input_dir=workspace_input_dir,
+                local_input_path=local_input_path,
+                requested_source_lang=requested_source_lang,
+            )
+
+        # Copy (not move) the shared file into this job's own workspace so
+        # later per-job mutation never affects sibling jobs still reading it.
+        workspace_input_dir.mkdir(parents=True, exist_ok=True)
+        job_local_path = workspace_input_dir / prepared.local_path.name
+        await asyncio.to_thread(shutil.copy2, prepared.local_path, job_local_path)
+
+        source_lang = requested_source_lang
+        if not source_lang or source_lang == "auto":
+            source_lang = prepared.detected_source_language
+        return job_local_path, source_lang
+
     async def _execute_pipeline(
         self, job_id: str, job_data: dict[str, Any], pipeline_span
     ) -> None:
         workspace = self.temp_workspace_service.create(job_id)
         await self.session_manager.start(job_id, workspace)
         current_stage = "initialize"
+        source_hash_for_release: str | None = None
         try:
+
             source_doc = job_data["source_document"]
             translation_config = job_data["translation_config"]
             cost_attribution = job_data["cost_attribution"]
@@ -267,21 +427,40 @@ class PipelineOrchestrator:
             input_filename = source_doc.get("original_filename", "input.pdf")
             local_input_path = workspace.input_dir / input_filename
             blob_path = self._extract_blob_path(source_doc["gcs_uri"])
+            source_hash = str(job_data.get("source_hash") or "").strip()
+            requested_source_lang = translation_config.get("source_language")
 
             current_stage = "download_input"
-            await self.storage.download_file(blob_path, local_input_path)
+            if source_hash:
+                # Multi-target-language batches submit N sibling jobs that
+                # share one source document. Download + DOCX->PDF conversion
+                # + source-language auto-detect are 100% language-independent,
+                # so when several sibling jobs for the same source_hash run
+                # concurrently in this process, only the first one actually
+                # does this work -- the rest await and reuse its result
+                # instead of re-downloading/re-converting/re-detecting.
+                local_input_path, source_lang = await self._prepare_input_shared(
+                    job_id=job_id,
+                    source_hash=source_hash,
+                    source_doc=source_doc,
+                    workspace_input_dir=workspace.input_dir,
+                    local_input_path=local_input_path,
+                    requested_source_lang=requested_source_lang,
+                )
+                source_hash_for_release = source_hash
 
-            if source_doc.get("format") == "docx":
-                logger.info(f"Converting DOCX to PDF for job {job_id}")
-                local_input_path = convert_docx_to_pdf(
-                    local_input_path, workspace.input_dir
+            else:
+                local_input_path, source_lang = await self._prepare_input_solo(
+                    job_id=job_id,
+                    blob_path=blob_path,
+                    source_doc=source_doc,
+                    workspace_input_dir=workspace.input_dir,
+                    local_input_path=local_input_path,
+                    requested_source_lang=requested_source_lang,
                 )
 
             await self.session_manager.set_input_path(job_id, local_input_path)
 
-            source_lang = translation_config.get("source_language")
-            if not source_lang or source_lang == "auto":
-                source_lang = self.language_detector.detect(local_input_path)
 
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
@@ -311,33 +490,70 @@ class PipelineOrchestrator:
                 target_language_name=target_lang,
             )
 
-            tracker = _PipelineProgressTracker(job_id=job_id)
-            processor = JobProcessor(progress_tracker=tracker)
-            processor_config = {
-                "job_id": job_id,
-                "input_file": str(local_input_path),
-                "output_dir": str(workspace.attempts_dir),
-                "lang_in": source_lang,
-                "lang_out": target_lang,
-                "domain": domain,
-                "intent": intent,
-                "model_list": model_chain,
-                "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
-                "glossaries": glossaries,
-                "add_cover_page": True,
-                "no_dual": True,
-                "enable_dlp": enable_dlp,
-            }
+            is_txt = source_doc.get("format") == "txt"
+            is_docx = source_doc.get("format") == "docx" or is_txt
 
             current_stage = "translate"
-            attempt_result = await processor.translate(processor_config)
-            if not attempt_result:
-                raise RuntimeError("No attempt report produced by translation pipeline")
+            if is_docx:
+                # Native DOCX translation: direct OOXML manipulation, no PDF
+                # conversion, no LibreOffice subprocess -- see
+                # docs/architecture/pdf-vs-docx-translation-architecture.md.
+                docx_processor = DocxJobProcessor(
+                    glossary_service=self.glossary_service
+                )
+                docx_config = {
+                    "job_id": job_id,
+                    "input_file": str(local_input_path),
+                    "output_dir": str(workspace.attempts_dir),
+                    "lang_in": source_lang,
+                    "lang_out": target_lang,
+                    "domain": domain,
+                    "model_list": model_chain,
+                    "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
+                    "enable_dlp": enable_dlp,
+                    "auto_extract_glossary": True,
+                    # Plain-text jobs are unwrapped back to .txt after
+                    # translation (see docx_path_to_txt_bytes below); a DOCX
+                    # cover page would leak formatted disclaimer paragraphs
+                    # into what the user expects to be clean translated text,
+                    # so it is only added for genuine .docx deliverables.
+                    "add_cover_page": not is_txt,
+                }
+                attempt_result = await docx_processor.translate(docx_config)
+                if not attempt_result:
+                    raise RuntimeError(
+                        "No attempt report produced by DOCX translation pipeline"
+                    )
+                mono_pdf_path = attempt_result.get("output_path")
+            else:
+                tracker = _PipelineProgressTracker(job_id=job_id)
+                processor = JobProcessor(progress_tracker=tracker)
+                processor_config = {
+                    "job_id": job_id,
+                    "input_file": str(local_input_path),
+                    "output_dir": str(workspace.attempts_dir),
+                    "lang_in": source_lang,
+                    "lang_out": target_lang,
+                    "domain": domain,
+                    "intent": intent,
+                    "model_list": model_chain,
+                    "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
+                    "glossaries": glossaries,
+                    "add_cover_page": True,
+                    "no_dual": True,
+                    "enable_dlp": enable_dlp,
+                }
+                attempt_result = await processor.translate(processor_config)
+                if not attempt_result:
+                    raise RuntimeError(
+                        "No attempt report produced by translation pipeline"
+                    )
+                mono_pdf_path = attempt_result.get("mono_pdf_path")
 
             quality_rpt = attempt_result.get("quality_report") or {}
             attempt_idx = int(attempt_result.get("attempt_index") or 1)
             token_usage = attempt_result.get("token_usage") or {}
-            mono_pdf_path = attempt_result.get("mono_pdf_path")
+
 
             await self.session_manager.record_attempt(
                 job_id,
@@ -364,11 +580,26 @@ class PipelineOrchestrator:
             raw_output_name = str(
                 source_doc.get("output_filename")
                 or source_doc.get("original_filename")
-                or "output.pdf"
+                or ("output.docx" if is_docx else "output.pdf")
             )
-            if raw_output_name.lower().endswith(".docx"):
+            # Native DOCX translation produces a .docx output (no format
+            # conversion); only the legacy PDF pipeline needs the
+            # .docx -> .pdf filename rewrite.
+            if not is_docx and raw_output_name.lower().endswith(".docx"):
                 raw_output_name = raw_output_name[:-5] + ".pdf"
             preferred_output_name = raw_output_name
+
+            # A .txt input was translated via the DOCX bridge (see
+            # _convert_txt_to_docx); unwrap the winning .docx attempt back to
+            # plain text before uploading so the output file matches the
+            # original .txt format.
+            if is_txt and mono_pdf_path:
+                txt_output_path = Path(str(mono_pdf_path)).with_suffix(".txt")
+                txt_output_path.write_bytes(
+                    docx_path_to_txt_bytes(Path(str(mono_pdf_path)))
+                )
+                mono_pdf_path = txt_output_path
+
             selected_output_uri = None
 
             current_stage = "upload_output"
@@ -464,6 +695,21 @@ class PipelineOrchestrator:
             await self.session_manager.finish(job_id, "completed")
             logger.info(f"Translation pipeline finished for job {job_id}")
 
+            # Auto-extracted glossary terms are only ever persisted to the
+            # shared domain glossary AFTER the job has been marked completed
+            # successfully -- terms from failed/low-quality attempts must
+            # never reach the shared glossary that every future job reads
+            # from (see docs/architecture/pdf-vs-docx-translation-architecture.md).
+            if is_docx and attempt_result.get("extracted_terms"):
+                try:
+                    docx_processor.persist_extracted_terms(attempt_result)
+                except Exception:
+                    logger.warning(
+                        f"Failed to persist auto-extracted glossary terms for job {job_id}",
+                        exc_info=True,
+                    )
+
+
             quality_report = attempt_result.get("quality_report") or {}
             set_root_span_attributes(
                 {
@@ -510,3 +756,8 @@ class PipelineOrchestrator:
                 pass
             await self.session_manager.discard(job_id)
             self.temp_workspace_service.cleanup(job_id)
+            if source_hash_for_release is not None:
+                await get_shared_document_prep_cache().release(
+                    source_hash_for_release, job_id
+                )
+

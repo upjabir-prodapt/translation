@@ -20,6 +20,8 @@ from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.responses import MultiTranslateJobResponse
 from src.api.schemas.responses import MultiTranslateResponse
 from src.api.schemas.responses import TranslateResponse
+from src.api.services.cloud_tasks_service import PRIORITY_HIGH
+from src.api.services.cloud_tasks_service import PRIORITY_STANDARD
 from src.api.services.cloud_tasks_service import CloudTasksService
 from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
@@ -117,48 +119,46 @@ class TranslationService:
                 "page_count": None,
             }
 
+        # source_hash is retained for the in-process shared_document_prep cache
+        # (dedupes download/parse work across sibling jobs in one multi-target-
+        # language batch). It is no longer used for a cross-job result cache --
+        # see docs/local-testing-guide.md / project history: a whole-document
+        # BigQuery result cache was removed because it silently served stale
+        # translations whenever only part of a document changed, and it was
+        # redundant with the finer-grained Redis (Memorystore via PSC)
+        # per-text-batch LLM cache in
+        # src/worker/doctranslator/translator/translation_cache.py.
         source_hash = hashlib.sha256(content).hexdigest()
-        prepared: list[
-            tuple[str, int, TranslateRequest, dict[str, Any], Any, bool]
-        ] = []
+
+        prepared: list[tuple[str, int, TranslateRequest, dict[str, Any]]] = []
         for batch_index, request in enumerate(requests):
             config = self._normalize_config(request)
             job_id = str(uuid.uuid4())
             config["job_id"] = job_id
-            cached_job = await self.bigquery.get_completed_job_by_hash(
-                source_hash=source_hash,
-                lang_out=config["lang_out"],
-                domain=config["domain"],
-            )
-            is_cached = bool(cached_job and cached_job.get("result"))
-            prepared.append(
-                (job_id, batch_index, request, config, cached_job, is_cached)
-            )
+            prepared.append((job_id, batch_index, request, config))
 
-        has_cache_miss = any(not is_cached for *_, is_cached in prepared)
-        input_gs_uri = ""
-        if has_cache_miss:
-            input_gs_uri = await self.storage.upload_input_pdf(
-                file_content=content,
-                filename=metadata["filename"],
-                job_id=f"batches/{batch_id}",
-            )
+        input_gs_uri = await self.storage.upload_input_pdf(
+            file_content=content,
+            filename=metadata["filename"],
+            job_id=f"batches/{batch_id}",
+        )
 
         now = datetime.now(UTC)
-        job_records: list[tuple[dict[str, Any], bool]] = []
-        for job_id, batch_index, request, config, cached_job, is_cached in prepared:
-            source_uri = input_gs_uri
-            if is_cached:
-                source_uri = (cached_job.get("source_document") or {}).get(
-                    "gcs_uri", ""
-                )
+        # Same document for every target language in a batch, so the routing
+        # tier is identical across them -- compute it once.
+        effective_priority = self._resolve_effective_priority(requests[0])
+        batch_doc_format = str(
+            getattr(requests[0].document, "format", "") or ""
+        ).lower()
+        job_records: list[dict[str, Any]] = []
+        for job_id, batch_index, request, config in prepared:
             job_data = {
                 "job_id": job_id,
                 "batch_id": batch_id,
                 "batch_index": batch_index,
-                "status": job_status.COMPLETED if is_cached else job_status.QUEUED,
+                "status": job_status.QUEUED,
                 "source_document": {
-                    "gcs_uri": source_uri,
+                    "gcs_uri": input_gs_uri,
                     "format": request.document.format,
                     "page_count": metadata.get("page_count"),
                     "source_language": config["lang_in"],
@@ -173,28 +173,36 @@ class TranslationService:
                     "domain": config["domain"],
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
-                "processing_options": request.processing_options.model_dump(),
+                # Record the priority actually used, not what the client asked
+                # for, so BigQuery reflects the real routing decision.
+                "processing_options": {
+                    **request.processing_options.model_dump(),
+                    "priority": effective_priority,
+                },
                 "error_message": None,
-                "result": cached_job.get("result") if is_cached else None,
+                "result": None,
                 "config": config,
                 "source_hash": source_hash,
                 "submitted_at": now,
-                "completed_at": now if is_cached else None,
+                "completed_at": None,
             }
             await self.bigquery.upsert_translation_job(job_data)
-            job_records.append((job_data, is_cached))
+            job_records.append(job_data)
 
         parent_ctx = otel_context.get_current()
         responses: list[MultiTranslateJobResponse] = []
-        for job_data, is_cached in job_records:
+        for job_data in job_records:
             status = job_data["status"]
-            if not is_cached:
-                try:
-                    await self._schedule_background_pipeline(
-                        job_data["job_id"], job_data, parent_ctx
-                    )
-                except Exception:
-                    status = job_status.FAILED
+            try:
+                await self._schedule_background_pipeline(
+                    job_data["job_id"],
+                    job_data,
+                    parent_ctx,
+                    priority=effective_priority,
+                    doc_format=batch_doc_format,
+                )
+            except Exception:
+                status = job_status.FAILED
             responses.append(
                 MultiTranslateJobResponse(
                     job_id=job_data["job_id"],
@@ -233,20 +241,14 @@ class TranslationService:
                     "page_count": None,
                 }
 
+            # source_hash is retained for the in-process shared_document_prep
+            # cache only -- see the comment in submit_translations() above for
+            # why the old whole-document BigQuery result cache was removed.
             source_hash = hashlib.sha256(content).hexdigest()
+            effective_priority = self._resolve_effective_priority(request)
 
             config = self._normalize_config(request)
             config["job_id"] = job_id
-
-            cached_job = await self.bigquery.get_completed_job_by_hash(
-                source_hash=source_hash,
-                lang_out=config["lang_out"],
-                domain=config["domain"],
-            )
-            if cached_job and cached_job.get("result"):
-                return await self._serve_from_cache(
-                    request, job_id, metadata, source_hash, config, cached_job
-                )
 
             input_gs_uri = await self.storage.upload_input_pdf(
                 file_content=content,
@@ -280,7 +282,8 @@ class TranslationService:
                 "processing_options": {
                     "enable_dlp": request.processing_options.enable_dlp,
                     "enable_chunking": request.processing_options.enable_chunking,
-                    "priority": request.processing_options.priority,
+                    # Effective (server-decided) priority, not the client's.
+                    "priority": effective_priority,
                 },
                 "error_message": None,
                 "result": None,
@@ -297,7 +300,15 @@ class TranslationService:
             await self.bigquery.upsert_translation_job(job_data)
 
             parent_ctx = otel_context.get_current()
-            await self._schedule_background_pipeline(job_id, job_data, parent_ctx)
+            await self._schedule_background_pipeline(
+                job_id,
+                job_data,
+                parent_ctx,
+                priority=effective_priority,
+                doc_format=str(
+                    getattr(request.document, "format", "") or ""
+                ).lower(),
+            )
 
             logger.info("Submitted translation job %s", job_id)
 
@@ -314,60 +325,6 @@ class TranslationService:
             except Exception:
                 pass
             raise
-
-    async def _serve_from_cache(
-        self,
-        request: TranslateRequest,
-        job_id: str,
-        metadata: dict[str, Any],
-        source_hash: str,
-        config: dict[str, Any],
-        cached_job: dict[str, Any],
-    ) -> TranslateResponse:
-        """Write a pre-completed job record reusing the cached result."""
-        now = datetime.now(UTC)
-        job_data = {
-            "job_id": job_id,
-            "status": job_status.COMPLETED,
-            "source_document": {
-                "gcs_uri": (cached_job.get("source_document") or {}).get("gcs_uri", ""),
-                "format": request.document.format,
-                "page_count": metadata.get("page_count"),
-                "source_language": config["lang_in"],
-                "original_filename": metadata["filename"],
-                "output_filename": metadata["filename"],
-                "file_size_bytes": metadata["size_bytes"],
-                "checksum": source_hash,
-            },
-            "translation_config": {
-                "source_language": config["lang_in"],
-                "target_language": config["lang_out"],
-                "domain": config["domain"],
-            },
-            "cost_attribution": request.cost_attribution.model_dump(),
-            "processing_options": {
-                "enable_dlp": request.processing_options.enable_dlp,
-                "enable_chunking": request.processing_options.enable_chunking,
-                "priority": request.processing_options.priority,
-            },
-            "error_message": None,
-            "result": cached_job.get("result"),
-            "config": config,
-            "source_hash": source_hash,
-            "submitted_at": now,
-            "completed_at": now,
-        }
-        await self.bigquery.upsert_translation_job(job_data)
-        logger.info(
-            "Cache hit for job %s: reusing result from %s",
-            job_id,
-            cached_job.get("job_id"),
-        )
-        return TranslateResponse(
-            job_id=job_id,
-            status=job_status.COMPLETED,
-            status_url=f"/api/v1/translate/{job_id}",
-        )
 
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""
@@ -415,11 +372,28 @@ class TranslationService:
                 "Failed to mark job %s as failed after enqueue error: %s", job_id, e
             )
 
+    @staticmethod
+    def _resolve_effective_priority(request: TranslateRequest) -> str:
+        """Decide the queue tier for a job. Server-side only.
+
+        The client's `processing_options.priority` is deliberately IGNORED --
+        users must not be able to promote their own work. Promotion is driven
+        purely by document format via `HIGH_PRIORITY_FORMATS`, so short
+        text jobs are not stuck behind multi-minute PDF jobs.
+        """
+        if not settings.HIGH_PRIORITY_ROUTING_ENABLED:
+            return PRIORITY_STANDARD
+        doc_format = str(getattr(request.document, "format", "") or "").lower()
+        high_formats = {str(f).lower() for f in settings.HIGH_PRIORITY_FORMATS}
+        return PRIORITY_HIGH if doc_format in high_formats else PRIORITY_STANDARD
+
     async def _schedule_background_pipeline(
         self,
         job_id: str,
         job_data: dict[str, Any],
         parent_ctx=None,
+        priority: str | None = None,
+        doc_format: str | None = None,
     ) -> None:
         """Schedule translation via in-process task (local) or Cloud Tasks (prod)."""
         if settings.API_USE_BACKGROUND_PIPELINE:
@@ -445,6 +419,8 @@ class TranslationService:
                 job_id,
                 traceparent=traceparent,
                 tracestate=tracestate,
+                priority=priority,
+                doc_format=doc_format,
             )
         except Exception as e:
             logger.error("Cloud Tasks enqueue failed for job %s: %s", job_id, e)

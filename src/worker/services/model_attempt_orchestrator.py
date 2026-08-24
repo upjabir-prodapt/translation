@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,9 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from src.config.constants import settings
+from src.worker.doctranslator.format.pdf.translation_config import (
+    SharedContextCrossSplitPart,
+)
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.format.pdf.translation_config import (
     TranslationCoverPageMetadata,
@@ -22,6 +26,30 @@ if TYPE_CHECKING:
     from src.worker.services.processor_service import JobProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_attempt_working_dir(translation_config: TranslationConfig | None) -> None:
+    """Best-effort removal of a superseded/losing attempt's working directory.
+
+    Each model attempt parses the full document into its own working_dir
+    (IL tree, tracking JSON, etc). Previously all attempt working_dirs stayed
+    on disk until the whole job finished (TempWorkspaceService.cleanup),
+    meaning peak disk usage scaled with MAX_MODEL_ATTEMPTS. Removing a
+    superseded attempt's working_dir as soon as we know it lost keeps at
+    most two attempts' worth of intermediates on disk at once.
+    """
+    if translation_config is None:
+        return
+    working_dir = getattr(translation_config, "working_dir", None)
+    if not working_dir:
+        return
+    try:
+        shutil.rmtree(str(working_dir), ignore_errors=True)
+    except Exception:
+        logger.debug(
+            "Failed to clean up superseded attempt working_dir %s", working_dir
+        )
+
 
 
 class ModelAttemptOrchestrator:
@@ -42,13 +70,17 @@ class ModelAttemptOrchestrator:
             int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
             len(model_list),
         )
-        judge = GoogleADKJudgeAgent(config.get("judge_model"))
+        judge = GoogleADKJudgeAgent(
+            config.get("judge_model"),
+            region=config.get("judge_model_region"),
+        )
         best_attempt_result: dict[str, Any] | None = None
         best_attempt_score = -1.0
         best_attempt_config: dict[str, Any] | None = None
         best_translation_config: TranslationConfig | None = None
         best_quality_result: QualityJudgeResult | None = None
         attempt_reports: list[dict[str, Any]] = []
+        shared_context: SharedContextCrossSplitPart | None = None
 
         for model_index in range(max_attempts):
             (
@@ -64,7 +96,13 @@ class ModelAttemptOrchestrator:
                 output_base_dir=output_base_dir,
                 max_attempts=max_attempts,
                 judge=judge,
+                shared_context=shared_context,
             )
+
+            if translation_config is not None and shared_context is None:
+                shared_context = getattr(
+                    translation_config, "shared_context_cross_split_part", None
+                )
 
             if not attempt_result or not quality_result or not attempt_report:
                 continue
@@ -73,6 +111,11 @@ class ModelAttemptOrchestrator:
             final_score = quality_result.final_score
 
             if final_score > best_attempt_score:
+                # The previous best attempt (if any) has just been
+                # superseded -- its working_dir (full parsed IL tree,
+                # tracking JSON, etc) is no longer needed, so free the disk
+                # space now instead of waiting for the whole job to finish.
+                _cleanup_attempt_working_dir(best_translation_config)
                 best_attempt_score = final_score
                 best_attempt_result = {
                     **attempt_result,
@@ -84,9 +127,29 @@ class ModelAttemptOrchestrator:
                 best_attempt_config = attempt_config
                 best_translation_config = translation_config
                 best_quality_result = quality_result
+            else:
+                # This attempt scored lower than the current best -- clean
+                # up its working_dir immediately rather than at job end.
+                _cleanup_attempt_working_dir(translation_config)
 
             if quality_result.pass_fail:
                 break
+
+            # QUALITY_EARLY_ACCEPT_THRESHOLD was declared in Settings but
+            # never read anywhere, so a near-miss score still burned a full
+            # extra attempt (re-parsing and re-translating the whole
+            # document). Accept a score that is already comfortably good
+            # rather than paying 2-3x latency chasing a marginal gain.
+            early_accept = float(settings.QUALITY_EARLY_ACCEPT_THRESHOLD)
+            if 0 < early_accept <= final_score:
+                logger.info(
+                    f"Early-accepting attempt {attempt_config['attempt_index']} "
+                    f"(score={final_score:.3f} >= "
+                    f"QUALITY_EARLY_ACCEPT_THRESHOLD={early_accept}); "
+                    "skipping remaining model attempts"
+                )
+                break
+
 
         if best_attempt_result is None:
             raise RuntimeError("All translation attempts failed")

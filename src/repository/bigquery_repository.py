@@ -287,67 +287,26 @@ class BigQueryRepository:
                 query=query,
             ) from exc
 
-    async def get_completed_job_by_hash(
-        self,
-        source_hash: str,
-        lang_out: str,
-        domain: str,
-    ) -> dict[str, Any] | None:
-        """Return the most recent completed job matching content hash and translation target."""
-        jobs_table = self._validate_table_name(self.jobs_table)
-        # nosec B608 – table name validated; all values bound via ScalarQueryParameter.
-        query = f"""
-        SELECT *
-        FROM `{jobs_table}`
-        WHERE source_hash = @source_hash
-          AND status = 'completed'
-          AND JSON_VALUE(translation_config, '$.target_language') = @lang_out
-          AND JSON_VALUE(translation_config, '$.domain') = @domain
-        ORDER BY completed_at DESC
-        LIMIT 1
-        """  # noqa: S608  # nosec B608
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("source_hash", "STRING", source_hash),
-                bigquery.ScalarQueryParameter("lang_out", "STRING", lang_out),
-                bigquery.ScalarQueryParameter("domain", "STRING", domain),
-            ]
-        )
-        with tracer_repository.start_as_current_span(
-            "bigquery.get_by_hash",
-            kind=SpanKind.CLIENT,
-            attributes={
-                "db.system": "bigquery",
-                "db.name": self.dataset,
-                "db.sql.table": settings.BIGQUERY_TABLE,
-                "db.operation": "SELECT",
-            },
-        ) as span:
-            try:
-                query_job = await asyncio.to_thread(
-                    self.client.query, query, job_config=job_config
-                )
-                rows = list(await asyncio.to_thread(query_job.result))
-                span.set_attribute("cache_hit", len(rows) > 0)
-                if not rows:
-                    return None
-                return self._deserialize_job_row(rows[0])
-            except GoogleAPIError as exc:
-                raise self._make_bq_error(
-                    f"Failed to query translation job by hash: {exc}",
-                    table=self.jobs_table,
-                    query=query,
-                ) from exc
-
     async def list_translation_jobs(
         self,
         status: str | None = None,
         limit: int = 10,
         offset: int = 0,
+        user_id: str | None = None,
+        submitted_after: datetime | None = None,
     ) -> list[dict[str, Any]]:
         jobs_table = self._validate_table_name(self.jobs_table)
-        where_clause = "WHERE status = @status" if status else ""
-        # nosec B608 – table name validated; status/limit/offset bound via parameters.
+        conditions: list[str] = []
+        if status:
+            conditions.append("status = @status")
+        if user_id:
+            conditions.append(
+                "JSON_VALUE(cost_attribution, '$.user_id') = @user_id"
+            )
+        if submitted_after:
+            conditions.append("submitted_at >= @submitted_after")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        # nosec B608 – table name validated; all filter values bound via parameters.
         query = f"""
         SELECT *
         FROM `{jobs_table}`
@@ -361,6 +320,14 @@ class BigQueryRepository:
         ]
         if status:
             params.append(bigquery.ScalarQueryParameter("status", "STRING", status))
+        if user_id:
+            params.append(bigquery.ScalarQueryParameter("user_id", "STRING", user_id))
+        if submitted_after:
+            params.append(
+                bigquery.ScalarQueryParameter(
+                    "submitted_after", "TIMESTAMP", submitted_after
+                )
+            )
 
         job_config = bigquery.QueryJobConfig(query_parameters=params)
         try:

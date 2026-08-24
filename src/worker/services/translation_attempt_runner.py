@@ -11,6 +11,10 @@ from typing import Any
 from opentelemetry.trace import SpanKind
 
 from src.config.tracing import tracer_pipeline
+from src.config.translation_routing import ModelRoute
+from src.worker.doctranslator.format.pdf.translation_config import (
+    SharedContextCrossSplitPart,
+)
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
@@ -34,11 +38,12 @@ class TranslationAttemptRunner:
         self,
         *,
         model_index: int,
-        model_list: list[str],
+        model_list: list[ModelRoute] | list[str],
         config: dict[str, Any],
         output_base_dir: Path,
         max_attempts: int,
         judge: GoogleADKJudgeAgent,
+        shared_context: SharedContextCrossSplitPart | None = None,
     ) -> tuple[
         dict[str, Any] | None,
         dict[str, Any],
@@ -47,19 +52,26 @@ class TranslationAttemptRunner:
         dict[str, Any] | None,
     ]:
         attempt_index = model_index + 1
-        selected_model = model_list[model_index]
+        selected_route = model_list[model_index]
+        if isinstance(selected_route, ModelRoute):
+            selected_model = selected_route.model_id
+            selected_region = selected_route.region
+        else:
+            selected_model = str(selected_route)
+            selected_region = None
         attempt_output_dir = output_base_dir / f"iter_{attempt_index}"
         attempt_output_dir.mkdir(parents=True, exist_ok=True)
         attempt_config = {
             **config,
             "selected_model": selected_model,
+            "selected_model_region": selected_region,
             "attempt_index": attempt_index,
         }
         logger.info(
             f"Attempt {attempt_index}/{max_attempts}: attempt_config={attempt_config}"
         )
         translation_config = self._processor._build_translation_config(
-            attempt_config, attempt_output_dir
+            attempt_config, attempt_output_dir, shared_context=shared_context
         )
 
         await self._processor.progress_tracker.update(
@@ -99,7 +111,9 @@ class TranslationAttemptRunner:
                 source_text=source_text,
                 translated_text=translated_text,
             )
-        token_usage = self.collect_token_usage(translation_config, selected_model)
+        token_usage = self.collect_token_usage(
+            translation_config, selected_model, selected_region
+        )
         attempt_report = {
             "attempt_index": attempt_index,
             "model_id": selected_model,
@@ -141,7 +155,10 @@ class TranslationAttemptRunner:
         )
 
     def collect_token_usage(
-        self, translation_config: TranslationConfig, selected_model: str
+        self,
+        translation_config: TranslationConfig,
+        selected_model: str,
+        selected_region: str | None = None,
     ) -> dict[str, Any]:
         translator = translation_config.translator
         prompt_tokens = self._processor._counter_value(
@@ -161,6 +178,7 @@ class TranslationAttemptRunner:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cache_hit_tokens=cache_hit_tokens,
+            region=selected_region,
         )
         return {
             "model_id": selected_model,

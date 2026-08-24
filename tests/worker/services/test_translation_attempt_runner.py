@@ -89,3 +89,51 @@ class TestTranslationAttemptRunner:
         assert result == {"status": "success"}
         assert quality.pass_fail is True
         assert report["model_id"] == "gemini-2.5-flash"
+
+    @patch.object(JobProcessor, "_run_single_attempt", new_callable=AsyncMock)
+    @patch.object(JobProcessor, "_build_translation_config")
+    async def test_run_attempt_passes_shared_context(
+        self, mock_build, mock_run, runner, processor
+    ):
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.working_dir = Path(tempfile.gettempdir()) / "work"
+        mock_trans_config.translator = MagicMock(
+            prompt_token_count=MagicMock(value=0),
+            completion_token_count=MagicMock(value=0),
+            token_count=MagicMock(value=0),
+            cache_hit_prompt_token_count=MagicMock(value=0),
+        )
+        mock_build.return_value = mock_trans_config
+        mock_run.return_value = {"status": "success"}
+
+        mock_judge = MagicMock()
+        mock_judge.evaluate_async = AsyncMock(
+            return_value=QualityJudgeResult(
+                alignment_score=0.9,
+                omission_score=0.9,
+                hallucination_score=0.9,
+                final_score=0.9,
+                pass_fail=True,
+                reasons=[],
+                model="judge",
+            )
+        )
+
+        mock_shared_context = MagicMock()
+        with patch(
+            "src.worker.services.translation_attempt_runner.extract_attempt_text",
+            return_value=("source", "target"),
+        ):
+            await runner.run_attempt(
+                model_index=0,
+                model_list=["gemini-2.5-flash"],
+                config={"job_id": "1", "output_dir": tempfile.gettempdir()},
+                output_base_dir=Path(tempfile.gettempdir()),
+                max_attempts=1,
+                judge=mock_judge,
+                shared_context=mock_shared_context,
+            )
+
+        mock_build.assert_called_once()
+        assert mock_build.call_args.kwargs["shared_context"] == mock_shared_context
+

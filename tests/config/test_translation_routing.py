@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 import pytest
+from src.config.translation_routing import ModelRoute
+from src.config.translation_routing import get_language_display_name
 from src.config.translation_routing import get_language_mapper
 from src.config.translation_routing import get_model_selection_entries
 from src.config.translation_routing import normalize_domain
@@ -45,13 +47,39 @@ class TestTranslationRouting:
             }
         ]
         models = select_model_list("en", "fr", "legal")
-        assert models == ["m1"]
+        assert models == [ModelRoute(model_id="m1", region=None)]
+
+    @patch("src.config.translation_routing.get_model_selection_entries")
+    def test_select_model_list_with_region(self, mock_get_entries):
+        mock_get_entries.return_value = [
+            {
+                "source_language": "en",
+                "target_language": "de",
+                "domain": "commercial",
+                "model_chain": [
+                    {
+                        "model_id": "gemini-3.5-flash",
+                        "priority": 1,
+                        "region": "europe-west3",
+                    },
+                    {"model_id": "gemini-2.5-pro", "priority": 2},
+                ],
+            }
+        ]
+        models = select_model_list("en", "de", "commercial")
+        assert models == [
+            ModelRoute(model_id="gemini-3.5-flash", region="europe-west3"),
+            ModelRoute(model_id="gemini-2.5-pro", region=None),
+        ]
 
     @patch("src.config.translation_routing.get_model_selection_entries")
     def test_select_model_list_failure(self, mock_get_entries):
         mock_get_entries.return_value = []
         result = select_model_list("en", "de", "legal")
         assert len(result) == 1
+        assert isinstance(result[0], ModelRoute)
+        assert result[0].model_id == "gemini-3.5-flash"
+        assert result[0].region == "europe-west3"
 
     @patch("src.config.translation_routing._load_json")
     def test_get_model_selection_entries_list(self, mock_load):
@@ -84,3 +112,18 @@ class TestTranslationRouting:
                 get_model_selection_entries()
         finally:
             get_model_selection_entries.cache_clear()
+
+    def test_get_language_display_name_from_code(self):
+        assert get_language_display_name("en") == "English"
+        assert get_language_display_name("fr") == "French"
+
+    def test_get_language_display_name_from_alias(self):
+        assert get_language_display_name("French") == "French"
+        assert get_language_display_name("ENGLISH") == "English"
+
+    def test_get_language_display_name_unknown_falls_back_to_title_case(self):
+        assert get_language_display_name("auto") == "Auto"
+
+    def test_get_language_display_name_empty(self):
+        assert get_language_display_name(None) == "N/A"
+        assert get_language_display_name("") == "N/A"

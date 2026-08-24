@@ -3,7 +3,11 @@
 from unittest.mock import patch
 
 import pytest
+from src.config.translation_routing import ModelRoute
 from src.worker.doctranslator.translator.factory import create_translator
+from src.worker.doctranslator.translator.factory import (
+    create_translator_from_model_list,
+)
 from src.worker.doctranslator.translator.provider_types import LLMProvider
 from src.worker.doctranslator.translator.providers import ClaudeVertexAITranslator
 from src.worker.doctranslator.translator.providers import GeminiVertexAITranslator
@@ -64,3 +68,69 @@ class TestTranslatorFactory:
         )
         assert translator.model == chain_model
         assert translator.model != "settings-placeholder"
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_region_is_passed_through_to_gemini_client(self, mock_client):
+        translator = create_translator(
+            "gemini-3.5-flash",
+            lang_in="en",
+            lang_out="de",
+            qps=10,
+            region="europe-west3",
+        )
+        assert translator.region == "europe-west3"
+        _, kwargs = mock_client.call_args
+        assert kwargs["location"] == "europe-west3"
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_region_defaults_to_settings_when_not_provided(self, mock_client):
+        from src.config.constants import settings
+
+        translator = create_translator(
+            "gemini-2.5-flash",
+            lang_in="en",
+            lang_out="de",
+            qps=10,
+        )
+        assert translator.region == (settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION)
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_region_defaults_to_location_when_gemini_region_empty(self, mock_client):
+        from src.config.constants import settings
+
+        with patch.object(settings, "GEMINI_MODEL_REGION", ""):
+            translator = create_translator(
+                "gemini-2.5-flash",
+                lang_in="en",
+                lang_out="de",
+                qps=10,
+            )
+            assert translator.region == settings.GOOGLE_CLOUD_LOCATION
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_create_translator_from_model_list_with_model_route(self, mock_client):
+        model_list = [
+            ModelRoute(model_id="gemini-3.5-flash", region="europe-west3"),
+            ModelRoute(model_id="gemini-2.5-pro", region=None),
+        ]
+        translator = create_translator_from_model_list(
+            model_list,
+            lang_in="en",
+            lang_out="de",
+            qps=10,
+            model_index=0,
+        )
+        assert translator.model == "gemini-3.5-flash"
+        assert translator.region == "europe-west3"
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_create_translator_from_model_list_backward_compat_str_list(
+        self, mock_client
+    ):
+        translator = create_translator_from_model_list(
+            ["gemini-2.5-flash"],
+            lang_in="en",
+            lang_out="de",
+            qps=10,
+        )
+        assert translator.model == "gemini-2.5-flash"

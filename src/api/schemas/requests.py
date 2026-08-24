@@ -19,7 +19,7 @@ class DocumentInput(BaseModel):
     """Document to be translated."""
 
     content: str = Field(..., description="Base64-encoded document content")
-    format: Literal["pdf", "docx"] = Field("pdf", description="Document format")
+    format: Literal["pdf", "docx", "txt"] = Field("pdf", description="Document format")
     filename: str = Field(..., min_length=1, description="Original filename")
 
     @field_validator("content")
@@ -37,8 +37,10 @@ class DocumentInput(BaseModel):
     def validate_filename(cls, v: str) -> str:
         """Validate filename has supported extension."""
         lower = v.strip().lower()
-        if not (lower.endswith(".pdf") or lower.endswith(".docx")):
-            raise ValueError("filename must end with .pdf or .docx")
+        if not (
+            lower.endswith(".pdf") or lower.endswith(".docx") or lower.endswith(".txt")
+        ):
+            raise ValueError("filename must end with .pdf, .docx, or .txt")
         return v.strip()
 
 

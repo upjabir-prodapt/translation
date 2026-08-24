@@ -148,6 +148,13 @@ class JobStatusResponse(BaseModel):
         None, description="Signed URL to download translated output when available"
     )
     error_message: str | None = Field(None, description="Error message if job failed")
+    filename: str | None = Field(
+        None, description="Original (source) document filename"
+    )
+    source_language: str | None = Field(
+        None, description="Source language, if known/detected"
+    )
+    target_language: str | None = Field(None, description="Target language")
 
 
 class JobListResponse(BaseModel):

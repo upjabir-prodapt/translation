@@ -13,10 +13,20 @@ class TokenUsage:
     output_tokens: int = 0
     cache_hit_input_tokens: int = 0
     cache_write_input_tokens: int = 0
+    # Reasoning/"thinking" tokens. Vertex bills these as output tokens but
+    # reports them in a separate `thoughts_token_count` field that is NOT
+    # included in `candidates_token_count`. Tracking them separately keeps
+    # cost reporting honest and makes thinking-budget tuning measurable.
+    thinking_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def billable_output_tokens(self) -> int:
+        """Output tokens as billed by Vertex (response + reasoning)."""
+        return self.output_tokens + self.thinking_tokens
 
     @classmethod
     def from_gemini_usage(cls, usage) -> TokenUsage:
@@ -28,6 +38,7 @@ class TokenUsage:
             cache_hit_input_tokens=int(
                 getattr(usage, "cached_content_token_count", 0) or 0
             ),
+            thinking_tokens=int(getattr(usage, "thoughts_token_count", 0) or 0),
         )
 
     @classmethod
@@ -53,4 +64,5 @@ class TokenUsage:
             + other.cache_hit_input_tokens,
             cache_write_input_tokens=self.cache_write_input_tokens
             + other.cache_write_input_tokens,
+            thinking_tokens=self.thinking_tokens + other.thinking_tokens,
         )

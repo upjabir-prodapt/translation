@@ -6,9 +6,13 @@ from pathlib import Path
 from string import Template
 
 import Levenshtein
+import orjson
 import tiktoken
 from tqdm import tqdm
 
+
+from src.worker.doctranslator.batching import compute_batch_plan
+from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.pdf.document_il import Document
 from src.worker.doctranslator.format.pdf.document_il import Page
 from src.worker.doctranslator.format.pdf.document_il import PdfFont
@@ -33,6 +37,7 @@ from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper impo
     is_pure_numeric_paragraph,
 )
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
+from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.translator.translator import BatchTranslationResponse
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
@@ -177,10 +182,44 @@ class ILTranslatorLLMOnly:
                     return paragraph
         return None
 
+    def _apply_adaptive_batch_plan(self, docs: Document) -> None:
+        """Right-size this run's paragraph batches for the worker pool.
+
+        The DOCX pipeline computes its plan inside `_batch_units()` because it
+        has the whole unit list up front. PDF batches per-page inside
+        `process_page()`, so the document-level token total is only knowable
+        here -- computing it once in `translate()` and overriding the config's
+        cap gives PDF the same one-wave-per-pool sizing without restructuring
+        the per-page batching loop.
+        """
+        total_payload = 0
+        for page in docs.page:
+            for paragraph in page.pdf_paragraph:
+                if paragraph.debug_id is None or paragraph.unicode is None:
+                    continue
+                total_payload += self.calc_token_count(paragraph.unicode)
+
+        plan = compute_batch_plan(
+            total_payload,
+            self.translation_config.pool_max_workers,
+            base_max_tokens=self.translation_config.llm_translation_batch_max_tokens,
+            base_max_items=self.translation_config.llm_translation_batch_max_paragraphs,
+        )
+        self.translation_config.llm_translation_batch_max_tokens = plan.max_tokens
+        self.translation_config.llm_translation_batch_max_paragraphs = plan.max_items
+
+        # batch_count is not known until process_page() has run, so estimate it
+        # from the plan purely for the utilisation/waves figures in the log.
+        estimated_batches = (
+            -(-total_payload // plan.max_tokens) if plan.max_tokens else 0
+        )
+        log_batch_plan("PdfTranslateParagraphs", plan, estimated_batches)
+
     def translate(self, docs: Document) -> None:
         self.il_translator.docs = docs
         tracker = DocumentTranslateTracker()
         self.mid = 0
+        self._apply_adaptive_batch_plan(docs)
 
         if not self.translation_config.shared_context_cross_split_part.first_paragraph:
             # Try to find the first title paragraph
@@ -255,8 +294,13 @@ class ILTranslatorLLMOnly:
             logger.debug(f"save translate tracking to {path}")
             with Path(path).open("w", encoding="utf-8") as f:
                 f.write(tracker.to_json())
+        cache_stats = get_translation_cache().stats_snapshot()
         logger.info(
-            f"Translation completed. Total: {self.total_count}, Successful: {self.ok_count}, Fallback: {self.fallback_count}"
+            f"Translation completed. Total: {self.total_count}, "
+            f"Successful: {self.ok_count}, Fallback: {self.fallback_count}, "
+            f"cache_hits_cumulative={cache_stats['cache_hits']} "
+            f"cache_misses_cumulative={cache_stats['cache_misses']} "
+            f"cache_hit_rate_cumulative={cache_stats['cache_hit_rate']}"
         )
 
     def _is_body_text_paragraph(self, paragraph: PdfParagraph) -> bool:
@@ -997,9 +1041,12 @@ class ILTranslatorLLMOnly:
             json_format_input, should_translate_paragraph = (
                 self._build_json_format_input(inputs)
             )
-            json_format_input_str = json.dumps(
-                json_format_input, ensure_ascii=False, indent=2
-            )
+            # orjson is materially faster than stdlib json for this hot path
+            # (runs once per translation batch, i.e. many times per document).
+            json_format_input_str = orjson.dumps(
+                json_format_input, option=orjson.OPT_INDENT_2
+            ).decode()
+
             batch_text_for_glossary_matching = "\n".join(
                 item.get("input", "") for item in json_format_input
             )

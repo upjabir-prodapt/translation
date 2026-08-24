@@ -63,9 +63,16 @@ async def submit_translation(
     targets = TranslationTargetsInput(
         target_languages=target_languages,
     ).normalized_targets
+    lower_filename = (file.filename or "").lower()
+    if lower_filename.endswith(".docx"):
+        doc_format = "docx"
+    elif lower_filename.endswith(".txt"):
+        doc_format = "txt"
+    else:
+        doc_format = "pdf"
     document = DocumentInput(
         content=base64.b64encode(content).decode("utf-8"),
-        format="docx" if (file.filename or "").lower().endswith(".docx") else "pdf",
+        format=doc_format,
         filename=file.filename or "document.pdf",
     )
     cost_attribution = CostAttributionInput(

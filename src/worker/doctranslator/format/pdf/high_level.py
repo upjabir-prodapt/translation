@@ -810,6 +810,7 @@ def _build_part_config(
 
     if i > 0:
         part_config.watermark_output_mode = WatermarkOutputMode.NoWatermark
+    part_config.split_part_index = i
     return part_config
 
 
@@ -1461,38 +1462,56 @@ def _do_translate_single(
     )
 
     xml_converter = XMLConverter()
-    docs = _build_il_document(doc_pdf2zh, temp_pdf_path, translation_config)
-    _apply_dlp_if_enabled(docs, translation_config, stage_label="post_create_il")
-
-    if translation_config.only_include_translated_page and not docs.page:
-        return None
-
-    if translation_config.debug:
-        xml_converter.write_json(
-            docs, translation_config.get_working_file_path("create_il.debug.json")
-        )
-
-    if check_cid_char(docs):
-        raise ExtractTextError("The document contains too many CID chars.")
-
-    if translation_config.only_parse_generate_pdf:
-        logger.info(
-            "[pdf_translate] Mode: parse-only / generate PDF — skipping translation phases"
-        )
-        pdf_creater = PDFCreater(temp_pdf_path, docs, translation_config, mediabox_data)
-        result = pdf_creater.write(translation_config)
-        result.original_pdf_path = translation_config.input_file
-        return result
-
-    docs = _run_layout_and_structure_phases(
-        docs,
-        doc_pdf2zh,
-        temp_pdf_path,
-        mediabox_data,
-        translation_config,
-        xml_converter,
+    part_idx = getattr(translation_config, "split_part_index", 0)
+    cached_il = translation_config.shared_context_cross_split_part.get_cached_il_doc(
+        part_idx
     )
-    _apply_dlp_if_enabled(docs, translation_config, stage_label="pre_translation")
+
+    if cached_il is not None:
+        logger.info(
+            f"[pdf_translate] Part {part_idx}: Reusing parsed IL tree from prior attempt "
+            "(skipping ILCreater/LayoutParser/TableParser/ParagraphFinder/StylesAndFormulas)"
+        )
+        docs = xml_converter.deepcopy(cached_il)
+    else:
+        docs = _build_il_document(doc_pdf2zh, temp_pdf_path, translation_config)
+        _apply_dlp_if_enabled(docs, translation_config, stage_label="post_create_il")
+
+        if translation_config.only_include_translated_page and not docs.page:
+            return None
+
+        if translation_config.debug:
+            xml_converter.write_json(
+                docs, translation_config.get_working_file_path("create_il.debug.json")
+            )
+
+        if check_cid_char(docs):
+            raise ExtractTextError("The document contains too many CID chars.")
+
+        if translation_config.only_parse_generate_pdf:
+            logger.info(
+                "[pdf_translate] Mode: parse-only / generate PDF — skipping translation phases"
+            )
+            pdf_creater = PDFCreater(
+                temp_pdf_path, docs, translation_config, mediabox_data
+            )
+            result = pdf_creater.write(translation_config)
+            result.original_pdf_path = translation_config.input_file
+            return result
+
+        docs = _run_layout_and_structure_phases(
+            docs,
+            doc_pdf2zh,
+            temp_pdf_path,
+            mediabox_data,
+            translation_config,
+            xml_converter,
+        )
+        _apply_dlp_if_enabled(docs, translation_config, stage_label="pre_translation")
+        translation_config.shared_context_cross_split_part.set_cached_il_doc(
+            part_idx, xml_converter.deepcopy(docs)
+        )
+
     _run_translation_phase(docs, translation_config, xml_converter)
 
     mono_watermark_bytes, dual_watermark_bytes = _try_generate_watermark_bytes(

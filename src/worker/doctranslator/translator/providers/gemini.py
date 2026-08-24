@@ -23,6 +23,8 @@ from src.worker.doctranslator.translator.instrumentation import instrumented_llm
 from src.worker.doctranslator.translator.instrumentation import prompt_fingerprint
 from src.worker.doctranslator.translator.prompts import build_translation_prompt
 from src.worker.doctranslator.translator.provider_types import LLMProvider
+from src.worker.doctranslator.translator.schemas import BatchTranslationResponse
+from src.worker.doctranslator.translator.schemas import TermExtractionResponse
 from src.worker.doctranslator.translator.schemas import TranslationResponse
 from src.worker.doctranslator.translator.usage import TokenUsage
 from src.worker.doctranslator.utils.atomic_integer import AtomicInteger
@@ -56,6 +58,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         lang_out,
         model,
         temperature=0.0,
+        region: str | None = None,
     ):
         super().__init__(lang_in, lang_out)
         if genai is None:
@@ -66,10 +69,19 @@ class GeminiVertexAITranslator(BaseTranslator):
 
         self.model = model
         self.temperature = temperature
+        self.region = region or settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        # A client-side deadline is essential: without it a single slow
+        # generation blocks a pool worker indefinitely (a 454s call was
+        # observed in the 2026-08-24 baseline). HttpOptions.timeout is in
+        # milliseconds. Timeouts surface as retryable errors via
+        # `_RETRYABLE_ERROR_SUBSTRINGS`, so `llm_retry` handles them.
         self.client = genai.Client(
             vertexai=True,
             project=settings.GOOGLE_CLOUD_PROJECT,
-            location=settings.GOOGLE_CLOUD_LOCATION,
+            location=self.region,
+            http_options=genai_types.HttpOptions(
+                timeout=int(float(settings.LLM_CALL_TIMEOUT_SECONDS) * 1000)
+            ),
         )
         self.token_count = AtomicInteger()
         self.prompt_token_count = AtomicInteger()
@@ -79,10 +91,41 @@ class GeminiVertexAITranslator(BaseTranslator):
     def prompt(self, text: str) -> str:
         return build_translation_prompt(text, self.lang_in, self.lang_out)
 
+    def _build_thinking_config(self) -> genai_types.ThinkingConfig | None:
+        """Resolve the reasoning budget for this model.
+
+        Gemini defaults to *dynamic* thinking, which in the 2026-08-24
+        baseline produced calls emitting 13 response tokens after 123s of
+        hidden reasoning. Pro-class models cannot fully disable thinking, so
+        they get a separate (small) budget rather than 0.
+
+        Returning None restores the SDK default (configure with -1), which is
+        the documented escape hatch if a quality regression is observed.
+        """
+        is_pro = "pro" in str(self.model).lower()
+        budget = int(
+            settings.LLM_THINKING_BUDGET_PRO if is_pro else settings.LLM_THINKING_BUDGET
+        )
+        if budget < 0:
+            return None
+        return genai_types.ThinkingConfig(thinking_budget=budget)
+
     def extract_text(self, response, response_schema=None) -> str:
+        """Prefer the SDK's server-validated `response.parsed` for every
+        structured-output schema, avoiding redundant client-side re-parsing
+        of `response.text` (see docs/plan.md Section 4.6). `translate_text`
+        is returned directly for single-unit translation; the batch/term
+        schemas are serialized back to the same JSON shape callers already
+        expect (`{"items": [...]}` / `{"terms": [...]}`) so
+        paragraph_translator.py/term_extractor.py/il_translator_llm_only.py
+        need no changes to their existing json-parsing logic.
+        """
         parsed = getattr(response, "parsed", None)
-        if parsed and isinstance(parsed, TranslationResponse):
-            return parsed.translated_text
+        if parsed is not None:
+            if isinstance(parsed, TranslationResponse):
+                return parsed.translated_text
+            if isinstance(parsed, (BatchTranslationResponse, TermExtractionResponse)):
+                return parsed.model_dump_json()
 
         text = getattr(response, "text", "")
         if text:
@@ -157,6 +200,7 @@ class GeminiVertexAITranslator(BaseTranslator):
             max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
             response_schema=schema,
+            thinking_config=self._build_thinking_config(),
         )
         response = self._generate_content_with_retry(
             model=self.model,

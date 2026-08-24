@@ -225,19 +225,42 @@ class OnnxModel(DocLayoutModel):
         None,
         None,
     ]:
-        for page in pages:
+        # Feed pages to predict() in batches. predict() has always supported
+        # batched inference (see the ONNX_LAYOUT_BATCH_SIZE loop above), but
+        # this method used to call `self.predict(image)[0]` one page at a time,
+        # making that setting dead config and leaving layout parsing fully
+        # sequential (measured: 58.1s for 20 pages = 2.9s/page).
+        #
+        # Pages are rendered in groups and inferred together, then yielded in
+        # the original order so downstream consumers see no behavioural change.
+        # Only `batch_size` decoded page images are held in memory at once.
+        batch_size = max(1, int(settings.ONNX_LAYOUT_BATCH_SIZE))
+        page_list = list(pages)
+
+        for start in range(0, len(page_list), batch_size):
             translate_config.raise_if_cancelled()
-            with self.lock:
-                pix = get_no_rotation_img(mupdf_doc[page.page_number])
-            image = np.frombuffer(pix.samples, np.uint8).reshape(
-                pix.height,
-                pix.width,
-                3,
-            )[:, :, ::-1]
-            predict_result = self.predict(image)[0]
-            save_debug_image(
-                image,
-                predict_result,
-                page.page_number + 1,
-            )
-            yield page, predict_result
+            chunk = page_list[start : start + batch_size]
+
+            images = []
+            for page in chunk:
+                with self.lock:
+                    pix = get_no_rotation_img(mupdf_doc[page.page_number])
+                images.append(
+                    np.frombuffer(pix.samples, np.uint8).reshape(
+                        pix.height,
+                        pix.width,
+                        3,
+                    )[:, :, ::-1]
+                )
+
+            predict_results = self.predict(images)
+
+            for page, image, predict_result in zip(
+                chunk, images, predict_results, strict=True
+            ):
+                save_debug_image(
+                    image,
+                    predict_result,
+                    page.page_number + 1,
+                )
+                yield page, predict_result

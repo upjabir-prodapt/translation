@@ -25,9 +25,22 @@ class TestQualityJudgeService:
 
     @patch("src.worker.services.quality_judge_service.genai.Client")
     def test_judge_init(self, mock_client):
-        agent = GoogleADKJudgeAgent(model="m1")
+        agent = GoogleADKJudgeAgent(model="m1", region="europe-west3")
         assert agent.model == "m1"
+        assert agent.region == "europe-west3"
         mock_client.assert_called_once()
+        _, kwargs = mock_client.call_args
+        assert kwargs.get("location") == "europe-west3"
+
+    @patch("src.worker.services.quality_judge_service.genai.Client")
+    def test_judge_init_region_fallback(self, mock_client, monkeypatch):
+        from src.worker.services.quality_judge_service import settings
+        monkeypatch.setattr(settings, "JUDGE_MODEL_REGION", "")
+        monkeypatch.setattr(settings, "GOOGLE_CLOUD_LOCATION", "europe-west1")
+        agent = GoogleADKJudgeAgent()
+        assert agent.region == "europe-west1"
+        _, kwargs = mock_client.call_args
+        assert kwargs.get("location") == "europe-west1"
 
     @patch.object(GoogleADKJudgeAgent, "_judge_with_llm")
     def test_evaluate_success(self, mock_judge, mock_settings):
