@@ -380,12 +380,19 @@ class TranslationService:
         users must not be able to promote their own work. Promotion is driven
         purely by document format via `HIGH_PRIORITY_FORMATS`, so short
         text jobs are not stuck behind multi-minute PDF jobs.
+
+        Supports both "txt" and ".txt" format representations and checks
+        both `document.format` and `document.filename`.
         """
         if not settings.HIGH_PRIORITY_ROUTING_ENABLED:
             return PRIORITY_STANDARD
-        doc_format = str(getattr(request.document, "format", "") or "").lower()
-        high_formats = {str(f).lower() for f in settings.HIGH_PRIORITY_FORMATS}
-        return PRIORITY_HIGH if doc_format in high_formats else PRIORITY_STANDARD
+        doc_format = str(getattr(request.document, "format", "") or "").lower().lstrip(".")
+        filename = getattr(request.document, "filename", "") or ""
+        filename_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        high_formats = {str(f).lower().lstrip(".") for f in settings.HIGH_PRIORITY_FORMATS}
+        is_high = (doc_format in high_formats) or (filename_ext in high_formats)
+        return PRIORITY_HIGH if is_high else PRIORITY_STANDARD
 
     async def _schedule_background_pipeline(
         self,

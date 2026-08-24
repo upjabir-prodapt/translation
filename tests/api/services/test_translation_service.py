@@ -280,6 +280,19 @@ class TestPriorityRouting:
         stored = mock_bq.upsert_translation_job.call_args[0][0]
         assert stored["processing_options"]["priority"] == "standard"
 
+    async def test_txt_with_dot_in_setting_is_promoted(
+        self, service, mock_storage, mock_tasks, monkeypatch
+    ):
+        """HIGH_PRIORITY_FORMATS=['.txt'] should match format='txt' and filename='test.txt'."""
+        monkeypatch.setattr(
+            "src.api.services.translation_service.settings.HIGH_PRIORITY_FORMATS",
+            [".txt"],
+        )
+        mock_storage.upload_input_pdf.return_value = "gs://b/test.txt"
+        await service.submit_translations([self._req(fmt="txt")])
+        call = mock_tasks.enqueue_translate.call_args
+        assert call[1]["priority"] == "high"
+
     async def test_routing_disabled_forces_standard(
         self, service, mock_storage, mock_tasks, monkeypatch
     ):
