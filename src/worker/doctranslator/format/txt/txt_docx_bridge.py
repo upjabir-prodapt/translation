@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from docx import Document as open_docx
+from docx import Document as DocxDocument
 
 
 def txt_bytes_to_docx_bytes(text_content: bytes) -> bytes:
@@ -25,7 +25,7 @@ def txt_bytes_to_docx_bytes(text_content: bytes) -> bytes:
     failing the whole submission.
     """
     text = text_content.decode("utf-8", errors="replace")
-    document = open_docx()
+    document = DocxDocument()
     lines = text.splitlines() or [""]
     for line in lines:
         document.add_paragraph(line)
@@ -41,6 +41,6 @@ def docx_path_to_txt_bytes(docx_path: Path) -> bytes:
     wrote in `txt_bytes_to_docx_bytes`), which also naturally includes any
     AI-translation cover page paragraphs prepended by the DOCX pipeline.
     """
-    document = open_docx(str(docx_path))
+    document = DocxDocument(str(docx_path))
     lines = [paragraph.text for paragraph in document.paragraphs]
     return "\n".join(lines).encode("utf-8")

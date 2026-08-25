@@ -50,9 +50,9 @@ class TestPipelineOrchestrator:
         assert docx_path.suffix == ".docx"
         assert docx_path.exists()
 
-        from docx import Document as open_docx
+        from docx import Document as DocxDocument
 
-        document = open_docx(str(docx_path))
+        document = DocxDocument(str(docx_path))
         paragraphs = [p.text for p in document.paragraphs]
         assert paragraphs == ["Hello world.", "Second line."]
 

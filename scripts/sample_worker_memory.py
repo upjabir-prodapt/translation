@@ -26,7 +26,7 @@ from pathlib import Path
 def _read_rss_kb(pid: int) -> int | None:
     """RSS in kB from /proc/<pid>/statm (page count x page size)."""
     try:
-        with open(f"/proc/{pid}/statm") as handle:
+        with Path(f"/proc/{pid}/statm").open() as handle:
             resident_pages = int(handle.read().split()[1])
         return resident_pages * os.sysconf("SC_PAGE_SIZE") // 1024
     except (OSError, IndexError, ValueError):
@@ -35,7 +35,7 @@ def _read_rss_kb(pid: int) -> int | None:
 
 def _read_threads(pid: int) -> int:
     try:
-        return len(os.listdir(f"/proc/{pid}/task"))
+        return len(list(Path(f"/proc/{pid}/task").iterdir()))
     except OSError:
         return 0
 

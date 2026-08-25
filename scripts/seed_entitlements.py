@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from google.cloud import firestore
 
@@ -42,12 +43,15 @@ def normalize_email(raw: str) -> str:
 def load_emails(args: argparse.Namespace) -> list[str]:
     emails: list[str] = []
     if args.emails_file:
-        with open(args.emails_file, encoding="utf-8") as f:
+        with Path(args.emails_file).open(encoding="utf-8") as f:
             emails.extend(line.strip() for line in f if line.strip())
     emails.extend(args.emails)
 
     if not emails:
-        print("ERROR: no emails provided (use --emails-file or positional args)", file=sys.stderr)
+        print(
+            "ERROR: no emails provided (use --emails-file or positional args)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Normalize + dedupe while preserving first-seen order (helpful for review output)
@@ -67,8 +71,12 @@ def load_emails(args: argparse.Namespace) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--project", required=True, help="GCP project ID (e.g. aicoeprod)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--project", required=True, help="GCP project ID (e.g. aicoeprod)"
+    )
     parser.add_argument(
         "--grant",
         action="append",
@@ -77,12 +85,18 @@ def main() -> None:
         help="Entitlement field to set to true for every email (repeatable)",
     )
     parser.add_argument("--emails-file", help="Path to a file with one email per line")
-    parser.add_argument("--dry-run", action="store_true", help="Print what would be written, without writing")
-    parser.add_argument("emails", nargs="*", help="Additional emails as positional arguments")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be written, without writing",
+    )
+    parser.add_argument(
+        "emails", nargs="*", help="Additional emails as positional arguments"
+    )
     args = parser.parse_args()
 
     emails = load_emails(args)
-    grants = {field: True for field in args.grant}
+    grants = dict.fromkeys(args.grant, True)
 
     print(f"Project: {args.project}")
     print(f"Granting: {grants}")
@@ -102,7 +116,9 @@ def main() -> None:
         doc_ref.set(grants, merge=True)
         print(f"  OK: {email} -> {grants}")
 
-    print(f"\nDone. Wrote {len(emails)} document(s) to {ENTITLEMENTS_COLLECTION!r} in project {args.project!r}.")
+    print(
+        f"\nDone. Wrote {len(emails)} document(s) to {ENTITLEMENTS_COLLECTION!r} in project {args.project!r}."
+    )
 
 
 if __name__ == "__main__":

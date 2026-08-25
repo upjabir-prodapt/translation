@@ -12,7 +12,7 @@ from src.worker.doctranslator.translator.schemas import TranslationResponse
 
 
 @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
-def _make_translator(mock_client, region=None):
+def _make_translator(_mock_client, region=None):
     return GeminiVertexAITranslator(
         lang_in="en",
         lang_out="de",

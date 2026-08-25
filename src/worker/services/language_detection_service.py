@@ -49,11 +49,11 @@ class LanguageDetectionService:
         return self._processor._normalize_detected_language(best_match.lang)  # noqa: SLF001
 
     def _detect_docx(self, input_path: Path) -> str:
-        from docx import Document as open_docx
+        from docx import Document as DocxDocument
 
         from src.worker.doctranslator.format.docx.units import extract_units
 
-        document = open_docx(str(input_path))
+        document = DocxDocument(str(input_path))
         units = extract_units(document)
         text = "\n".join(unit.text for unit in units)
         return self._detect_text(text, source_label="DOCX text")

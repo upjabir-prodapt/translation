@@ -35,8 +35,7 @@ def _iter_table_paragraphs(table: Table):
     """Yield every paragraph in a table's cells, recursing into nested tables."""
     for row in table.rows:
         for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                yield paragraph
+            yield from cell.paragraphs
             for nested_table in cell.tables:
                 yield from _iter_table_paragraphs(nested_table)
 

@@ -147,7 +147,10 @@ def analyse(rows: list[tuple[dt.datetime, str, str]]) -> dict[str, Any]:
             )
         elif match := _VALIDATION_FAIL.search(message):
             validation[match["reason"]] += 1
-        elif "Fallback to simple translation" in message or "fallback re-batching" in message:
+        elif (
+            "Fallback to simple translation" in message
+            or "fallback re-batching" in message
+        ):
             fallbacks += 1
 
     return {
@@ -228,7 +231,14 @@ def _report_llm(calls: list[dict[str, Any]]) -> None:
     print()
     print("  payload tokens (input - ~760 boilerplate) vs efficiency:")
     print(f"    {'range':>14} {'n':>4} {'med_lat':>9} {'out_tok/s':>10}")
-    for low, high in ((0, 100), (100, 500), (500, 1000), (1000, 2000), (2000, 5000), (5000, 10**9)):
+    for low, high in (
+        (0, 100),
+        (100, 500),
+        (500, 1000),
+        (1000, 2000),
+        (2000, 5000),
+        (5000, 10**9),
+    ):
         chosen = [
             c
             for c in calls
@@ -308,7 +318,9 @@ def main() -> int:
                     "sum_latency_s": round(latency, 1),
                     "output_tokens": out_tokens,
                     "thinking_tokens": sum(c["thinking_tokens"] for c in calls),
-                    "output_tokens_per_s": round(out_tokens / latency, 2) if latency else 0,
+                    "output_tokens_per_s": round(out_tokens / latency, 2)
+                    if latency
+                    else 0,
                     "stages": data["stages"],
                     "batch_plans": data["plans"],
                     "validation_failures": dict(data["validation"]),

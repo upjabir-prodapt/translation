@@ -1,13 +1,8 @@
 """Unit tests for the plain-text <-> DOCX bridge used by the .txt pipeline."""
 
-from docx import Document as open_docx
-
-from src.worker.doctranslator.format.txt.txt_docx_bridge import (
-    docx_path_to_txt_bytes,
-)
-from src.worker.doctranslator.format.txt.txt_docx_bridge import (
-    txt_bytes_to_docx_bytes,
-)
+from docx import Document as DocxDocument
+from src.worker.doctranslator.format.txt.txt_docx_bridge import docx_path_to_txt_bytes
+from src.worker.doctranslator.format.txt.txt_docx_bridge import txt_bytes_to_docx_bytes
 
 
 class TestTxtBytesToDocxBytes:
@@ -18,7 +13,7 @@ class TestTxtBytesToDocxBytes:
         docx_path = tmp_path / "wrapped.docx"
         docx_path.write_bytes(docx_bytes)
 
-        document = open_docx(str(docx_path))
+        document = DocxDocument(str(docx_path))
         paragraphs = [p.text for p in document.paragraphs]
         assert paragraphs == ["Hello world.", "Second line.", "Third line."]
 
@@ -43,7 +38,7 @@ class TestDocxPathToTxtBytes:
         assert result.decode("utf-8") == text
 
     def test_includes_all_top_level_paragraphs(self, tmp_path):
-        document = open_docx()
+        document = DocxDocument()
         document.add_paragraph("Cover page title")
         document.add_paragraph("Original content")
         docx_path = tmp_path / "with_cover.docx"
