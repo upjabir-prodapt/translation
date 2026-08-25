@@ -141,6 +141,7 @@ class DocxJobProcessor:
                     lang_out=lang_out,
                     qps=settings.TRANSLATION_MAX_QPS,
                     region=selected_region,
+                    domain=domain,
                 )
                 # translate_docx() is fully synchronous and CPU/network bound
                 # (python-docx parsing plus many blocking LLM calls). Calling
@@ -157,6 +158,7 @@ class DocxJobProcessor:
                     lang_out=lang_out,
                     job_id=job_id,
                     source_language=lang_in,
+                    domain=domain,
                     enable_dlp=enable_dlp,
                     auto_extract_glossary=auto_extract_glossary,
                     extracted_terms=cached_extracted_terms,

@@ -22,6 +22,8 @@ import orjson
 import tiktoken
 
 from src.config.constants import settings
+from src.config.domain_prompts import get_domain_prompt_block
+from src.config.domain_prompts import get_domain_prompt_profile
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
@@ -82,15 +84,26 @@ def _partial_parse_truncated_batch(raw_text: str) -> list[dict[str, Any]]:
     return items
 
 
-def _build_prompt(batch: list[TranslatableUnit], lang_out: str) -> str:
+def _build_prompt(
+    batch: list[TranslatableUnit],
+    lang_out: str,
+    domain: str | None = None,
+) -> str:
     json_input = [
         {"id": unit.unit_id, "input": unit.text, "layout_label": unit.label}
         for unit in batch
     ]
     json_input_str = orjson.dumps(json_input, option=orjson.OPT_INDENT_2).decode()
+
+    profile = get_domain_prompt_profile(domain)
+    domain_desc = f" in {profile.display_name}" if profile else ""
+    domain_block = get_domain_prompt_block(domain)
+    domain_section = f"{domain_block}\n\n" if domain_block else ""
+
     return (
-        f"You are a professional {lang_out} native translator who needs to "
-        f"fluently translate text into {lang_out}.\n\n"
+        f"You are a professional {lang_out} native translator who specializes{domain_desc} "
+        f"and fluently translates text into {lang_out}.\n\n"
+        f"{domain_section}"
         "## Structure Rules\n"
         "1. Keep the same number of items as the input.\n"
         "2. Treat each input item as an independent, fixed unit.\n"
@@ -112,9 +125,15 @@ def _build_prompt(batch: list[TranslatableUnit], lang_out: str) -> str:
 class DocxParagraphTranslator:
     """Translate a DOCX document's units in batches, mirroring PDF's batching."""
 
-    def __init__(self, translate_engine: BaseTranslator, lang_out: str):
+    def __init__(
+        self,
+        translate_engine: BaseTranslator,
+        lang_out: str,
+        domain: str | None = None,
+    ):
         self.translate_engine = translate_engine
         self.lang_out = lang_out
+        self.domain = domain or getattr(translate_engine, "domain", None)
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         except Exception:
@@ -310,7 +329,7 @@ class DocxParagraphTranslator:
         validation and decides what still needs a singleton retry. Raises on
         transport/parse failure so the caller can defer the whole group.
         """
-        prompt = _build_prompt(batch, self.lang_out)
+        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
         raw = self.translate_engine.llm_translate(
             prompt,
             response_schema=BatchTranslationResponse,
@@ -365,7 +384,7 @@ class DocxParagraphTranslator:
         self, batch: list[TranslatableUnit]
     ) -> dict[int, str]:
         """Translate one batch; returns {unit_id: translated_text}."""
-        prompt = _build_prompt(batch, self.lang_out)
+        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
         results: dict[int, str] = {}
         try:
             llm_output = self.translate_engine.llm_translate(

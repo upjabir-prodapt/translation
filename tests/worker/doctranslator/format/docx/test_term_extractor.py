@@ -61,3 +61,26 @@ class TestCjkAwareBatchSizing:
         assert extractor._token_multiplier == pytest.approx(0.5)
         batches = extractor._batch_units(self._short_units(35))
         assert [len(b) for b in batches] == [31, 4]
+
+
+class TestDomainAwareTermExtraction:
+    def test_term_extractor_domain_prompt_injection(self):
+        class _CapturingEngine(_FakeEngine):
+            def __init__(self):
+                self.prompts: list[str] = []
+
+            def llm_translate(self, prompt, response_schema=None, batch_items=None):
+                self.prompts.append(prompt)
+                return '[{"src": "indemnification", "tgt": "indemnisation"}]'
+
+        engine = _CapturingEngine()
+        extractor = DocxTermExtractor(engine, "fr", domain="legal")
+        assert extractor.domain == "legal"
+
+        units = [_unit(1, "The contractor agrees to indemnification obligations.")]
+        pairs = extractor._extract_batch(units)
+        assert pairs == [("indemnification", "indemnisation")]
+        assert len(engine.prompts) == 1
+        assert "### Domain Context: Legal & Regulatory" in engine.prompts[0]
+        assert "legal & regulatory terminology" in engine.prompts[0]
+

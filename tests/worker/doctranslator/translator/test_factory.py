@@ -134,3 +134,26 @@ class TestTranslatorFactory:
             qps=10,
         )
         assert translator.model == "gemini-2.5-flash"
+
+    @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
+    def test_domain_is_forwarded_to_gemini_translator(self, mock_client):
+        translator = create_translator(
+            "gemini-3.5-flash",
+            lang_in="en",
+            lang_out="de",
+            qps=10,
+            domain="legal",
+        )
+        assert translator.domain == "legal"
+
+    @patch("anthropic.AnthropicVertex")
+    def test_domain_is_forwarded_to_claude_translator(self, mock_vertex):
+        translator = create_translator(
+            "claude-sonnet-4-6",
+            lang_in="en",
+            lang_out="es",
+            qps=8,
+            domain="commercial",
+        )
+        assert translator.domain == "commercial"
+

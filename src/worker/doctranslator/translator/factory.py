@@ -17,6 +17,7 @@ def create_translator(
     lang_out: str,
     qps: int,
     region: str | None = None,
+    domain: str | None = None,
 ) -> BaseTranslator:
     """Create one translator for the given model_id string.
 
@@ -40,6 +41,7 @@ def create_translator(
             model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
             region=region,
+            domain=domain,
         )
 
     if provider == LLMProvider.CLAUDE:
@@ -48,6 +50,7 @@ def create_translator(
             lang_out=lang_out,
             model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
+            domain=domain,
         )
 
     raise ValueError(f"No translator implementation for provider '{provider}'.")
@@ -60,6 +63,7 @@ def create_translator_from_model_list(
     lang_out: str,
     qps: int,
     model_index: int = 0,
+    domain: str | None = None,
 ) -> BaseTranslator:
     """Create one translator from an ordered model list.
 
@@ -87,4 +91,5 @@ def create_translator_from_model_list(
         lang_out=lang_out,
         qps=qps,
         region=region,
+        domain=domain,
     )

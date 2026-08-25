@@ -54,6 +54,7 @@ def translate_docx(
     lang_out: str,
     job_id: str,
     source_language: str,
+    domain: str | None = None,
     enable_dlp: bool = True,
     auto_extract_glossary: bool = True,
     extracted_terms: list[tuple[str, str]] | None = None,
@@ -102,7 +103,9 @@ def translate_docx(
     # Automatic term extraction and paragraph translation are run
     # concurrently on first attempt; on retry attempts, previously extracted
     # candidate terms can be passed in directly to avoid duplicate LLM calls.
-    paragraph_translator = DocxParagraphTranslator(translator, lang_out)
+    paragraph_translator = DocxParagraphTranslator(
+        translator, lang_out, domain=domain
+    )
 
     if extracted_terms is not None:
         logger.info(
@@ -110,7 +113,7 @@ def translate_docx(
         )
         translations = paragraph_translator.translate_all(units)
     elif auto_extract_glossary and units:
-        term_extractor = DocxTermExtractor(translator, lang_out)
+        term_extractor = DocxTermExtractor(translator, lang_out, domain=domain)
         with ThreadPoolExecutor(max_workers=2) as executor:
             term_future = executor.submit(term_extractor.extract, units)
             translate_future = executor.submit(paragraph_translator.translate_all, units)

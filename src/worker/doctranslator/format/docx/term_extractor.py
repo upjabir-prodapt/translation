@@ -21,6 +21,7 @@ from concurrent.futures import as_completed
 import tiktoken
 
 from src.config.constants import settings
+from src.config.domain_prompts import get_domain_prompt_profile
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
@@ -107,9 +108,15 @@ def _parse_terms(llm_output: str) -> list[tuple[str, str]]:
 class DocxTermExtractor:
     """Extract candidate glossary terms from DOCX translatable units."""
 
-    def __init__(self, translate_engine: BaseTranslator, target_language: str):
+    def __init__(
+        self,
+        translate_engine: BaseTranslator,
+        target_language: str,
+        domain: str | None = None,
+    ):
         self.translate_engine = translate_engine
         self.target_language = target_language
+        self.domain = domain or getattr(translate_engine, "domain", None)
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         except Exception:
@@ -165,9 +172,16 @@ class DocxTermExtractor:
         text_to_process = "\n\n".join(unit.text for unit in batch)
         if not text_to_process.strip():
             return []
+        profile = get_domain_prompt_profile(self.domain)
+        reference_glossary_section = (
+            f"### Domain Context: {profile.display_name}\n"
+            f"Focus on extracting {profile.display_name.lower()} terminology, concepts, and domain-specific nouns.\n"
+            if profile
+            else ""
+        )
         prompt = _PROMPT_TEMPLATE.format(
             target_language=self.target_language,
-            reference_glossary_section="",
+            reference_glossary_section=reference_glossary_section,
             text_to_process=text_to_process,
         )
         try:

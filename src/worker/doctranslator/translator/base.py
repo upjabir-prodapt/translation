@@ -32,7 +32,6 @@ from src.worker.doctranslator.translator.translation_cache import build_cache_ke
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.usage import TokenUsage
 
-
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS_LOG_PREVIEW = 120
@@ -49,11 +48,12 @@ class BaseTranslator(ABC):
     lang_map: dict[str, str] = {}
     provider: str = "base"
 
-    def __init__(self, lang_in: str, lang_out: str):
+    def __init__(self, lang_in: str, lang_out: str, domain: str | None = None):
         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
         lang_out = self.lang_map.get(lang_out.lower(), lang_out)
         self.lang_in = lang_in
         self.lang_out = lang_out
+        self.domain = domain
         self.translate_call_count = 0
 
     def __del__(self):
@@ -166,6 +166,7 @@ class BaseTranslator(ABC):
             lang_in=self.lang_in,
             lang_out=self.lang_out,
             text=text,
+            domain=self.domain,
         )
 
     def _run_translation_batch(

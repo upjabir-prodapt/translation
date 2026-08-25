@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from src.worker.doctranslator.translator import translation_cache as tc_module
-from src.worker.doctranslator.translator.translation_cache import build_cache_key
 from src.worker.doctranslator.translator.translation_cache import TranslationCache
+from src.worker.doctranslator.translator.translation_cache import build_cache_key
 
 
 def _reset_module_singletons():
@@ -54,6 +54,34 @@ class TestBuildCacheKey:
             text="goodbye",
         )
         assert key1 != key2
+
+    def test_different_domain_yields_different_key(self):
+        key_legal = build_cache_key(
+            provider="gemini_vertexai",
+            model="gemini-2.5-flash",
+            lang_in="en",
+            lang_out="fr",
+            text="execute",
+            domain="legal",
+        )
+        key_commercial = build_cache_key(
+            provider="gemini_vertexai",
+            model="gemini-2.5-flash",
+            lang_in="en",
+            lang_out="fr",
+            text="execute",
+            domain="commercial",
+        )
+        key_default = build_cache_key(
+            provider="gemini_vertexai",
+            model="gemini-2.5-flash",
+            lang_in="en",
+            lang_out="fr",
+            text="execute",
+        )
+        assert key_legal != key_commercial
+        assert key_legal != key_default
+        assert key_commercial != key_default
 
 
 class TestTranslationCacheRedisBackend:

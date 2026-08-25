@@ -1,13 +1,26 @@
 """Shared LLM prompt builders for translation tasks."""
 
+from __future__ import annotations
 
-def build_translation_prompt(text: str, lang_in: str, lang_out: str) -> str:
+from src.config.domain_prompts import get_domain_prompt_block
+
+
+def build_translation_prompt(
+    text: str,
+    lang_in: str,
+    lang_out: str,
+    domain: str | None = None,
+) -> str:
     """Build the standard document translation prompt used across all LLM backends."""
+    domain_block = get_domain_prompt_block(domain)
+    domain_section = f"{domain_block}\n\n" if domain_block else ""
+
     return (
         "# Role\n"
         "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
         "# Task\n"
         f"Translate the INPUT below from {lang_in} into {lang_out}.\n\n"
+        f"{domain_section}"
         "# Output format (plain text only)\n"
         "- Reply with nothing except the translated text itself.\n"
         "- Do not add explanations, notes, alternatives, or apologies—only the translation.\n"
@@ -57,3 +70,4 @@ def build_translation_prompt(text: str, lang_in: str, lang_out: str) -> str:
         f"{text}"
         "# Output\n"
     )
+

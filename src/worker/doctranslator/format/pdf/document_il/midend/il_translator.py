@@ -12,6 +12,7 @@ import tiktoken
 from tqdm import tqdm
 
 import src.worker.doctranslator.format.pdf.document_il.il_version_1 as il_version_1
+from src.config.domain_prompts import get_domain_role_block
 from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
     ContentFilterError,
 )
@@ -1144,22 +1145,14 @@ class ILTranslator:
         """Build the role block for LLM prompt.
 
         Returns:
-            Role block string with custom_system_prompt or default role description.
+            Role block string with custom_system_prompt or default role description
+            enhanced with domain-specific guidance (formality, tone, terminology).
         """
-        custom_prompt = getattr(self.translation_config, "custom_system_prompt", None)
-        if custom_prompt:
-            role_block = custom_prompt.strip()
-            if "Follow all rules strictly." not in role_block:
-                if not role_block.endswith("\n"):
-                    role_block += "\n"
-                role_block += "Follow all rules strictly."
-        else:
-            role_block = (
-                f"You are a professional {self.translation_config.lang_out} native translator who needs to fluently translate text "
-                f"into {self.translation_config.lang_out}.\n\n"
-                "Follow all rules strictly."
-            )
-        return role_block
+        return get_domain_role_block(
+            getattr(self.translation_config, "domain", None),
+            self.translation_config.lang_out,
+            getattr(self.translation_config, "custom_system_prompt", None),
+        )
 
     def _build_context_block(
         self,

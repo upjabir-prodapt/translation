@@ -389,6 +389,7 @@ class JobProcessor:
             }
         )
         selected_model = str(config.get("selected_model", "")).strip()
+        domain = config.get("domain")
         # "selected_model_region" is threaded in by TranslationAttemptRunner
         # from the matching ModelRoute (docs/plan.md Section 3.3) so
         # gemini-3.5-flash's europe-west3 pinning survives the trip from
@@ -400,6 +401,7 @@ class JobProcessor:
             lang_out=base_config.lang_out,
             qps=base_config.qps,
             region=selected_region,
+            domain=domain,
         )
         glossaries = config.get("glossaries")
 
@@ -414,6 +416,7 @@ class JobProcessor:
             output_dir=output_dir,
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
+            domain=domain,
             doc_layout_model=doc_layout_model,
             table_model=None,
             working_dir=working_dir,

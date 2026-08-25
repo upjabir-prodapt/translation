@@ -107,6 +107,7 @@ def build_cache_key(
     lang_in: str,
     lang_out: str,
     text: str,
+    domain: str | None = None,
 ) -> str:
     """Return a stable, namespaced cache key for one (engine, params, text)
     combination.
@@ -118,16 +119,17 @@ def build_cache_key(
     isolation mechanism available -- see
     docs/infra/redis-memorystore-psc-setup.md.
     """
-    payload = "|".join(
-        [
-            PROMPT_VERSION,
-            str(provider),
-            str(model),
-            str(lang_in),
-            str(lang_out),
-            text,
-        ]
-    )
+    parts = [
+        PROMPT_VERSION,
+        str(provider),
+        str(model),
+        str(lang_in),
+        str(lang_out),
+    ]
+    if domain and str(domain).strip():
+        parts.append(str(domain).strip().lower())
+    parts.append(text)
+    payload = "|".join(parts)
     digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
     return f"{settings.REDIS_KEY_PREFIX}{digest}"
 

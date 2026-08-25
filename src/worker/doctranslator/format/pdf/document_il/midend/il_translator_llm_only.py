@@ -10,7 +10,7 @@ import orjson
 import tiktoken
 from tqdm import tqdm
 
-
+from src.config.domain_prompts import get_domain_role_block
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.pdf.document_il import Document
@@ -1097,21 +1097,12 @@ class ILTranslatorLLMOnly:
             )
 
     def _build_llm_role_block(self) -> str:
-        """Build the role/system block for the LLM prompt."""
-        custom_prompt = getattr(self.translation_config, "custom_system_prompt", None)
-        if custom_prompt:
-            role_block = custom_prompt.strip()
-            if "Follow all rules strictly." not in role_block:
-                if not role_block.endswith("\n"):
-                    role_block += "\n"
-                role_block += "Follow all rules strictly."
-        else:
-            role_block = (
-                f"You are a professional {self.translation_config.lang_out} native translator who needs to fluently translate text "
-                f"into {self.translation_config.lang_out}.\n\n"
-                "Follow all rules strictly."
-            )
-        return role_block
+        """Build the role/system block for the LLM prompt, including domain guidance."""
+        return get_domain_role_block(
+            getattr(self.translation_config, "domain", None),
+            self.translation_config.lang_out,
+            getattr(self.translation_config, "custom_system_prompt", None),
+        )
 
     def _build_llm_contextual_hints_block(
         self,

@@ -266,3 +266,43 @@ class TestValidationRejectionReasonLogging:
         assert is_rejected is True
         assert "DOCX translation validation failed (edit_distance)" in caplog.text
 
+
+
+class TestDomainPromptGeneration:
+    """Test domain-aware prompt building in DOCX paragraph translator."""
+
+    def test_build_prompt_with_legal_domain(self):
+        from src.worker.doctranslator.format.docx.paragraph_translator import (
+            _build_prompt,
+        )
+
+        units = [_unit(1, "The parties agree to the terms herein.")]
+        prompt = _build_prompt(units, "Spanish", domain="legal")
+
+        assert "Legal & Regulatory" in prompt
+        assert "## Domain-Specific Guidance (Legal & Regulatory Domain)" in prompt
+        assert "Strictly formal, binding, and legally rigorous." in prompt
+        assert "force majeure" in prompt
+        assert "The parties agree to the terms herein." in prompt
+
+    def test_build_prompt_with_commercial_domain(self):
+        from src.worker.doctranslator.format.docx.paragraph_translator import (
+            _build_prompt,
+        )
+
+        units = [_unit(1, "Boost your productivity with our modern cloud solution.")]
+        prompt = _build_prompt(units, "French", domain="commercial")
+
+        assert "Commercial & Business" in prompt
+        assert "## Domain-Specific Guidance (Commercial & Business Domain)" in prompt
+        assert "Engaging, persuasive, confident" in prompt
+
+    def test_paragraph_translator_inherits_domain_from_engine_or_explicit(self):
+        engine = _FakeEngine("[]")
+        engine.domain = "finance"
+        translator = DocxParagraphTranslator(engine, "German")
+        assert translator.domain == "finance"
+
+        explicit_translator = DocxParagraphTranslator(engine, "German", domain="hr")
+        assert explicit_translator.domain == "hr"
+
