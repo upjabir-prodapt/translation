@@ -60,6 +60,47 @@ class TranslationStorageRepository(StorageRepository):
 
         return output_uris
 
+    async def upload_attempt_artifacts(
+        self,
+        job_id: str,
+        attempt_index: int,
+        tracking_path: Path | None = None,
+        quality_report_path: Path | None = None,
+    ) -> list[str]:
+        """Upload attempt tracking and quality report JSON to GCS input folder."""
+        uploaded_uris: list[str] = []
+        artifacts = [
+            (tracking_path, f"iter_{attempt_index}_translate_tracking.json", "tracking"),
+            (quality_report_path, f"iter_{attempt_index}_quality_report.json", "quality_report"),
+        ]
+        for path, filename, artifact_type in artifacts:
+            if path is None or not path.exists():
+                continue
+            blob_path = self.build_job_path(
+                job_id=job_id,
+                folder=settings.GCS_INPUT_FOLDER,
+                filename=filename,
+            )
+            try:
+                uri = await self.upload_file(
+                    source=path,
+                    blob_path=blob_path,
+                    file_type=FileType.JSON,
+                    metadata={
+                        "job_id": job_id,
+                        "attempt_index": str(attempt_index),
+                        "artifact_type": artifact_type,
+                    },
+                )
+                uploaded_uris.append(uri)
+                logger.info(f"Uploaded {filename} for job {job_id} to {uri}")
+            except Exception:
+                logger.warning(
+                    f"Failed to upload {filename} for job {job_id}",
+                    exc_info=True,
+                )
+        return uploaded_uris
+
     async def download_asset(self, blob_path: str, local_path: Path) -> Path:
         full_blob_path = f"{settings.GCS_ASSETS_PREFIX}/{blob_path}"
         logger.info(f"Downloading asset: {blob_path}")

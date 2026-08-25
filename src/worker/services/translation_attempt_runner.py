@@ -151,6 +151,7 @@ class TranslationAttemptRunner:
                 pass_fail=False,
                 reasons=["Missing source/translated text for quality evaluation."],
                 model=judge.model,
+                is_fallback=True,
             )
         return await judge.evaluate_async(
             source_text=source_text, translated_text=translated_text

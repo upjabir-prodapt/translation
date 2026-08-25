@@ -1,6 +1,8 @@
 from docx import Document
 from src.worker.doctranslator.format.docx.cover_page import add_cover_page
-from src.worker.doctranslator.format.pdf.translation_config import TranslationCoverPageMetadata
+from src.worker.doctranslator.format.pdf.translation_config import (
+    TranslationCoverPageMetadata,
+)
 
 
 def test_add_cover_page_with_judge(tmp_path):
@@ -24,7 +26,9 @@ def test_add_cover_page_with_judge(tmp_path):
     reopened = Document(str(out))
     texts = [p.text for p in reopened.paragraphs]
     assert texts[0] == "AI Translated Document"
-    assert any("Confidence score: 0.90 (89.9%) via gemini-3.5-flash" in t for t in texts)
+    assert any("Original language: English" in t for t in texts)
+    assert any("Target language: French" in t for t in texts)
+    assert not any("Confidence score" in t for t in texts)
 
 
 def test_add_cover_page_without_judge(tmp_path):

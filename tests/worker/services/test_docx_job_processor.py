@@ -120,6 +120,7 @@ class TestApplyCoverPage:
         assert texts[0] == "AI Translated Document"
         assert any("Original language: English" in t for t in texts)
         assert any("Target language: French" in t for t in texts)
+        assert not any("Confidence score" in t for t in texts)
         assert any(
             "AI generated translation that may have mistakes" in t for t in texts
         )
@@ -228,4 +229,11 @@ class TestDocxJobProcessorAttemptReuse:
 
         assert result["attempt_index"] == 2
         assert result["model_id"] == "gemini-3.5-flash"
+        assert "attempts" in result
+        assert len(result["attempts"]) == 2
+        assert result["attempts"][0]["attempt_number"] == 1
+        assert result["attempts"][0]["is_selected"] is False
+        assert result["attempts"][1]["attempt_number"] == 2
+        assert result["attempts"][1]["is_selected"] is True
+        assert result["attempts"][0]["docx_path"] is not None
 

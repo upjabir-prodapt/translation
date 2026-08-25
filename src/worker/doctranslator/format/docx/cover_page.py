@@ -8,7 +8,7 @@ docs/architecture/pdf-vs-docx-translation-architecture.md for the full
 PDF-vs-DOCX comparison.
 
 The `TranslationCoverPageMetadata` dataclass (original/target language,
-model used, domain, translation date, confidence score, sections
+model used, domain, translation date, sections
 translated, disclaimer text) is shared verbatim with the PDF pipeline so
 both formats always show the exact same fields and wording.
 """

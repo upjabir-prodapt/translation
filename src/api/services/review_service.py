@@ -45,11 +45,8 @@ class ReviewService:
             "created_at": now,
             "updated_at": now,
         }
-        try:
-            await self.bigquery.upsert_review(review_data)
-            return ReviewSubmitResponse(status="successfully sent", review_id=review_id)
-        except Exception:
-            return ReviewSubmitResponse(status="failed", review_id=None)
+        await self.bigquery.upsert_review(review_data)
+        return ReviewSubmitResponse(status="successfully sent", review_id=review_id)
 
     async def get_reviews(self, job_id: str) -> ReviewListResponse:
         """Fetch all reviews for a translation job."""

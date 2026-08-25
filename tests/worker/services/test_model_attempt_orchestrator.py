@@ -122,6 +122,12 @@ class TestModelAttemptOrchestratorIlReuse:
 
         assert result["attempt_index"] == 2
         assert result["model_id"] == "gemini-3.5-flash"
+        assert "attempts" in result
+        assert len(result["attempts"]) == 2
+        assert result["attempts"][0]["is_selected"] is False
+        assert result["attempts"][1]["is_selected"] is True
+        assert result["attempts"][0]["attempt_number"] == 1
+        assert result["attempts"][1]["attempt_number"] == 2
     async def test_run_model_chain_with_judge_disabled_applies_cover_page_without_score(
         self, tmp_path: Path
     ):

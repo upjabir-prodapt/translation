@@ -192,7 +192,6 @@ class PipelineOrchestrator:
             await self._update_status(
                 job_id,
                 status="failed",
-                result=None,
                 completed_at=datetime.now(UTC),
                 error_message=str(exc),
             )
@@ -494,6 +493,27 @@ class PipelineOrchestrator:
                 model_chain=model_chain,
             )
 
+            # Persist detected language and routing decision immediately so failed jobs remain analysable
+            try:
+                await self.bigquery.patch_translation_job(
+                    job_id,
+                    {
+                        "translation_config": {
+                            **translation_config,
+                            "source_language": source_lang,
+                            "target_language": target_lang,
+                            "domain": domain,
+                            "enable_dlp": enable_dlp,
+                        },
+                        "result": {"intent": intent},
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    f"Failed to persist initial routing metadata to BigQuery for job {job_id}",
+                    exc_info=True,
+                )
+
             glossaries = self.glossary_service.load_domain_glossary(
                 domain=domain,
                 target_language_name=target_lang,
@@ -671,6 +691,7 @@ class PipelineOrchestrator:
                 "quality_report": attempt_result.get("quality_report"),
                 "dlp_provider": attempt_result.get("dlp_provider"),
                 "dlp_chunk_mode": attempt_result.get("dlp_chunk_mode"),
+                "attempts": attempt_result.get("attempts") or [],
             }
 
             current_stage = "write_cost_attribution"

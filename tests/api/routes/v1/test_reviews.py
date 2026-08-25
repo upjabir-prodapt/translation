@@ -156,6 +156,17 @@ class TestCreateReview:
         )
         assert resp.status_code == 422
 
+    def test_returns_500_when_save_fails(self, review_client, mock_review_service):
+        mock_review_service.create_review.side_effect = RuntimeError("BigQuery failure")
+        resp = review_client.post(
+            "/api/v1/reviews/test-job-id-001",
+            json={"rating": 5},
+        )
+        assert resp.status_code == 500
+        # Reset
+        mock_review_service.create_review.side_effect = None
+        mock_review_service.create_review.return_value = _REVIEW_SUBMIT
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/reviews/{job_id}

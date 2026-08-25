@@ -10,6 +10,8 @@ translation batches against the same extracted units.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import UTC
 from datetime import datetime
@@ -20,6 +22,9 @@ from docx import Document
 
 from src.config.constants import settings
 from src.config.translation_routing import ModelRoute
+from src.repository.translation_storage_repository import (
+    get_translation_storage_repository,
+)
 from src.worker.doctranslator.format.docx.cover_page import add_cover_page
 from src.worker.doctranslator.format.docx.docx_translator import DocxTranslationResult
 from src.worker.doctranslator.format.docx.docx_translator import translate_docx
@@ -118,6 +123,7 @@ class DocxJobProcessor:
         best_quality: dict[str, Any] | None = None
         best_token_usage: dict[str, Any] | None = None
         best_attempt_index = 0
+        attempt_reports: list[dict[str, Any]] = []
 
         cached_extracted_terms: list[tuple[str, str]] | None = None
         cached_dlp_result: DlpResult | None = None
@@ -181,6 +187,26 @@ class DocxJobProcessor:
             )
 
             if not enable_judge or judge is None:
+                attempt_reports.append(
+                    {
+                        "attempt_number": attempt_index,
+                        "model_id": selected_model,
+                        "alignment_score": None,
+                        "omission_score": None,
+                        "hallucination_score": None,
+                        "final_score": None,
+                        "pass_fail": None,
+                        "is_fallback": False,
+                        "total_tokens": token_usage.get("total_tokens", 0),
+                        "prompt_tokens": token_usage.get("prompt_tokens", 0),
+                        "completion_tokens": token_usage.get("completion_tokens", 0),
+                        "cache_hit_prompt_tokens": token_usage.get(
+                            "cache_hit_prompt_tokens", 0
+                        ),
+                        "cost_usd": token_usage.get("estimated_cost_usd", 0.0),
+                        "docx_path": str(output_path),
+                    }
+                )
                 best_result = result
                 best_model_id = selected_model
                 best_quality = None
@@ -197,6 +223,72 @@ class DocxJobProcessor:
                     translated_text=result.translated_text,
                 )
                 final_score = quality_result.final_score
+
+            attempt_reports.append(
+                {
+                    "attempt_number": attempt_index,
+                    "model_id": selected_model,
+                    "alignment_score": quality_result.alignment_score
+                    if quality_result
+                    else None,
+                    "omission_score": quality_result.omission_score
+                    if quality_result
+                    else None,
+                    "hallucination_score": quality_result.hallucination_score
+                    if quality_result
+                    else None,
+                    "final_score": quality_result.final_score if quality_result else None,
+                    "pass_fail": quality_result.pass_fail if quality_result else None,
+                    "is_fallback": getattr(quality_result, "is_fallback", False)
+                    if quality_result
+                    else False,
+                    "total_tokens": token_usage.get("total_tokens", 0),
+                    "prompt_tokens": token_usage.get("prompt_tokens", 0),
+                    "completion_tokens": token_usage.get("completion_tokens", 0),
+                    "cache_hit_prompt_tokens": token_usage.get(
+                        "cache_hit_prompt_tokens", 0
+                    ),
+                    "cost_usd": token_usage.get("estimated_cost_usd", 0.0),
+                    "docx_path": str(output_path),
+                }
+            )
+
+            if quality_result is not None:
+                try:
+                    q_path = attempt_output_dir / "quality_report.json"
+                    q_path.write_text(
+                        json.dumps(quality_result.to_dict(), indent=2), encoding="utf-8"
+                    )
+                    dlp_applied = bool(
+                        enable_dlp
+                        and (
+                            cached_dlp_result is not None
+                            or result.dlp_provider is not None
+                        )
+                    )
+                    sample_rate = int(
+                        getattr(settings, "TRACKING_SAMPLE_PERCENTAGE", 10)
+                    )
+                    is_sampled = sample_rate >= 100 or (
+                        sample_rate > 0
+                        and int(
+                            hashlib.sha256(str(job_id).encode()).hexdigest()[:8], 16
+                        )
+                        % 100
+                        < sample_rate
+                    )
+                    if dlp_applied and is_sampled:
+                        storage = get_translation_storage_repository()
+                        await storage.upload_attempt_artifacts(
+                            job_id=job_id,
+                            attempt_index=attempt_index,
+                            quality_report_path=q_path,
+                        )
+                except Exception:
+                    logger.debug(
+                        f"Failed to upload DOCX quality report for attempt {attempt_index}",
+                        exc_info=True,
+                    )
 
             if final_score > best_score:
                 best_score = final_score
@@ -225,6 +317,9 @@ class DocxJobProcessor:
         if best_result is None:
             raise RuntimeError("All DOCX translation attempts failed")
 
+        for rep in attempt_reports:
+            rep["is_selected"] = rep["attempt_number"] == best_attempt_index
+
         if config.get("add_cover_page", True):
             self._apply_cover_page(
                 best_result=best_result,
@@ -244,6 +339,7 @@ class DocxJobProcessor:
             "model_id": best_model_id,
             "quality_report": best_quality,
             "token_usage": best_token_usage,
+            "attempts": attempt_reports,
             "dlp_provider": (
                 best_result.dlp_provider.value if best_result.dlp_provider else None
             ),

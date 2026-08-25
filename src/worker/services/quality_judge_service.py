@@ -38,6 +38,7 @@ class QualityJudgeResult:
     pass_fail: bool
     reasons: list[str]
     model: str
+    is_fallback: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -76,6 +77,10 @@ class QualityJudgeLLMScores(BaseModel):
     reasons: list[str] = Field(
         default_factory=list,
         description="3–8 concise English strings citing concrete evidence.",
+    )
+    is_fallback: bool = Field(
+        default=False,
+        description="True if score was generated via fallback due to LLM outage or parse failure.",
     )
 
 
@@ -170,6 +175,7 @@ class GoogleADKJudgeAgent:
                 omission_score=h,
                 hallucination_score=0.9,
                 reasons=["LLM judge unavailable, heuristic fallback used."],
+                is_fallback=True,
             )
 
         prompt = (
@@ -246,6 +252,7 @@ class GoogleADKJudgeAgent:
                 raise ValueError(
                     f"response.parsed is not QualityJudgeLLMScores: {type(parsed)}"
                 )
+            parsed.is_fallback = False
             return parsed
         except Exception as exc:
             logger.warning(
@@ -253,10 +260,10 @@ class GoogleADKJudgeAgent:
             )
             parsed = (getattr(response, "text", "") or "").strip()
             try:
-                parsed = json.loads(
+                parsed_json = json.loads(
                     parsed.replace("```json", "").replace("```", "").strip()
                 )
-                return QualityJudgeLLMScores(**parsed)
+                return QualityJudgeLLMScores(**parsed_json, is_fallback=False)
             except Exception as parse_error:
                 logger.warning(f"Judge fallback JSON parse failed: {parse_error}")
                 return QualityJudgeLLMScores(
@@ -264,6 +271,7 @@ class GoogleADKJudgeAgent:
                     omission_score=0.0,
                     hallucination_score=0.8,
                     reasons=["Judge parse failed, fallback heuristic used."],
+                    is_fallback=True,
                 )
 
     def evaluate(self, *, source_text: str, translated_text: str) -> QualityJudgeResult:
@@ -293,6 +301,7 @@ class GoogleADKJudgeAgent:
             alignment = max(0.0, min(1.0, llm_scores.alignment_score))
             omission = max(0.0, min(1.0, llm_scores.omission_score))
             hallucination = max(0.0, min(1.0, llm_scores.hallucination_score))
+            is_fallback = bool(getattr(llm_scores, "is_fallback", False))
             final = (0.30 * alignment) + (0.35 * omission) + (0.35 * hallucination)
             passed = final >= settings.QUALITY_THRESHOLD
             elapsed = time.monotonic() - t0
@@ -301,13 +310,15 @@ class GoogleADKJudgeAgent:
             span.set_attribute("judge.hallucination_score", hallucination)
             span.set_attribute("judge.final_score", round(final, 4))
             span.set_attribute("judge.passed", passed)
+            span.set_attribute("judge.is_fallback", is_fallback)
             span.set_attribute("llm.latency_s", round(elapsed, 3))
         logger.info(
             f"Judge evaluate done: model={self.model} "
             f"latency_s={elapsed:.3f} "
             f"source_chars={source_chars} translated_chars={translated_chars} "
             f"alignment={alignment:.3f} omission={omission:.3f} "
-            f"hallucination={hallucination:.3f} final={final:.3f} passed={passed}",
+            f"hallucination={hallucination:.3f} final={final:.3f} passed={passed} "
+            f"is_fallback={is_fallback}",
         )
         # ── Bubble judge summary up to the pipeline.run root span ──────────
         set_root_span_attributes(
@@ -315,6 +326,7 @@ class GoogleADKJudgeAgent:
                 "judge.model": self.model,
                 "judge.final_score": round(final, 4),
                 "judge.passed": passed,
+                "judge.is_fallback": is_fallback,
             }
         )
         return QualityJudgeResult(
@@ -325,6 +337,7 @@ class GoogleADKJudgeAgent:
             pass_fail=passed,
             reasons=list(llm_scores.reasons),
             model=self.model,
+            is_fallback=is_fallback,
         )
 
     async def evaluate_async(

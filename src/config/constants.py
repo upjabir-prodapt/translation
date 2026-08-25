@@ -141,6 +141,7 @@ class Settings(BaseSettings):
     GCS_TRANSLATION_PREFIX: str
     GCS_INPUT_FOLDER: str
     GCS_OUTPUT_FOLDER: str
+    TRACKING_SAMPLE_PERCENTAGE: int = 10
 
     # -----------------------------
     # BigQuery

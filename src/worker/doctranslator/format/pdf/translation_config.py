@@ -177,8 +177,8 @@ class TranslationCoverPageMetadata:
     model_used: str
     domain: str
     translation_date: str
-    confidence_score: float | None
-    translated_sections: str
+    confidence_score: float | None = None
+    translated_sections: str = "All paragraphs"
     judge_model: str | None = None
 
     #: Shown on the cover page of every AI-translated output so a human
@@ -189,7 +189,7 @@ class TranslationCoverPageMetadata:
     )
 
     def iter_rows(self) -> list[tuple[str, str]]:
-        rows = [
+        return [
             (
                 "Original language",
                 get_language_display_name(self.original_language),
@@ -201,17 +201,8 @@ class TranslationCoverPageMetadata:
             ("Model used", self.model_used or "N/A"),
             ("Domain", self.domain or "N/A"),
             ("Translation date", self.translation_date or "N/A"),
+            ("Sections translated", self.translated_sections or "N/A"),
         ]
-        if self.confidence_score is not None:
-            confidence = (
-                f"{self.confidence_score:.2f} ({self.confidence_score * 100:.1f}%)"
-            )
-            if self.judge_model:
-                confidence = f"{confidence} via {self.judge_model}"
-            rows.append(("Confidence score", confidence))
-
-        rows.append(("Sections translated", self.translated_sections or "N/A"))
-        return rows
 
 
 class TranslationConfig:

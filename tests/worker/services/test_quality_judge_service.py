@@ -72,6 +72,7 @@ class TestQualityJudgeService:
             res = agent._judge_with_llm("s", "t")
             assert isinstance(res, QualityJudgeLLMScores)
             assert "heuristic" in res.reasons[0]
+            assert res.is_fallback is True
 
     def test_extract_attempt_text_success(self, tmp_path):
         working_dir = tmp_path
@@ -114,10 +115,12 @@ class TestQualityJudgeService:
             pass_fail=True,
             reasons=["good"],
             model="gemini-pro",
+            is_fallback=False,
         )
         d = result.to_dict()
         assert d["alignment_score"] == 0.9
         assert d["pass_fail"] is True
+        assert d["is_fallback"] is False
 
     @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
     def test_judge_with_llm_success(self, mock_generate, mock_settings):
@@ -134,6 +137,7 @@ class TestQualityJudgeService:
         result = agent._judge_with_llm("Hello", "Bonjour")
         assert isinstance(result, QualityJudgeLLMScores)
         assert result.alignment_score == 0.9
+        assert result.is_fallback is False
 
     @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
     def test_judge_with_llm_parse_exception_fallback(
@@ -151,6 +155,7 @@ class TestQualityJudgeService:
         )
         result = agent._judge_with_llm("Hello", "Bonjour")
         assert isinstance(result, QualityJudgeLLMScores)
+        assert result.is_fallback is False
 
     @patch.object(GoogleADKJudgeAgent, "_generate_judge_content_with_retry")
     def test_judge_with_llm_full_fallback(self, mock_generate, mock_settings):
@@ -166,6 +171,7 @@ class TestQualityJudgeService:
         result = agent._judge_with_llm("Hello", "Bonjour")
         assert isinstance(result, QualityJudgeLLMScores)
         assert result.alignment_score == 0.0
+        assert result.is_fallback is True
 
     def test_evaluate_with_dict_scores(self, mock_settings):
         agent = GoogleADKJudgeAgent()

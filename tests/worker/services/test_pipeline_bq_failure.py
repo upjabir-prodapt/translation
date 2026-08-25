@@ -228,6 +228,7 @@ class TestPipelineBigQueryFailure:
         bigquery.write_cost_attribution.side_effect = bq_error
         bigquery.patch_translation_job.side_effect = [
             None,
+            None,
             bq_error,
         ]
 
@@ -239,6 +240,28 @@ class TestPipelineBigQueryFailure:
                 await orchestrator._execute_pipeline(
                     "job-double-fail", _job_data("job-double-fail"), pipeline_span
                 )
+
+    @pytest.mark.asyncio
+    async def test_routing_metadata_persisted_immediately(self, pipeline_mocks):
+        bigquery, storage, tmp_path = pipeline_mocks
+        attempt_result = _attempt_result(tmp_path)
+
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, attempt_result
+        ) as orchestrator:
+            pipeline_span = MagicMock()
+            await orchestrator._execute_pipeline(
+                "job-routing-check", _job_data("job-routing-check"), pipeline_span
+            )
+
+        patch_calls = bigquery.patch_translation_job.call_args_list
+        routing_patches = [
+            c for c in patch_calls if c[0][1].get("result") == {"intent": "general_en_es"}
+        ]
+        assert len(routing_patches) >= 1
+        cfg = routing_patches[0][0][1]["translation_config"]
+        assert cfg["source_language"] == "en"
+        assert cfg["target_language"] == "es"
 
     @pytest.mark.asyncio
     async def test_session_discarded_after_failure(self, pipeline_mocks):
