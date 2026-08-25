@@ -122,3 +122,58 @@ class TestModelAttemptOrchestratorIlReuse:
 
         assert result["attempt_index"] == 2
         assert result["model_id"] == "gemini-3.5-flash"
+    async def test_run_model_chain_with_judge_disabled_applies_cover_page_without_score(
+        self, tmp_path: Path
+    ):
+        """When enable_judge is False, cover page is still prepended, with confidence_score=None."""
+        processor = JobProcessor(progress_tracker=AsyncMock())
+        orchestrator = ModelAttemptOrchestrator(processor)
+
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.working_dir = tmp_path / "iter_1"
+        mock_trans_config.input_file = tmp_path / "input.pdf"
+        mock_trans_config.lang_in = "en"
+        mock_trans_config.lang_out = "fr"
+        mock_trans_config.dlp_provider = None
+        mock_trans_config.dlp_chunk_mode = None
+        mock_trans_config.dlp_token_rows = []
+        mock_trans_config.get_translated_sections_summary.return_value = "All"
+
+        attempt_report = {
+            "attempt_index": 1,
+            "model_id": "gemini-3.5-flash",
+            "quality": None,
+            "token_usage": {"total_tokens": 100},
+        }
+
+        orchestrator._attempt_runner.run_attempt = AsyncMock(
+            return_value=(
+                {"mono_pdf_path": str(tmp_path / "out1.pdf")},
+                {"attempt_index": 1, "selected_model": "gemini-3.5-flash"},
+                mock_trans_config,
+                None,
+                attempt_report,
+            )
+        )
+
+        processor._apply_cover_pages = MagicMock()
+        processor._get_total_pdf_pages = MagicMock(return_value=1)
+
+        config = {
+            "job_id": "test-pdf-no-judge",
+            "input_file": str(tmp_path / "input.pdf"),
+            "output_dir": str(tmp_path / "out"),
+            "model_list": ["gemini-3.5-flash"],
+            "max_model_attempts": 1,
+            "enable_judge": False,
+        }
+
+        result = await orchestrator.run_model_chain(config)
+
+        assert orchestrator._attempt_runner.run_attempt.call_count == 1
+        assert result["quality_report"] is None
+        assert processor._apply_cover_pages.call_count == 1
+        cover_metadata = processor._apply_cover_pages.call_args[0][2]
+        assert cover_metadata.confidence_score is None
+        assert not any("Confidence score" in label for label, _ in cover_metadata.iter_rows())
+

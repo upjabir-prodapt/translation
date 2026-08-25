@@ -179,7 +179,7 @@ class ModelAttemptOrchestrator:
             best_attempt_result["dlp_token_rows"] = list(
                 best_translation_config.dlp_token_rows
             )
-        if best_translation_config and best_attempt_config and best_quality_result:
+        if best_translation_config and best_attempt_config:
             cover_page_metadata = self._build_cover_page_metadata(
                 best_translation_config,
                 best_attempt_config,
