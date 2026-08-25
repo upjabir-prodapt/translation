@@ -55,7 +55,9 @@ class DocxJobProcessor:
     def _collect_token_usage(
         self, translator, selected_model: str, selected_region: str | None = None
     ) -> dict[str, Any]:
-        prompt_tokens = self._counter_value(getattr(translator, "prompt_token_count", 0))
+        prompt_tokens = self._counter_value(
+            getattr(translator, "prompt_token_count", 0)
+        )
         completion_tokens = self._counter_value(
             getattr(translator, "completion_token_count", 0)
         )
@@ -237,7 +239,9 @@ class DocxJobProcessor:
                     "hallucination_score": quality_result.hallucination_score
                     if quality_result
                     else None,
-                    "final_score": quality_result.final_score if quality_result else None,
+                    "final_score": quality_result.final_score
+                    if quality_result
+                    else None,
                     "pass_fail": quality_result.pass_fail if quality_result else None,
                     "is_fallback": getattr(quality_result, "is_fallback", False)
                     if quality_result

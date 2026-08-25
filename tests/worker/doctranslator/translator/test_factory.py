@@ -92,7 +92,9 @@ class TestTranslatorFactory:
             lang_out="de",
             qps=10,
         )
-        assert translator.region == (settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION)
+        assert translator.region == (
+            settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        )
 
     @patch("src.worker.doctranslator.translator.providers.gemini.genai.Client")
     def test_region_defaults_to_location_when_gemini_region_empty(self, mock_client):
@@ -156,4 +158,3 @@ class TestTranslatorFactory:
             domain="commercial",
         )
         assert translator.domain == "commercial"
-

@@ -161,7 +161,9 @@ class DocxParagraphTranslator:
         except Exception:
             return max(1, len(text) // 4)
 
-    def _batch_units(self, units: list[TranslatableUnit]) -> list[list[TranslatableUnit]]:
+    def _batch_units(
+        self, units: list[TranslatableUnit]
+    ) -> list[list[TranslatableUnit]]:
         # Adaptive sizing (see doctranslator/batching.py): aim for roughly one
         # full wave across TRANSLATION_POOL_MAX_WORKERS instead of a flat cap
         # that produced 3 batches for a 12-worker pool.
@@ -213,7 +215,9 @@ class DocxParagraphTranslator:
     def _validate_translation(self, input_text: str, output_text: str) -> bool:
         """Return True if the translation should be treated as a fallback failure."""
         if not output_text.strip():
-            logger.warning("DOCX translation validation failed (empty): output is empty or blank")
+            logger.warning(
+                "DOCX translation validation failed (empty): output is empty or blank"
+            )
             return True
 
         trimmed_input = _TRIM_REPEAT_PATTERN.sub(".", input_text)
@@ -278,16 +282,16 @@ class DocxParagraphTranslator:
         if len(units) <= 1 or group_size <= 1:
             return self._translate_units_fallback_parallel(units)
 
-        groups = [
-            units[i : i + group_size] for i in range(0, len(units), group_size)
-        ]
+        groups = [units[i : i + group_size] for i in range(0, len(units), group_size)]
         logger.info(
             f"DOCX fallback re-batching {len(units)} unit(s) into "
             f"{len(groups)} group(s) of <= {group_size}"
         )
         results: dict[int, str] = {}
         still_failing: list[TranslatableUnit] = []
-        max_workers = min(len(groups), max(1, int(settings.TRANSLATION_POOL_MAX_WORKERS)))
+        max_workers = min(
+            len(groups), max(1, int(settings.TRANSLATION_POOL_MAX_WORKERS))
+        )
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_group = {
                 executor.submit(self._translate_batch_raw, group): group
@@ -320,9 +324,7 @@ class DocxParagraphTranslator:
             results.update(self._translate_units_fallback_parallel(still_failing))
         return results
 
-    def _translate_batch_raw(
-        self, batch: list[TranslatableUnit]
-    ) -> dict[int, str]:
+    def _translate_batch_raw(self, batch: list[TranslatableUnit]) -> dict[int, str]:
         """Send one batch prompt and return parsed {unit_id: text}, unvalidated.
 
         Used by the fallback re-batching path, which applies its own
@@ -368,7 +370,9 @@ class DocxParagraphTranslator:
         if len(units) == 1:
             unit = units[0]
             return {unit.unit_id: self._translate_single_fallback(unit)}
-        max_workers = min(len(units), max(1, int(settings.TRANSLATION_POOL_MAX_WORKERS)))
+        max_workers = min(
+            len(units), max(1, int(settings.TRANSLATION_POOL_MAX_WORKERS))
+        )
         results: dict[int, str] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_unit = {
@@ -380,9 +384,7 @@ class DocxParagraphTranslator:
                 results[unit.unit_id] = future.result()
         return results
 
-    def _translate_batch(
-        self, batch: list[TranslatableUnit]
-    ) -> dict[int, str]:
+    def _translate_batch(self, batch: list[TranslatableUnit]) -> dict[int, str]:
         """Translate one batch; returns {unit_id: translated_text}."""
         prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
         results: dict[int, str] = {}
@@ -570,14 +572,18 @@ class DocxParagraphTranslator:
 
         batches = self._batch_units(cache_miss_units)
         if self._last_batch_plan is not None:
-            log_batch_plan("DocxTranslateParagraphs", self._last_batch_plan, len(batches))
+            log_batch_plan(
+                "DocxTranslateParagraphs", self._last_batch_plan, len(batches)
+            )
         if not batches:
             self._log_completion(len(cache_hits), batch_count=0)
             return results
 
         max_workers = max(1, int(settings.TRANSLATION_POOL_MAX_WORKERS))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._translate_batch, batch) for batch in batches]
+            futures = [
+                executor.submit(self._translate_batch, batch) for batch in batches
+            ]
             for future in as_completed(futures):
                 batch_results = future.result()
                 results.update(batch_results)

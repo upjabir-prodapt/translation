@@ -61,4 +61,3 @@ class LanguageDetectionService:
     def _detect_txt(self, input_path: Path) -> str:
         text = input_path.read_text(encoding="utf-8", errors="replace")
         return self._detect_text(text, source_label="TXT text")
-

@@ -300,9 +300,7 @@ class BigQueryRepository:
         if status:
             conditions.append("status = @status")
         if user_id:
-            conditions.append(
-                "JSON_VALUE(cost_attribution, '$.user_id') = @user_id"
-            )
+            conditions.append("JSON_VALUE(cost_attribution, '$.user_id') = @user_id")
         if submitted_after:
             conditions.append("submitted_at >= @submitted_after")
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""

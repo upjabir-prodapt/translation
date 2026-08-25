@@ -64,7 +64,6 @@ class _SharedPrepEntry:
         self.lock = asyncio.Lock()
 
 
-
 class SharedDocumentPrepCache:
     """Process-wide, reference-counted cache of in-flight/completed document prep."""
 

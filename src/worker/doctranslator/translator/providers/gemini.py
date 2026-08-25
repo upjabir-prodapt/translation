@@ -70,7 +70,9 @@ class GeminiVertexAITranslator(BaseTranslator):
 
         self.model = model
         self.temperature = temperature
-        self.region = region or settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        self.region = (
+            region or settings.GEMINI_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        )
         # A client-side deadline is essential: without it a single slow
         # generation blocks a pool worker indefinitely (a 454s call was
         # observed in the 2026-08-24 baseline). HttpOptions.timeout is in

@@ -1,6 +1,5 @@
 """Translation processing service used by the worker's translation pipeline."""
 
-
 import logging
 import re
 import threading
@@ -104,7 +103,6 @@ class JobProcessor:
 
     def _get_doc_layout_model(self) -> OnnxModel:
         return _get_shared_doc_layout_model()
-
 
     async def _load_glossary_from_gcs(
         self, job_id: str, glossary_filename: str, lang_out: str

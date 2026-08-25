@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 _MERGE_MAX_RETRIES = 5
 
 
-
 class GlossaryService:
     """Load domain-specific glossary from GCS assets."""
 
@@ -261,4 +260,3 @@ class GlossaryService:
             f"after {_MERGE_MAX_RETRIES} concurrent-write conflicts"
         )
         return False
-

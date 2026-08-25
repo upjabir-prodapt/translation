@@ -33,7 +33,9 @@ import pytest
 # src/config/llm_rate_catalog.py) -- there is no env-var fallback.
 from src.config.constants import settings as _settings  # noqa: E402
 
-_test_pricing_catalog_path = _settings.assets_root_path / _settings.PRICING_CATALOG_FILENAME
+_test_pricing_catalog_path = (
+    _settings.assets_root_path / _settings.PRICING_CATALOG_FILENAME
+)
 if not _test_pricing_catalog_path.is_file():
     _test_pricing_catalog_path.write_text(
         json.dumps(

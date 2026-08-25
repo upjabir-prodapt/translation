@@ -256,7 +256,9 @@ class TestPipelineBigQueryFailure:
 
         patch_calls = bigquery.patch_translation_job.call_args_list
         routing_patches = [
-            c for c in patch_calls if c[0][1].get("result") == {"intent": "general_en_es"}
+            c
+            for c in patch_calls
+            if c[0][1].get("result") == {"intent": "general_en_es"}
         ]
         assert len(routing_patches) >= 1
         cfg = routing_patches[0][0][1]["translation_config"]

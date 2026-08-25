@@ -115,7 +115,6 @@ DOMAIN_PROMPT_PROFILES: dict[str, DomainPromptProfile] = {
             "Maintain consistent naming for infrastructure components, hardware units, and operational milestones.",
         ),
     ),
-
 }
 
 
@@ -168,4 +167,3 @@ def get_domain_role_block(
     if domain_block:
         return f"{role_base}\n\n{domain_block}"
     return role_base
-

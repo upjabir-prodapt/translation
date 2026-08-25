@@ -44,7 +44,9 @@ class TestUploadAttemptArtifacts:
     @pytest.mark.asyncio
     async def test_upload_attempt_artifacts_success(self, tmp_path: Path):
         repo = TranslationStorageRepository.__new__(TranslationStorageRepository)
-        repo.upload_file = AsyncMock(side_effect=["gs://b/track.json", "gs://b/qual.json"])
+        repo.upload_file = AsyncMock(
+            side_effect=["gs://b/track.json", "gs://b/qual.json"]
+        )
         repo.build_job_path = MagicMock(
             side_effect=[
                 "translation-service/job-1/input/iter_1_translate_tracking.json",

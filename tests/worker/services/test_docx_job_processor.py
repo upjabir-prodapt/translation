@@ -22,7 +22,11 @@ class TestEventLoopIsNotBlocked:
     @patch("src.worker.services.docx_job_processor.create_translator")
     @patch("src.worker.services.docx_job_processor.translate_docx")
     async def test_translate_docx_runs_in_a_worker_thread(
-        self, mock_translate_docx, mock_create_translator, mock_judge_cls, tmp_path: Path
+        self,
+        mock_translate_docx,
+        mock_create_translator,
+        mock_judge_cls,
+        tmp_path: Path,
     ):
         import asyncio
         import threading
@@ -149,13 +153,16 @@ class TestApplyCoverPage:
         )
 
 
-
 class TestDocxJobProcessorAttemptReuse:
     @patch("src.worker.services.docx_job_processor.translate_docx")
     @patch("src.worker.services.docx_job_processor.create_translator")
     @patch("src.worker.services.docx_job_processor.GoogleADKJudgeAgent")
     async def test_translate_reuses_extracted_terms_and_dlp_across_attempts(
-        self, mock_judge_cls, mock_create_translator, mock_translate_docx, tmp_path: Path
+        self,
+        mock_judge_cls,
+        mock_create_translator,
+        mock_translate_docx,
+        tmp_path: Path,
     ):
         """C2: Subsequent attempts receive cached extracted_terms and dlp_result from attempt 1."""
         input_file = tmp_path / "input.docx"
@@ -166,8 +173,16 @@ class TestDocxJobProcessorAttemptReuse:
         # Attempt 1 scores 0.5 (fail), Attempt 2 scores 0.95 (pass)
         mock_judge.evaluate_async = AsyncMock(
             side_effect=[
-                MagicMock(final_score=0.5, pass_fail=False, to_dict=lambda: {"final_score": 0.5}),
-                MagicMock(final_score=0.95, pass_fail=True, to_dict=lambda: {"final_score": 0.95}),
+                MagicMock(
+                    final_score=0.5,
+                    pass_fail=False,
+                    to_dict=lambda: {"final_score": 0.5},
+                ),
+                MagicMock(
+                    final_score=0.95,
+                    pass_fail=True,
+                    to_dict=lambda: {"final_score": 0.95},
+                ),
             ]
         )
 
@@ -236,4 +251,3 @@ class TestDocxJobProcessorAttemptReuse:
         assert result["attempts"][1]["attempt_number"] == 2
         assert result["attempts"][1]["is_selected"] is True
         assert result["attempts"][0]["docx_path"] is not None
-

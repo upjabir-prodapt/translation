@@ -89,7 +89,9 @@ class GoogleADKJudgeAgent:
 
     def __init__(self, model: str | None = None, region: str | None = None):
         self.model = model or settings.JUDGE_MODEL
-        self.region = region or settings.JUDGE_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        self.region = (
+            region or settings.JUDGE_MODEL_REGION or settings.GOOGLE_CLOUD_LOCATION
+        )
         self._client = None
         if genai is not None:
             # Judge calls get their own (shorter) deadline. Thinking is

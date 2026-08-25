@@ -42,9 +42,7 @@ def _normalize_email(email: str) -> str:
     normalized = email.strip().lower()
     domain = normalized.rsplit("@", 1)[-1] if "@" in normalized else ""
     if domain not in ALLOWED_EMAIL_DOMAINS:
-        logger.warning(
-            "Rejected email/sub claim with disallowed domain: %r", domain
-        )
+        logger.warning("Rejected email/sub claim with disallowed domain: %r", domain)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only @colt.net email addresses are allowed (you provided: {normalized})",

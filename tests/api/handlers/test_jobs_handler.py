@@ -31,9 +31,7 @@ class TestJobsHandler:
     async def test_cancel_job(self, handler, mock_service):
         req = MagicMock()
         await handler.cancel_job("job1", req, "user@example.com")
-        mock_service.cancel_job.assert_called_once_with(
-            "job1", req, "user@example.com"
-        )
+        mock_service.cancel_job.assert_called_once_with("job1", req, "user@example.com")
 
     async def test_download_output(self, handler, mock_service):
         await handler.download_output("job1")

@@ -162,9 +162,7 @@ def log_batch_plan(stage: str, plan: BatchPlan, batch_count: int) -> None:
         if plan.pool_max_workers
         else 0.0
     )
-    median_payload = (
-        int(plan.total_payload_tokens / batch_count) if batch_count else 0
-    )
+    median_payload = int(plan.total_payload_tokens / batch_count) if batch_count else 0
     logger.info(
         f"batch_plan stage={stage} batch_count={batch_count} "
         f"max_tokens={plan.max_tokens} max_items={plan.max_items} "

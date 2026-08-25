@@ -136,4 +136,3 @@ class TestTranslationAttemptRunner:
 
         mock_build.assert_called_once()
         assert mock_build.call_args.kwargs["shared_context"] == mock_shared_context
-

@@ -22,9 +22,7 @@ def mock_bq():
 @pytest.fixture
 def service(mock_storage, mock_bq):
     # cloud_tasks is injected so no real Cloud Tasks client is constructed.
-    return JobService(
-        storage=mock_storage, bigquery=mock_bq, cloud_tasks=MagicMock()
-    )
+    return JobService(storage=mock_storage, bigquery=mock_bq, cloud_tasks=MagicMock())
 
 
 class TestJobService:
@@ -141,9 +139,7 @@ class TestCancelJobOwnership:
         # Crucially: the job must NOT have been modified.
         mock_bq.patch_translation_job.assert_not_awaited()
 
-    async def test_cancel_missing_cost_attribution_is_rejected(
-        self, service, mock_bq
-    ):
+    async def test_cancel_missing_cost_attribution_is_rejected(self, service, mock_bq):
         """A legacy row with no owner must fail closed, not crash."""
         mock_bq.get_translation_job.return_value = {
             "job_id": "job1",
@@ -174,8 +170,8 @@ class TestCancelJobOwnership:
         """Ordering matters: a Tasks outage must not leave a job un-cancelled."""
         order = []
         mock_bq.get_translation_job.return_value = self._job()
-        mock_bq.patch_translation_job.side_effect = (
-            lambda *_args, **_kwargs: order.append("patch")
+        mock_bq.patch_translation_job.side_effect = lambda *_args, **_kwargs: (
+            order.append("patch")
         )
         service.cloud_tasks = MagicMock()
         service.cloud_tasks.delete_translate_task.side_effect = (

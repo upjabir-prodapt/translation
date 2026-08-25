@@ -29,12 +29,16 @@ class TestBuildTranslationPrompt:
         assert "# INPUT\nContract clause" in prompt
 
     def test_prompt_with_commercial_domain(self):
-        prompt = build_translation_prompt("Sales pitch", "en", "fr", domain="commercial")
+        prompt = build_translation_prompt(
+            "Sales pitch", "en", "fr", domain="commercial"
+        )
         assert "## Domain-Specific Guidance (Commercial & Business Domain)" in prompt
         assert "Engaging, persuasive, confident" in prompt
 
     def test_prompt_with_finance_domain(self):
-        prompt = build_translation_prompt("Financial statement", "en", "it", domain="finance")
+        prompt = build_translation_prompt(
+            "Financial statement", "en", "it", domain="finance"
+        )
         assert "## Domain-Specific Guidance (Finance & Accounting Domain)" in prompt
         assert "EBITDA" in prompt
 
@@ -44,7 +48,9 @@ class TestBuildTranslationPrompt:
         assert "Empathetic, clear, constructive" in prompt
 
     def test_prompt_with_operations_domain(self):
-        prompt = build_translation_prompt("SOP runbook", "en", "es", domain="operations")
+        prompt = build_translation_prompt(
+            "SOP runbook", "en", "es", domain="operations"
+        )
         assert "## Domain-Specific Guidance (Operations & Technical Domain)" in prompt
         assert "Standard Operating Procedures (SOPs)" in prompt
 
@@ -71,5 +77,7 @@ class TestProviderPrompts:
             domain="finance",
         )
         prompt_text = translator.prompt("Balance sheet items")
-        assert "## Domain-Specific Guidance (Finance & Accounting Domain)" in prompt_text
+        assert (
+            "## Domain-Specific Guidance (Finance & Accounting Domain)" in prompt_text
+        )
         assert "Balance sheet items" in prompt_text

@@ -36,11 +36,11 @@ def tasks_settings(monkeypatch):
 
 def _client():
     client = MagicMock()
-    client.queue_path.side_effect = (
-        lambda p, loc, q: f"projects/{p}/locations/{loc}/queues/{q}"
+    client.queue_path.side_effect = lambda p, loc, q: (
+        f"projects/{p}/locations/{loc}/queues/{q}"
     )
-    client.task_path.side_effect = (
-        lambda p, loc, q, t: f"projects/{p}/locations/{loc}/queues/{q}/tasks/{t}"
+    client.task_path.side_effect = lambda p, loc, q, t: (
+        f"projects/{p}/locations/{loc}/queues/{q}/tasks/{t}"
     )
     created = MagicMock()
     created.name = "projects/proj/locations/europe-west1/queues/q/tasks/translate-x"
@@ -65,9 +65,7 @@ class TestQueueSelection:
 
     def test_standard_priority_uses_default_queue(self, tasks_settings):  # noqa: ARG002
         client = _client()
-        CloudTasksService(client=client).enqueue_translate(
-            "job-1", priority="standard"
-        )
+        CloudTasksService(client=client).enqueue_translate("job-1", priority="standard")
         assert _parent_of_last_create(client).endswith(STANDARD_QUEUE)
 
     def test_priority_none_defaults_to_standard(self, tasks_settings):  # noqa: ARG002

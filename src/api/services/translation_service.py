@@ -307,9 +307,7 @@ class TranslationService:
                 job_data,
                 parent_ctx,
                 priority=effective_priority,
-                doc_format=str(
-                    getattr(request.document, "format", "") or ""
-                ).lower(),
+                doc_format=str(getattr(request.document, "format", "") or "").lower(),
             )
 
             logger.info("Submitted translation job %s", job_id)
@@ -388,11 +386,15 @@ class TranslationService:
         """
         if not settings.HIGH_PRIORITY_ROUTING_ENABLED:
             return PRIORITY_STANDARD
-        doc_format = str(getattr(request.document, "format", "") or "").lower().lstrip(".")
+        doc_format = (
+            str(getattr(request.document, "format", "") or "").lower().lstrip(".")
+        )
         filename = getattr(request.document, "filename", "") or ""
         filename_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
-        high_formats = {str(f).lower().lstrip(".") for f in settings.HIGH_PRIORITY_FORMATS}
+        high_formats = {
+            str(f).lower().lstrip(".") for f in settings.HIGH_PRIORITY_FORMATS
+        }
         is_high = (doc_format in high_formats) or (filename_ext in high_formats)
         return PRIORITY_HIGH if is_high else PRIORITY_STANDARD
 

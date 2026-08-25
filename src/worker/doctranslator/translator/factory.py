@@ -33,7 +33,6 @@ def create_translator(
     # concurrent translations don't reset each other's shared rate budget.
     set_translate_rate_limiter(max(int(qps), 1), provider=str(provider))
 
-
     if provider == LLMProvider.GEMINI_VERTEXAI:
         return GeminiVertexAITranslator(
             lang_in=lang_in,

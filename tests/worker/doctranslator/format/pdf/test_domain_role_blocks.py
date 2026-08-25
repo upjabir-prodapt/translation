@@ -10,7 +10,9 @@ from src.worker.doctranslator.format.pdf.document_il.midend.il_translator_llm_on
 )
 
 
-def _make_mock_config(domain: str | None = None, custom_system_prompt: str | None = None):
+def _make_mock_config(
+    domain: str | None = None, custom_system_prompt: str | None = None
+):
     config = MagicMock()
     config.lang_in = "en"
     config.lang_out = "es"
@@ -62,11 +64,16 @@ class TestIlTranslatorDomainRoleBlocks:
         assert "Follow all rules strictly." in role_block
 
     def test_custom_system_prompt_is_preserved_with_domain_appended(self):
-        config = _make_mock_config(domain="hr", custom_system_prompt="My Custom Enterprise Translator.")
+        config = _make_mock_config(
+            domain="hr", custom_system_prompt="My Custom Enterprise Translator."
+        )
         translator = ILTranslatorLLMOnly.__new__(ILTranslatorLLMOnly)
         translator.translation_config = config
 
         role_block = translator._build_llm_role_block()
         assert "My Custom Enterprise Translator." in role_block
         assert "Follow all rules strictly." in role_block
-        assert "## Domain-Specific Guidance (Human Resources & People Domain)" in role_block
+        assert (
+            "## Domain-Specific Guidance (Human Resources & People Domain)"
+            in role_block
+        )

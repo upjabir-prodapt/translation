@@ -100,9 +100,7 @@ class TestAdaptiveSizing:
 
     def test_zero_payload_falls_back_to_fixed(self):
         with _enable_adaptive():
-            plan = compute_batch_plan(
-                0, 12, base_max_tokens=40_000, base_max_items=200
-            )
+            plan = compute_batch_plan(0, 12, base_max_tokens=40_000, base_max_items=200)
         assert plan.adaptive is False
         assert plan.max_tokens == 40_000
 

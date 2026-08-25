@@ -25,9 +25,7 @@ class JobsHandler:
     async def list_jobs(
         self, status: str | None, limit: int, offset: int, user_id: str
     ) -> JobListResponse:
-        return await self.job_service.list_jobs(
-            status, limit, offset, user_id=user_id
-        )
+        return await self.job_service.list_jobs(status, limit, offset, user_id=user_id)
 
     async def cancel_job(
         self, job_id: str, request: JobCancelRequest, user_id: str

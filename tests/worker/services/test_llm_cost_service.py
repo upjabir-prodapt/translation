@@ -283,9 +283,7 @@ class TestRegionalEntryOrdering:
 
     def test_shipped_catalog_orders_regional_before_global(self):
         """The real mounted catalog must satisfy the ordering rule."""
-        catalog_path = (
-            settings.assets_root_path / settings.PRICING_CATALOG_FILENAME
-        )
+        catalog_path = settings.assets_root_path / settings.PRICING_CATALOG_FILENAME
         if not catalog_path.is_file():
             pytest.skip("pricing_catalog.json not present in this environment")
         entries = json.loads(catalog_path.read_text(encoding="utf-8"))

@@ -86,7 +86,6 @@ class BaseTranslator(ABC):
             text, rate_limit_params, response_schema, batch_items=batch_items
         )
 
-
     async def llm_translate_async(
         self, text, rate_limit_params: dict | None = None, response_schema=None
     ):
@@ -124,7 +123,10 @@ class BaseTranslator(ABC):
         raise NotImplementedError
 
     def do_translate(
-        self, text, rate_limit_params: dict | None = None, batch_items: int | None = None
+        self,
+        text,
+        rate_limit_params: dict | None = None,
+        batch_items: int | None = None,
     ):
         from src.worker.doctranslator.translator.schemas import TranslationResponse
 
@@ -263,7 +265,6 @@ class BaseTranslator(ABC):
                 lang_out=self.lang_out,
             )
         return out
-
 
     def __str__(self):
         return f"{self.name} {self.lang_in} {self.lang_out} {self.model}"

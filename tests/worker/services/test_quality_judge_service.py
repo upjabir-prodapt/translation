@@ -35,6 +35,7 @@ class TestQualityJudgeService:
     @patch("src.worker.services.quality_judge_service.genai.Client")
     def test_judge_init_region_fallback(self, mock_client, monkeypatch):
         from src.worker.services.quality_judge_service import settings
+
         monkeypatch.setattr(settings, "JUDGE_MODEL_REGION", "")
         monkeypatch.setattr(settings, "GOOGLE_CLOUD_LOCATION", "europe-west1")
         agent = GoogleADKJudgeAgent()

@@ -128,6 +128,7 @@ class TestModelAttemptOrchestratorIlReuse:
         assert result["attempts"][1]["is_selected"] is True
         assert result["attempts"][0]["attempt_number"] == 1
         assert result["attempts"][1]["attempt_number"] == 2
+
     async def test_run_model_chain_with_judge_disabled_applies_cover_page_without_score(
         self, tmp_path: Path
     ):
@@ -181,5 +182,6 @@ class TestModelAttemptOrchestratorIlReuse:
         assert processor._apply_cover_pages.call_count == 1
         cover_metadata = processor._apply_cover_pages.call_args[0][2]
         assert cover_metadata.confidence_score is None
-        assert not any("Confidence score" in label for label, _ in cover_metadata.iter_rows())
-
+        assert not any(
+            "Confidence score" in label for label, _ in cover_metadata.iter_rows()
+        )

@@ -41,7 +41,10 @@ def is_job_sampled_for_tracking(job_id: str) -> bool:
         return False
     if sample_rate >= 100:
         return True
-    return int(hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()[:8], 16) % 100 < sample_rate
+    return (
+        int(hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()[:8], 16) % 100
+        < sample_rate
+    )
 
 
 async def _upload_sampled_attempt_artifacts(
@@ -103,7 +106,6 @@ def _cleanup_attempt_working_dir(translation_config: TranslationConfig | None) -
         logger.debug(
             "Failed to clean up superseded attempt working_dir %s", working_dir
         )
-
 
 
 class ModelAttemptOrchestrator:
@@ -229,7 +231,6 @@ class ModelAttemptOrchestrator:
                     "skipping remaining model attempts"
                 )
                 break
-
 
         if best_attempt_result is None:
             raise RuntimeError("All translation attempts failed")

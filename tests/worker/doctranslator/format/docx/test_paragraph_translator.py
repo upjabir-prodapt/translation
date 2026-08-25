@@ -15,7 +15,9 @@ from src.worker.doctranslator.translator.provider_types import LLMProvider
 
 
 def _unit(unit_id: int, text: str) -> TranslatableUnit:
-    return TranslatableUnit(unit_id=unit_id, paragraph=MagicMock(), label="text", text=text)
+    return TranslatableUnit(
+        unit_id=unit_id, paragraph=MagicMock(), label="text", text=text
+    )
 
 
 class _FakeEngine:
@@ -141,7 +143,9 @@ class TestCacheGranularity:
     )
     def test_all_cache_hits_skips_llm_entirely(self, mock_get_cache):
         mock_cache = MagicMock()
-        mock_cache.get_many.side_effect = lambda keys: dict.fromkeys(keys, "cached-value")
+        mock_cache.get_many.side_effect = lambda keys: dict.fromkeys(
+            keys, "cached-value"
+        )
         mock_get_cache.return_value = mock_cache
 
         engine = _FakeEngine("should not be called")
@@ -209,9 +213,7 @@ class TestTruncatedBatchFallback:
         mock_cache.get_many.return_value = {}
         mock_get_cache.return_value = mock_cache
 
-        truncated = (
-            '[{"id": 0, "output": "hallo"}, {"id": 1, "output": "unfinis'
-        )
+        truncated = '[{"id": 0, "output": "hallo"}, {"id": 1, "output": "unfinis'
         engine = _FakeEngine(truncated)
         translator = DocxParagraphTranslator(engine, "de")
         with patch.object(
@@ -223,7 +225,6 @@ class TestTruncatedBatchFallback:
         assert result[0] == "hallo"
         # Unit 1 wasn't recoverable from the truncated JSON -> single-unit fallback.
         assert result[1] == "[single:world]"
-
 
 
 class TestValidationRejectionReasonLogging:
@@ -267,7 +268,6 @@ class TestValidationRejectionReasonLogging:
         assert "DOCX translation validation failed (edit_distance)" in caplog.text
 
 
-
 class TestDomainPromptGeneration:
     """Test domain-aware prompt building in DOCX paragraph translator."""
 
@@ -305,4 +305,3 @@ class TestDomainPromptGeneration:
 
         explicit_translator = DocxParagraphTranslator(engine, "German", domain="hr")
         assert explicit_translator.domain == "hr"
-

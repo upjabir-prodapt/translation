@@ -70,8 +70,16 @@ class TranslationStorageRepository(StorageRepository):
         """Upload attempt tracking and quality report JSON to GCS input folder."""
         uploaded_uris: list[str] = []
         artifacts = [
-            (tracking_path, f"iter_{attempt_index}_translate_tracking.json", "tracking"),
-            (quality_report_path, f"iter_{attempt_index}_quality_report.json", "quality_report"),
+            (
+                tracking_path,
+                f"iter_{attempt_index}_translate_tracking.json",
+                "tracking",
+            ),
+            (
+                quality_report_path,
+                f"iter_{attempt_index}_quality_report.json",
+                "quality_report",
+            ),
         ]
         for path, filename, artifact_type in artifacts:
             if path is None or not path.exists():

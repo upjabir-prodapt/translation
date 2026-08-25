@@ -70,4 +70,3 @@ def build_translation_prompt(
         f"{text}"
         "# Output\n"
     )
-

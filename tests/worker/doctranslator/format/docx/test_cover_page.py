@@ -55,4 +55,3 @@ def test_add_cover_page_without_judge(tmp_path):
     assert any("Original language: English" in t for t in texts)
     assert any("Target language: French" in t for t in texts)
     assert not any("Confidence score" in t for t in texts)
-

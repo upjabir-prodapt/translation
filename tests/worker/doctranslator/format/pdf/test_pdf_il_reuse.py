@@ -29,7 +29,9 @@ def test_shared_context_il_cache():
 @patch("src.worker.doctranslator.format.pdf.high_level.PDFCreater")
 @patch("src.worker.doctranslator.format.pdf.high_level.Typesetting")
 @patch("src.worker.doctranslator.format.pdf.high_level._run_translation_phase")
-@patch("src.worker.doctranslator.format.pdf.high_level._run_layout_and_structure_phases")
+@patch(
+    "src.worker.doctranslator.format.pdf.high_level._run_layout_and_structure_phases"
+)
 @patch("src.worker.doctranslator.format.pdf.high_level._build_il_document")
 @patch("src.worker.doctranslator.format.pdf.high_level._prepare_working_pdf")
 def test_do_translate_single_caches_il_on_first_attempt_and_reuses_on_retry(

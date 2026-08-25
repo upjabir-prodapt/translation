@@ -127,7 +127,9 @@ class DocxTermExtractor:
         # get_token_multiplier) so term-extraction batches shrink the same
         # way for CJK language pairs instead of using a flat cap.
         lang_in = str(getattr(translate_engine, "lang_in", "") or "")
-        self._token_multiplier = max(get_token_multiplier(lang_in, target_language), 0.1)
+        self._token_multiplier = max(
+            get_token_multiplier(lang_in, target_language), 0.1
+        )
         self._last_batch_plan = None
 
     def _calc_token_count(self, text: str) -> int:
@@ -138,7 +140,9 @@ class DocxTermExtractor:
         except Exception:
             return max(1, len(text) // 4)
 
-    def _batch_units(self, units: list[TranslatableUnit]) -> list[list[TranslatableUnit]]:
+    def _batch_units(
+        self, units: list[TranslatableUnit]
+    ) -> list[list[TranslatableUnit]]:
         # Adaptive sizing: the flat 80000-token cap collapsed a 414-unit
         # document into a single batch with max_workers=1, serialising ~107s
         # of work that the 12-worker pool could have absorbed in one wave.
@@ -210,7 +214,9 @@ class DocxTermExtractor:
             return []
         if self._last_batch_plan is not None:
             log_batch_plan("DocxTermExtraction", self._last_batch_plan, len(batches))
-        max_workers = min(len(batches), max(1, int(settings.TERM_EXTRACTION_POOL_MAX_WORKERS)))
+        max_workers = min(
+            len(batches), max(1, int(settings.TERM_EXTRACTION_POOL_MAX_WORKERS))
+        )
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self._extract_batch, batch) for batch in batches]
             for future in as_completed(futures):

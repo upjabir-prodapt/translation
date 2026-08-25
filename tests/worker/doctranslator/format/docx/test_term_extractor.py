@@ -9,7 +9,9 @@ from src.worker.doctranslator.translator.provider_types import LLMProvider
 
 
 def _unit(unit_id: int, text: str = "hi") -> TranslatableUnit:
-    return TranslatableUnit(unit_id=unit_id, paragraph=MagicMock(), label="text", text=text)
+    return TranslatableUnit(
+        unit_id=unit_id, paragraph=MagicMock(), label="text", text=text
+    )
 
 
 class _FakeEngine:
@@ -83,4 +85,3 @@ class TestDomainAwareTermExtraction:
         assert len(engine.prompts) == 1
         assert "### Domain Context: Legal & Regulatory" in engine.prompts[0]
         assert "legal & regulatory terminology" in engine.prompts[0]
-

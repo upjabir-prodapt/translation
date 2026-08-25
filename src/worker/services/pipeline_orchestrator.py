@@ -7,7 +7,6 @@ purely for local testing convenience -- it is not a separate "API-only"
 runtime mode.
 """
 
-
 from __future__ import annotations
 
 import asyncio
@@ -58,7 +57,6 @@ _OMIT = object()
 _pipeline_semaphore = asyncio.Semaphore(max(1, int(settings.MAX_CONCURRENT_JOBS)))
 
 
-
 def _extract_model_version(model_id: str) -> str | None:
     """Extract a human-readable version string from a model ID.
 
@@ -105,7 +103,6 @@ class _PipelineProgressTracker:
 
 class PipelineOrchestrator:
     """Execute the translation pipeline for one job (always worker-driven)."""
-
 
     def __init__(
         self,
@@ -220,7 +217,6 @@ class PipelineOrchestrator:
             if token is not None:
                 otel_context.detach(token)
 
-
     async def _run_pipeline(self, job_id: str, job_data: dict[str, Any]) -> None:
         translation_config = job_data["translation_config"]
 
@@ -318,7 +314,6 @@ class PipelineOrchestrator:
             )
         return local_input_path, source_lang
 
-
     async def _prepare_input_shared(
         self,
         *,
@@ -364,7 +359,6 @@ class PipelineOrchestrator:
             return PreparedDocument(
                 local_path=shared_path, detected_source_language=detected_lang
             )
-
 
         try:
             prepared = await cache.get_or_prepare(
@@ -412,7 +406,6 @@ class PipelineOrchestrator:
         current_stage = "initialize"
         source_hash_for_release: str | None = None
         try:
-
             source_doc = job_data["source_document"]
             translation_config = job_data["translation_config"]
             cost_attribution = job_data["cost_attribution"]
@@ -459,7 +452,6 @@ class PipelineOrchestrator:
                 )
 
             await self.session_manager.set_input_path(job_id, local_input_path)
-
 
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
@@ -584,7 +576,6 @@ class PipelineOrchestrator:
             quality_rpt = attempt_result.get("quality_report") or {}
             attempt_idx = int(attempt_result.get("attempt_index") or 1)
             token_usage = attempt_result.get("token_usage") or {}
-
 
             await self.session_manager.record_attempt(
                 job_id,
@@ -741,7 +732,6 @@ class PipelineOrchestrator:
                         exc_info=True,
                     )
 
-
             quality_report = attempt_result.get("quality_report") or {}
             set_root_span_attributes(
                 {
@@ -792,4 +782,3 @@ class PipelineOrchestrator:
                 await get_shared_document_prep_cache().release(
                     source_hash_for_release, job_id
                 )
-

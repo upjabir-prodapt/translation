@@ -49,10 +49,10 @@ class TestHandleDocumentBatching:
     @pytest.mark.parametrize(
         ("pages", "batch_size", "expected_predict_calls"),
         [
-            (20, 4, 5),   # the baseline PDF: 20 pages / 4 = 5 inference calls
+            (20, 4, 5),  # the baseline PDF: 20 pages / 4 = 5 inference calls
             (20, 1, 20),  # batch_size=1 preserves the old one-call-per-page path
-            (3, 4, 1),    # fewer pages than the batch size -> a single call
-            (9, 4, 3),    # ragged final batch (4 + 4 + 1)
+            (3, 4, 1),  # fewer pages than the batch size -> a single call
+            (9, 4, 3),  # ragged final batch (4 + 4 + 1)
         ],
     )
     def test_pages_are_grouped_into_predict_calls(
@@ -103,7 +103,9 @@ class TestHandleDocumentBatching:
         """A batch must not hand the same YoloResult to every page in it."""
         model = _model()
         page_list = [_page(i) for i in range(4)]
-        model.predict = lambda images: [MagicMock(name=f"r{i}") for i in range(len(images))]
+        model.predict = lambda images: [
+            MagicMock(name=f"r{i}") for i in range(len(images))
+        ]
         saved = []
 
         with patch(
@@ -150,7 +152,9 @@ class TestHandleDocumentBatching:
             "src.worker.doctranslator.docvision.doclayout.settings.ONNX_LAYOUT_BATCH_SIZE",
             2,
         ):
-            list(model.handle_document([_page(0)], MagicMock(), MagicMock(), MagicMock()))
+            list(
+                model.handle_document([_page(0)], MagicMock(), MagicMock(), MagicMock())
+            )
 
         image = captured["images"][0]
         assert isinstance(image, np.ndarray)

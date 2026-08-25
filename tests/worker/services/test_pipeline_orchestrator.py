@@ -39,7 +39,9 @@ class TestPipelineOrchestrator:
             )
             assert orchestrator._extract_blob_path("path/to/blob") == "path/to/blob"
 
-    def test_convert_txt_to_docx_produces_docx_sibling_file(self, orchestrator, tmp_path):
+    def test_convert_txt_to_docx_produces_docx_sibling_file(
+        self, orchestrator, tmp_path
+    ):
         txt_path = tmp_path / "input.txt"
         txt_path.write_text("Hello world.\nSecond line.", encoding="utf-8")
 

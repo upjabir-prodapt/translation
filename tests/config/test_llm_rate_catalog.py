@@ -59,9 +59,9 @@ class TestBuildRateCatalogFromSettings:
             by_model = {entry.model_id: entry for entry in catalog}
             assert "gemini-2.5-flash" in by_model
             assert "gemini-2.5-pro" in by_model
-            assert by_model[
-                "gemini-2.5-flash"
-            ].tiers[0].input_cost_per_1k == pytest.approx(0.0003)
+            assert by_model["gemini-2.5-flash"].tiers[
+                0
+            ].input_cost_per_1k == pytest.approx(0.0003)
             assert by_model["gemini-2.5-flash"].context_window_tokens == 1048576
             assert len(by_model["gemini-2.5-pro"].tiers) == 2
         finally:

@@ -315,4 +315,3 @@ class TestPriorityRouting:
         mock_storage.upload_input_pdf.return_value = "gs://b/test.docx"
         await service.submit_translations([self._req(fmt="docx")])
         assert mock_tasks.enqueue_translate.call_args[1]["priority"] == "high"
-

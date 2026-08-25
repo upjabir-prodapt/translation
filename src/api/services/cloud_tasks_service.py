@@ -204,9 +204,7 @@ class CloudTasksService:
             )
             return task_name
 
-    def delete_translate_task(
-        self, job_id: str, priority: str | None = None
-    ) -> bool:
+    def delete_translate_task(self, job_id: str, priority: str | None = None) -> bool:
         """Best-effort removal of a queued task, used when a job is cancelled.
 
         Cancelling only flips the BigQuery status; without this the task is
