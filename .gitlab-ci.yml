@@ -689,7 +689,7 @@ deploy-cloud-run:
       --concurrency=1 \
       --port=8000 \
       --timeout=3600 \
-      --memory=4Gi \
+      --memory=8Gi \
       --cpu=4 \
       --no-cpu-throttling \
       --cpu-boost \
