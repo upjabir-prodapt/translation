@@ -43,13 +43,13 @@ def _normalize_email(email: str) -> str:
     domain = normalized.rsplit("@", 1)[-1] if "@" in normalized else ""
     if domain not in ALLOWED_EMAIL_DOMAINS:
         logger.warning(
-            "Rejected email/sub claim with disallowed domain %r: %r", domain, normalized
+            "Rejected email/sub claim with disallowed domain: %r", domain
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only @colt.net email addresses are allowed (you provided: {normalized})",
         )
-    logger.info("Normalized IAP email: %s", normalized)
+    logger.debug("IAP email domain validated: %s", domain)
     return normalized
 
 
@@ -59,18 +59,18 @@ def _normalize_groups(raw_groups: Any) -> set[str]:
     The workforce pool attributeMapping (`google.groups: assertion.groups`) can surface
     this claim as a list of strings, a comma/space separated string, or absent entirely.
     """
-    logger.info("Raw groups claim from IAP token: %r", raw_groups)
+    logger.debug("Raw groups claim from IAP token present")
     if not raw_groups:
-        logger.info("No groups claim present -- normalized to empty set")
+        logger.debug("No groups claim present -- normalized to empty set")
         return set()
     if isinstance(raw_groups, str):
         parts = [p.strip() for p in raw_groups.replace(",", " ").split() if p.strip()]
         result = {p.lower() for p in parts}
-        logger.info("Normalized groups (from string claim): %s", sorted(result))
+        logger.debug("Normalized groups count: %d", len(result))
         return result
     if isinstance(raw_groups, (list, tuple, set)):
         result = {str(g).strip().lower() for g in raw_groups if str(g).strip()}
-        logger.info("Normalized groups (from list/tuple/set claim): %s", sorted(result))
+        logger.debug("Normalized groups count: %d", len(result))
         return result
     logger.warning(
         "Unrecognized groups claim type %s -- normalized to empty set", type(raw_groups)
@@ -81,9 +81,8 @@ def _normalize_groups(raw_groups: Any) -> set[str]:
 def verify_iap_jwt_claims(assertion: str, audience: str) -> dict[str, Any]:
     """Verify IAP JWT and return the full claims dict."""
     logger.info(
-        "Verifying JWT signature (len=%d, prefix=%s...) against audience %s",
+        "Verifying JWT signature (len=%d) against audience %s",
         len(assertion),
-        assertion[:12],
         audience,
     )
     try:
@@ -93,7 +92,7 @@ def verify_iap_jwt_claims(assertion: str, audience: str) -> dict[str, Any]:
             audience=audience,
             certs_url=IAP_CERTS_URL,
         )
-        logger.info("JWT signature verified successfully. Claims: %s", claims)
+        logger.info("JWT signature verified successfully")
     except Exception as exc:
         logger.warning("IAP JWT verification failed for audience %s: %s", audience, exc)
         raise HTTPException(
@@ -107,9 +106,8 @@ def verify_iap_jwt_claims(assertion: str, audience: str) -> dict[str, Any]:
     )
 
     email = claims.get("email") or claims.get("sub")
-    logger.info("Extracted email/sub claim from JWT: %s", email)
     if not email or not isinstance(email, str):
-        logger.warning("Verified JWT has no usable email/sub claim: claims=%s", claims)
+        logger.warning("Verified JWT has no usable email/sub claim")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="IAP token missing email claim",
@@ -220,17 +218,9 @@ def get_iap_identity(request: Request) -> IapIdentity:
         assertion[:12],
     )
     claims = _verify_iap_assertion_claims(assertion)
-    # Debug aid (Architecture B rollout): log the full verified claims dict so we
-    # can see exactly what IAP/Entra populated (email, sub, groups, aud, iss,
-    # etc.) when downstream checks (email domain, group membership) reject a
-    # request. This is the DECODED JWT PAYLOAD, not the raw token -- it does not
-    # include the token's cryptographic signature, but does include identity
-    # claims (email, groups) which are not secret and are already visible to
-    # this service via the header value itself.
-    logger.warning("IAP verified claims: %s", claims)
     email = _normalize_email(str(claims.get("email") or claims.get("sub")))
     groups = _normalize_groups(claims.get("groups"))
-    logger.info("Resolved IapIdentity: email=%s, groups=%s", email, sorted(groups))
+    logger.info("Resolved IapIdentity: groups_count=%d", len(groups))
     return IapIdentity(email=email, groups=groups)
 
 
@@ -253,10 +243,8 @@ def require_translation_entitlement():
             # here so local dev/test behavior is unchanged.
             if not identity.has_group(settings.TRANSLATION_REQUIRED_GROUP):
                 logger.warning(
-                    "[local] User %s denied Translation access — missing dev group %r (has: %s)",
-                    identity.email,
+                    "[local] User denied Translation access — missing dev group %r",
                     settings.TRANSLATION_REQUIRED_GROUP,
-                    sorted(identity.groups),
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -265,10 +253,7 @@ def require_translation_entitlement():
             return identity
 
         if not await has_translation_access(identity.email):
-            logger.warning(
-                "User %s denied Translation access — no Firestore entitlement",
-                identity.email,
-            )
+            logger.warning("User denied Translation access — no Firestore entitlement")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this service. Contact your administrator.",
@@ -289,10 +274,8 @@ def require_group(required_group: str):
         identity = get_iap_identity(request)
         if not identity.has_group(required_group):
             logger.warning(
-                "User %s denied — missing required group %r (has: %s)",
-                identity.email,
+                "User denied — missing required group %r",
                 required_group,
-                sorted(identity.groups),
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -347,10 +347,8 @@ class JobService:
         if owner != user_id:
             # Deliberately indistinguishable from "no such job".
             logger.warning(
-                "Rejected cancel of job %s: requested by %s, owned by %s",
+                "Rejected cancel of job %s: ownership mismatch",
                 job_id,
-                user_id,
-                owner,
             )
             raise JobNotFoundError(job_id)
 

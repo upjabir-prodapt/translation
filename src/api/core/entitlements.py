@@ -68,20 +68,18 @@ async def has_translation_access(email: str) -> bool:
         snapshot = await doc_ref.get()
     except Exception:
         logger.exception(
-            "Firestore entitlement lookup failed for %s -- denying access (fail closed)",
-            email,
+            "Firestore entitlement lookup failed -- denying access (fail closed)"
         )
         return False
 
     if not snapshot.exists:
-        logger.info("No entitlement document found for %s -- denying access", email)
+        logger.info("No entitlement document found -- denying access")
         return False
 
     data = snapshot.to_dict() or {}
     entitled = bool(data.get(TRANSLATION_ACCESS_FIELD, False))
     logger.info(
-        "Entitlement lookup for %s: %s=%s -> entitled=%s",
-        email,
+        "Entitlement lookup: %s=%s -> entitled=%s",
         TRANSLATION_ACCESS_FIELD,
         data.get(TRANSLATION_ACCESS_FIELD),
         entitled,
