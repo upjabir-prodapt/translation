@@ -432,7 +432,11 @@ class JobProcessor:
             add_cover_page=base_config.add_cover_page,
             watermark_output_mode=watermark_mode,
             dlp_config=DlpConfig(
-                enable_dlp=bool(config.get("enable_dlp", False)),
+                enable_dlp=bool(
+                    config.get(
+                        "enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True)
+                    )
+                ),
                 dlp_job_id=str(config.get("job_id", "")).strip() or None,
                 dlp_source_language=str(config.get("lang_in", "")).strip() or None,
                 dlp_post_translation=bool(config.get("dlp_post_translation", False)),

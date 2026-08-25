@@ -164,7 +164,7 @@ class SharedContextCrossSplitPart:
 
 @dataclass
 class DlpConfig:
-    enable_dlp: bool = False
+    enable_dlp: bool = True
     dlp_job_id: str | None = None
     dlp_source_language: str | None = None
     dlp_post_translation: bool = False

@@ -54,7 +54,7 @@ def translate_docx(
     lang_out: str,
     job_id: str,
     source_language: str,
-    enable_dlp: bool = False,
+    enable_dlp: bool = True,
     auto_extract_glossary: bool = True,
     extracted_terms: list[tuple[str, str]] | None = None,
     dlp_result: DlpResult | None = None,

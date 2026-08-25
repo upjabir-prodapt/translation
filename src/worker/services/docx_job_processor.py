@@ -97,7 +97,9 @@ class DocxJobProcessor:
             int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
             len(model_list),
         )
-        enable_dlp = bool(config.get("enable_dlp", False))
+        enable_dlp = bool(
+            config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
+        )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
 
         judge = GoogleADKJudgeAgent(

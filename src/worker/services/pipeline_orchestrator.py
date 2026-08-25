@@ -465,7 +465,15 @@ class PipelineOrchestrator:
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
             processing_options = job_data.get("processing_options") or {}
-            enable_dlp = bool(processing_options.get("enable_dlp", False))
+            enable_dlp = bool(
+                processing_options.get(
+                    "enable_dlp",
+                    translation_config.get(
+                        "enable_dlp",
+                        getattr(settings, "GOOGLE_DLP_ENABLED", True),
+                    ),
+                )
+            )
             intent = self.intent_router.build_intent(domain, source_lang, target_lang)
             model_chain = self.intent_router.get_model_chain(
                 domain=domain,

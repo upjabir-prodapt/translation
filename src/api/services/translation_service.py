@@ -171,6 +171,7 @@ class TranslationService:
                     "source_language": config["lang_in"],
                     "target_language": config["lang_out"],
                     "domain": config["domain"],
+                    "enable_dlp": request.processing_options.enable_dlp,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
                 # Record the priority actually used, not what the client asked
@@ -277,6 +278,7 @@ class TranslationService:
                     "source_language": config["lang_in"],
                     "target_language": config["lang_out"],
                     "domain": config["domain"],
+                    "enable_dlp": request.processing_options.enable_dlp,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
                 "processing_options": {
