@@ -101,11 +101,16 @@ class DocxJobProcessor:
             config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
         )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
-
-        judge = GoogleADKJudgeAgent(
-            config.get("judge_model"),
-            region=config.get("judge_model_region"),
+        enable_judge = bool(
+            config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
+
+        judge: GoogleADKJudgeAgent | None = None
+        if enable_judge:
+            judge = GoogleADKJudgeAgent(
+                config.get("judge_model"),
+                region=config.get("judge_model_region"),
+            )
 
         best_result: DocxTranslationResult | None = None
         best_score = -1.0
@@ -169,6 +174,18 @@ class DocxJobProcessor:
                     raise
                 continue
 
+            token_usage = self._collect_token_usage(
+                translator, selected_model, selected_region
+            )
+
+            if not enable_judge or judge is None:
+                best_result = result
+                best_model_id = selected_model
+                best_quality = None
+                best_token_usage = token_usage
+                best_attempt_index = attempt_index
+                break
+
             if not result.translated_text.strip() or not result.source_text.strip():
                 quality_result = None
                 final_score = 0.0
@@ -178,10 +195,6 @@ class DocxJobProcessor:
                     translated_text=result.translated_text,
                 )
                 final_score = quality_result.final_score
-
-            token_usage = self._collect_token_usage(
-                translator, selected_model, selected_region
-            )
 
             if final_score > best_score:
                 best_score = final_score

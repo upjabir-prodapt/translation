@@ -70,10 +70,15 @@ class ModelAttemptOrchestrator:
             int(config.get("max_model_attempts", settings.MAX_MODEL_ATTEMPTS)),
             len(model_list),
         )
-        judge = GoogleADKJudgeAgent(
-            config.get("judge_model"),
-            region=config.get("judge_model_region"),
+        enable_judge = bool(
+            config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
+        judge: GoogleADKJudgeAgent | None = None
+        if enable_judge:
+            judge = GoogleADKJudgeAgent(
+                config.get("judge_model"),
+                region=config.get("judge_model_region"),
+            )
         best_attempt_result: dict[str, Any] | None = None
         best_attempt_score = -1.0
         best_attempt_config: dict[str, Any] | None = None
@@ -104,8 +109,21 @@ class ModelAttemptOrchestrator:
                     translation_config, "shared_context_cross_split_part", None
                 )
 
-            if not attempt_result or not quality_result or not attempt_report:
+            if not attempt_result or not attempt_report:
                 continue
+
+            if not enable_judge or quality_result is None:
+                best_attempt_result = {
+                    **attempt_result,
+                    "attempt_index": attempt_config["attempt_index"],
+                    "model_id": attempt_config["selected_model"],
+                    "quality_report": None,
+                    "token_usage": attempt_report["token_usage"],
+                }
+                best_attempt_config = attempt_config
+                best_translation_config = translation_config
+                best_quality_result = None
+                break
 
             attempt_reports.append(attempt_report)
             final_score = quality_result.final_score
@@ -179,7 +197,7 @@ class ModelAttemptOrchestrator:
         self,
         translation_config: TranslationConfig,
         config: dict[str, Any],
-        quality_result: QualityJudgeResult,
+        quality_result: QualityJudgeResult | None,
     ) -> TranslationCoverPageMetadata:
         total_pages = self._processor._get_total_pdf_pages(
             translation_config.input_file
@@ -193,7 +211,7 @@ class ModelAttemptOrchestrator:
             model_used=str(config.get("selected_model") or "Unknown"),
             domain=str(config.get("domain") or "N/A"),
             translation_date=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            confidence_score=quality_result.final_score,
+            confidence_score=quality_result.final_score if quality_result else None,
             translated_sections=translated_sections,
-            judge_model=quality_result.model,
+            judge_model=quality_result.model if quality_result else None,
         )

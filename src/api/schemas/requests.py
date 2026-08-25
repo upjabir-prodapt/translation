@@ -172,6 +172,9 @@ class ProcessingOptions(BaseModel):
     enable_chunking: bool = Field(
         True, description="Enable chunked processing for large documents"
     )
+    enable_judge: bool = Field(
+        True, description="Enable LLM quality judge evaluation"
+    )
     priority: Literal["standard", "high"] = Field(
         "standard", description="Processing priority"
     )

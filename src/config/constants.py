@@ -203,6 +203,7 @@ class Settings(BaseSettings):
     # Gemini / Judge
     # -----------------------------
 
+    QUALITY_JUDGE_ENABLED: bool = True
     JUDGE_MODEL: str
     JUDGE_MODEL_REGION: str = ""
     QUALITY_THRESHOLD: float

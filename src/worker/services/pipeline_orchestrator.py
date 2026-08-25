@@ -474,6 +474,15 @@ class PipelineOrchestrator:
                     ),
                 )
             )
+            enable_judge = bool(
+                processing_options.get(
+                    "enable_judge",
+                    translation_config.get(
+                        "enable_judge",
+                        getattr(settings, "QUALITY_JUDGE_ENABLED", True),
+                    ),
+                )
+            )
             intent = self.intent_router.build_intent(domain, source_lang, target_lang)
             model_chain = self.intent_router.get_model_chain(
                 domain=domain,
@@ -519,6 +528,7 @@ class PipelineOrchestrator:
                     "model_list": model_chain,
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
                     "enable_dlp": enable_dlp,
+                    "enable_judge": enable_judge,
                     "auto_extract_glossary": True,
                     # Plain-text jobs are unwrapped back to .txt after
                     # translation (see docx_path_to_txt_bytes below); a DOCX
@@ -550,6 +560,7 @@ class PipelineOrchestrator:
                     "add_cover_page": True,
                     "no_dual": True,
                     "enable_dlp": enable_dlp,
+                    "enable_judge": enable_judge,
                 }
                 attempt_result = await processor.translate(processor_config)
                 if not attempt_result:

@@ -98,26 +98,28 @@ class TranslationAttemptRunner:
                 raise
             return None, attempt_config, None, None, None
 
-        source_text, translated_text = extract_attempt_text(
-            Path(str(translation_config.working_dir))
-        )
-        with tracer_pipeline.start_as_current_span(
-            "pipeline.quality_judge",
-            kind=SpanKind.INTERNAL,
-            attributes={"translation.attempt": attempt_index},
-        ):
-            quality_result = await self._evaluate_attempt_quality(
-                judge=judge,
-                source_text=source_text,
-                translated_text=translated_text,
+        quality_result: QualityJudgeResult | None = None
+        if judge is not None:
+            source_text, translated_text = extract_attempt_text(
+                Path(str(translation_config.working_dir))
             )
+            with tracer_pipeline.start_as_current_span(
+                "pipeline.quality_judge",
+                kind=SpanKind.INTERNAL,
+                attributes={"translation.attempt": attempt_index},
+            ):
+                quality_result = await self._evaluate_attempt_quality(
+                    judge=judge,
+                    source_text=source_text,
+                    translated_text=translated_text,
+                )
         token_usage = self.collect_token_usage(
             translation_config, selected_model, selected_region
         )
         attempt_report = {
             "attempt_index": attempt_index,
             "model_id": selected_model,
-            "quality": quality_result.to_dict(),
+            "quality": quality_result.to_dict() if quality_result else None,
             "token_usage": token_usage,
             "working_dir": str(translation_config.working_dir),
             "output_dir": str(attempt_output_dir),
