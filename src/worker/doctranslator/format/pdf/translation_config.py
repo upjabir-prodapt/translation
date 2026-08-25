@@ -189,15 +189,7 @@ class TranslationCoverPageMetadata:
     )
 
     def iter_rows(self) -> list[tuple[str, str]]:
-        confidence = "N/A"
-        if self.confidence_score is not None:
-            confidence = (
-                f"{self.confidence_score:.2f} ({self.confidence_score * 100:.1f}%)"
-            )
-        if self.judge_model:
-            confidence = f"{confidence} via {self.judge_model}"
-
-        return [
+        rows = [
             (
                 "Original language",
                 get_language_display_name(self.original_language),
@@ -209,9 +201,17 @@ class TranslationCoverPageMetadata:
             ("Model used", self.model_used or "N/A"),
             ("Domain", self.domain or "N/A"),
             ("Translation date", self.translation_date or "N/A"),
-            ("Confidence score", confidence),
-            ("Sections translated", self.translated_sections or "N/A"),
         ]
+        if self.confidence_score is not None:
+            confidence = (
+                f"{self.confidence_score:.2f} ({self.confidence_score * 100:.1f}%)"
+            )
+            if self.judge_model:
+                confidence = f"{confidence} via {self.judge_model}"
+            rows.append(("Confidence score", confidence))
+
+        rows.append(("Sections translated", self.translated_sections or "N/A"))
+        return rows
 
 
 class TranslationConfig:

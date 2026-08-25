@@ -474,15 +474,7 @@ class PipelineOrchestrator:
                     ),
                 )
             )
-            enable_judge = bool(
-                processing_options.get(
-                    "enable_judge",
-                    translation_config.get(
-                        "enable_judge",
-                        getattr(settings, "QUALITY_JUDGE_ENABLED", True),
-                    ),
-                )
-            )
+            enable_judge = bool(settings.QUALITY_JUDGE_ENABLED)
             intent = self.intent_router.build_intent(domain, source_lang, target_lang)
             model_chain = self.intent_router.get_model_chain(
                 domain=domain,

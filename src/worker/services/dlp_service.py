@@ -533,6 +533,7 @@ class DlpService:
                         exc_info=True,
                     )
                     provider = DlpProvider.REGEX_FALLBACK
+                    use_google_dlp = False
                     logger.info("[DLP] Switched to: %s", provider.value)
 
             masked, rows, token_counter = self._mask_with_regex(

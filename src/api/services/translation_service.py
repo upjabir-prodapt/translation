@@ -172,7 +172,6 @@ class TranslationService:
                     "target_language": config["lang_out"],
                     "domain": config["domain"],
                     "enable_dlp": request.processing_options.enable_dlp,
-                    "enable_judge": request.processing_options.enable_judge,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
                 # Record the priority actually used, not what the client asked
@@ -280,13 +279,11 @@ class TranslationService:
                     "target_language": config["lang_out"],
                     "domain": config["domain"],
                     "enable_dlp": request.processing_options.enable_dlp,
-                    "enable_judge": request.processing_options.enable_judge,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
                 "processing_options": {
                     "enable_dlp": request.processing_options.enable_dlp,
                     "enable_chunking": request.processing_options.enable_chunking,
-                    "enable_judge": request.processing_options.enable_judge,
                     # Effective (server-decided) priority, not the client's.
                     "priority": effective_priority,
                 },

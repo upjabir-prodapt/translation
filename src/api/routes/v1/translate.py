@@ -42,7 +42,6 @@ async def submit_translation(
     source_language: Annotated[str | None, Form()] = None,
     enable_dlp: Annotated[bool, Form()] = True,
     enable_chunking: Annotated[bool, Form()] = True,
-    enable_judge: Annotated[bool, Form()] = True,
     priority: Annotated[str, Form()] = "standard",
     current_user: Annotated[
         AuthenticatedUser, Depends(get_current_user_context)
@@ -84,7 +83,6 @@ async def submit_translation(
     processing_options = ProcessingOptions(
         enable_dlp=enable_dlp,
         enable_chunking=enable_chunking,
-        enable_judge=enable_judge,
         priority=priority,
     )
     requests = [
