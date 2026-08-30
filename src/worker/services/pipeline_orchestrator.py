@@ -482,28 +482,32 @@ class PipelineOrchestrator:
                 # concurrently in this process, only the first one actually
                 # does this work -- the rest await and reuse its result
                 # instead of re-downloading/re-converting/re-detecting.
-                local_input_path, source_lang, language_distribution = (
-                    await self._prepare_input_shared(
-                        job_id=job_id,
-                        source_hash=source_hash,
-                        source_doc=source_doc,
-                        workspace_input_dir=workspace.input_dir,
-                        local_input_path=local_input_path,
-                        requested_source_lang=requested_source_lang,
-                    )
+                (
+                    local_input_path,
+                    source_lang,
+                    language_distribution,
+                ) = await self._prepare_input_shared(
+                    job_id=job_id,
+                    source_hash=source_hash,
+                    source_doc=source_doc,
+                    workspace_input_dir=workspace.input_dir,
+                    local_input_path=local_input_path,
+                    requested_source_lang=requested_source_lang,
                 )
                 source_hash_for_release = source_hash
 
             else:
-                local_input_path, source_lang, language_distribution = (
-                    await self._prepare_input_solo(
-                        job_id=job_id,
-                        blob_path=blob_path,
-                        source_doc=source_doc,
-                        workspace_input_dir=workspace.input_dir,
-                        local_input_path=local_input_path,
-                        requested_source_lang=requested_source_lang,
-                    )
+                (
+                    local_input_path,
+                    source_lang,
+                    language_distribution,
+                ) = await self._prepare_input_solo(
+                    job_id=job_id,
+                    blob_path=blob_path,
+                    source_doc=source_doc,
+                    workspace_input_dir=workspace.input_dir,
+                    local_input_path=local_input_path,
+                    requested_source_lang=requested_source_lang,
                 )
 
             await self.session_manager.set_input_path(job_id, local_input_path)

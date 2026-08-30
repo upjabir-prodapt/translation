@@ -52,15 +52,11 @@ class TestIsUnsupportedOrAlreadyTargetLanguage:
             "This is a sufficiently long English sentence intended for "
             "the translator's language detection today."
         )
-        assert not translator._is_unsupported_or_already_target_language(
-            english_text
-        )
+        assert not translator._is_unsupported_or_already_target_language(english_text)
 
     def test_short_text_is_never_language_skipped(self):
         translator = _translator(lang_out="de")
-        assert not translator._is_unsupported_or_already_target_language(
-            "Hallo Welt"
-        )
+        assert not translator._is_unsupported_or_already_target_language("Hallo Welt")
 
     def test_disabled_via_setting(self):
         translator = _translator(lang_out="de")

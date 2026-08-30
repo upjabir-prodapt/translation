@@ -140,11 +140,12 @@ class DocumentValidator:
         or only whitespace ones -- either way there is nothing to
         translate.
         """
-        text_runs = _WORD_TEXT_RUN_PATTERN.findall(document_xml.decode("utf-8", "replace"))
+        text_runs = _WORD_TEXT_RUN_PATTERN.findall(
+            document_xml.decode("utf-8", "replace")
+        )
         if not any(run.strip() for run in text_runs):
             raise ValidationError(
-                "This document contains no translatable text (images "
-                "only).",
+                "This document contains no translatable text (images only).",
                 "no_text_layer",
             )
 
@@ -173,8 +174,7 @@ class DocumentValidator:
 
         if not decoded.strip():
             raise ValidationError(
-                "This document contains no translatable text (images "
-                "only).",
+                "This document contains no translatable text (images only).",
                 "no_text_layer",
             )
 

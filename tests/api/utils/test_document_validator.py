@@ -70,8 +70,7 @@ class TestDetectContainer:
 
     def test_detects_ole(self):
         assert (
-            detect_container(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 8)
-            == "ole"
+            detect_container(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 8) == "ole"
         )
 
     def test_unknown_container(self):

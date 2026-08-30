@@ -297,9 +297,7 @@ class JobProcessor:
         for the full char-weighted distribution
         (implementation_plan.md Phase C.5.1).
         """
-        detected_language, _ = self.detect_source_language_with_distribution(
-            input_file
-        )
+        detected_language, _ = self.detect_source_language_with_distribution(input_file)
         return detected_language
 
     def detect_source_language_with_distribution(

@@ -89,9 +89,7 @@ class JobService:
         """
         owner = (job_data.get("cost_attribution") or {}).get("user_id")
         if owner != user_id:
-            logger.warning(
-                "Rejected access to job %s: ownership mismatch", job_id
-            )
+            logger.warning("Rejected access to job %s: ownership mismatch", job_id)
             raise JobNotFoundError(job_id)
 
     async def get_job_status(self, job_id: str, user_id: str) -> JobStatusResponse:

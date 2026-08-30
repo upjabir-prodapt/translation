@@ -82,8 +82,7 @@ class TestDetectUnitsLimits:
         """Mirrors the PDF pipeline's MAX_DISTINCT_LANGUAGES_PER_PAGE guard,
         applied per-document since DOCX/TXT have no page concept."""
         long_texts = [
-            f"This is sentence number {i} written in English for testing "
-            "purposes only."
+            f"This is sentence number {i} written in English for testing purposes only."
             for i in range(3)
         ] + [
             "Ceci est une phrase francaise suffisamment longue pour tester.",

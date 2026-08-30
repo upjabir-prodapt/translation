@@ -179,7 +179,10 @@ class TestJobProcessorCore:
         """C.3.1/C.6.5: the guard message must render the real constant
         value, not a hardcoded '2' (the bug: message said "more than 2
         languages" while the constant was actually 10)."""
-        many_languages = {f"lang{i}": 100 for i in range(processor.MAX_DISTINCT_LANGUAGES_PER_PAGE + 1)}
+        many_languages = {
+            f"lang{i}": 100
+            for i in range(processor.MAX_DISTINCT_LANGUAGES_PER_PAGE + 1)
+        }
         mock_page = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__iter__.return_value = [mock_page]
@@ -197,8 +200,7 @@ class TestJobProcessorCore:
             with pytest.raises(
                 ValueError,
                 match=(
-                    f"more than {processor.MAX_DISTINCT_LANGUAGES_PER_PAGE} "
-                    "languages"
+                    f"more than {processor.MAX_DISTINCT_LANGUAGES_PER_PAGE} languages"
                 ),
             ):
                 processor.detect_source_language("dummy.pdf")

@@ -208,15 +208,19 @@ class TestTranslationAttemptRunner:
         mock_build.return_value = mock_trans_config
         mock_run.side_effect = RuntimeError("transient LLM error")
 
-        result, attempt_config, translation_config, quality_result, report = (
-            await runner.run_attempt(
-                model_index=0,
-                model_list=["gemini-2.5-flash", "gemini-2.5-pro"],
-                config={"job_id": "1", "output_dir": tempfile.gettempdir()},
-                output_base_dir=Path(tempfile.gettempdir()),
-                max_attempts=2,
-                judge=MagicMock(),
-            )
+        (
+            result,
+            attempt_config,
+            translation_config,
+            quality_result,
+            report,
+        ) = await runner.run_attempt(
+            model_index=0,
+            model_list=["gemini-2.5-flash", "gemini-2.5-pro"],
+            config={"job_id": "1", "output_dir": tempfile.gettempdir()},
+            output_base_dir=Path(tempfile.gettempdir()),
+            max_attempts=2,
+            judge=MagicMock(),
         )
         assert result is None
         assert translation_config is None
