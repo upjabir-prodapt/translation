@@ -16,6 +16,7 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from src.api.exceptions import ValidationError
+from src.api.schemas.requests import DocumentInput
 from src.api.schemas.requests import TranslateRequest
 from src.api.schemas.responses import MultiTranslateJobResponse
 from src.api.schemas.responses import MultiTranslateResponse
@@ -23,6 +24,7 @@ from src.api.schemas.responses import TranslateResponse
 from src.api.services.cloud_tasks_service import PRIORITY_HIGH
 from src.api.services.cloud_tasks_service import PRIORITY_STANDARD
 from src.api.services.cloud_tasks_service import CloudTasksService
+from src.api.utils.document_validator import DocumentValidator
 from src.api.utils.pdf_validator import PDFValidator
 from src.config.constants import settings
 from src.config.tracing import tracer_pipeline
@@ -40,6 +42,28 @@ def _current_traceparent() -> tuple[str | None, str | None]:
     carrier: dict[str, str] = {}
     TraceContextTextMapPropagator().inject(carrier)
     return carrier.get("traceparent"), carrier.get("tracestate")
+
+
+def _validate_and_describe(content: bytes, document: DocumentInput) -> dict[str, Any]:
+    """Validate decoded document bytes and return descriptive metadata.
+
+    Single dispatch point for PDF/DOCX/TXT validation used by both
+    `submit_translations` and `_do_submit` (implementation_plan.md A.3.2)
+    -- previously each had its own copy-pasted `else:` branch that never
+    validated DOCX/TXT content at all (no password/structure/size check),
+    which is how a password-protected, ZIP-corrupted, or oversized
+    DOCX/TXT could reach GCS upload and BigQuery job creation unchecked.
+    """
+    if document.format == "pdf":
+        _, metadata = PDFValidator.validate_pdf_bytes(content, document.filename)
+        return metadata
+    if document.format == "docx":
+        return DocumentValidator.validate_docx_bytes(content, document.filename)
+    if document.format == "txt":
+        return DocumentValidator.validate_txt_bytes(content, document.filename)
+    raise ValidationError(
+        f"Unsupported document format: {document.format}", "document.format"
+    )
 
 
 class TranslationService:
@@ -107,17 +131,7 @@ class TranslationService:
                 "Failed to decode document content", "document.content"
             ) from e
 
-        if first_request.document.format == "pdf":
-            _, metadata = PDFValidator.validate_pdf_bytes(
-                content, first_request.document.filename
-            )
-        else:
-            metadata = {
-                "filename": first_request.document.filename,
-                "size_bytes": len(content),
-                "checksum": hashlib.sha256(content).hexdigest(),
-                "page_count": None,
-            }
+        metadata = _validate_and_describe(content, first_request.document)
 
         # source_hash is retained for the in-process shared_document_prep cache
         # (dedupes download/parse work across sibling jobs in one multi-target-
@@ -130,12 +144,46 @@ class TranslationService:
         # src/worker/doctranslator/translator/translation_cache.py.
         source_hash = hashlib.sha256(content).hexdigest()
 
+        # implementation_plan.md D.5 (EC-15): resolve any duplicate BEFORE
+        # allocating a new job_id for that request, so a double-submitted
+        # batch reuses the existing job(s) instead of creating siblings
+        # that both upload/process the identical document.
         prepared: list[tuple[str, int, TranslateRequest, dict[str, Any]]] = []
+        duplicate_responses: dict[int, MultiTranslateJobResponse] = {}
         for batch_index, request in enumerate(requests):
             config = self._normalize_config(request)
+            duplicate = await self._find_duplicate_job(
+                request, source_hash, config["lang_out"], config["domain"]
+            )
+            if duplicate is not None:
+                logger.info(
+                    "Duplicate submission detected for user %s; returning "
+                    "existing job %s instead of creating a new one",
+                    request.cost_attribution.user_id,
+                    duplicate["job_id"],
+                )
+                duplicate_responses[batch_index] = MultiTranslateJobResponse(
+                    job_id=duplicate["job_id"],
+                    target_language=config["lang_out"],
+                    status=str(duplicate.get("status", job_status.QUEUED)),
+                    status_url=f"/api/v1/translate/{duplicate['job_id']}",
+                    is_duplicate=True,
+                )
+                continue
             job_id = str(uuid.uuid4())
             config["job_id"] = job_id
             prepared.append((job_id, batch_index, request, config))
+
+        if not prepared:
+            # Every requested target language was a duplicate -- skip the
+            # GCS upload and all BigQuery job creation entirely.
+            responses = [duplicate_responses[i] for i in range(len(requests))]
+            logger.info(
+                "Submitted translation batch %s: all %d job(s) were duplicates",
+                batch_id,
+                len(responses),
+            )
+            return MultiTranslateResponse(batch_id=batch_id, jobs=responses)
 
         input_gs_uri = await self.storage.upload_input_pdf(
             file_content=content,
@@ -191,7 +239,6 @@ class TranslationService:
             job_records.append(job_data)
 
         parent_ctx = otel_context.get_current()
-        responses: list[MultiTranslateJobResponse] = []
         for job_data in job_records:
             status = job_data["status"]
             try:
@@ -204,17 +251,24 @@ class TranslationService:
                 )
             except Exception:
                 status = job_status.FAILED
-            responses.append(
-                MultiTranslateJobResponse(
-                    job_id=job_data["job_id"],
-                    target_language=job_data["translation_config"]["target_language"],
-                    status=status,
-                    status_url=f"/api/v1/translate/{job_data['job_id']}",
-                )
+            duplicate_responses[job_data["batch_index"]] = MultiTranslateJobResponse(
+                job_id=job_data["job_id"],
+                target_language=job_data["translation_config"]["target_language"],
+                status=status,
+                status_url=f"/api/v1/translate/{job_data['job_id']}",
             )
 
+        # Reassemble in original request order -- duplicates detected above
+        # and newly created jobs were populated into the same dict keyed by
+        # batch_index, so this is the single merge point for both.
+        responses = [duplicate_responses[i] for i in range(len(requests))]
+
         logger.info(
-            "Submitted translation batch %s with %d jobs", batch_id, len(responses)
+            "Submitted translation batch %s with %d job(s) (%d new, %d duplicate)",
+            batch_id,
+            len(responses),
+            len(job_records),
+            len(responses) - len(job_records),
         )
         return MultiTranslateResponse(batch_id=batch_id, jobs=responses)
 
@@ -229,18 +283,7 @@ class TranslationService:
                     "Failed to decode document content", "document.content"
                 ) from e
 
-            metadata: dict[str, Any]
-            if request.document.format == "pdf":
-                _, metadata = PDFValidator.validate_pdf_bytes(
-                    content, request.document.filename
-                )
-            else:
-                metadata = {
-                    "filename": request.document.filename,
-                    "size_bytes": len(content),
-                    "checksum": hashlib.sha256(content).hexdigest(),
-                    "page_count": None,
-                }
+            metadata = _validate_and_describe(content, request.document)
 
             # source_hash is retained for the in-process shared_document_prep
             # cache only -- see the comment in submit_translations() above for
@@ -250,6 +293,28 @@ class TranslationService:
 
             config = self._normalize_config(request)
             config["job_id"] = job_id
+
+            # implementation_plan.md D.5 (EC-15): a double-click on submit
+            # previously created two independent jobs -- return the existing
+            # one instead of re-uploading to GCS / creating a second
+            # BigQuery row for an identical (user, document, target,
+            # domain) submission within the idempotency window.
+            duplicate = await self._find_duplicate_job(
+                request, source_hash, config["lang_out"], config["domain"]
+            )
+            if duplicate is not None:
+                logger.info(
+                    "Duplicate submission detected for user %s; returning "
+                    "existing job %s instead of creating a new one",
+                    request.cost_attribution.user_id,
+                    duplicate["job_id"],
+                )
+                return TranslateResponse(
+                    job_id=duplicate["job_id"],
+                    status=str(duplicate.get("status", job_status.QUEUED)),
+                    status_url=f"/api/v1/translate/{duplicate['job_id']}",
+                    is_duplicate=True,
+                )
 
             input_gs_uri = await self.storage.upload_input_pdf(
                 file_content=content,
@@ -397,6 +462,41 @@ class TranslationService:
         }
         is_high = (doc_format in high_formats) or (filename_ext in high_formats)
         return PRIORITY_HIGH if is_high else PRIORITY_STANDARD
+
+    async def _find_duplicate_job(
+        self,
+        request: TranslateRequest,
+        source_hash: str,
+        target_language: str,
+        domain: str,
+    ) -> dict[str, Any] | None:
+        """implementation_plan.md D.5 (EC-15): idempotency-key lookup.
+
+        Identity is (user_id, source document hash, normalized target
+        language, normalized domain) within
+        `settings.DUPLICATE_SUBMISSION_WINDOW_SECONDS`. A BigQuery lookup
+        failure must never block a legitimate new submission -- it is
+        logged and treated as "no duplicate found" rather than propagated,
+        since the cost of occasionally missing a dedupe opportunity is far
+        lower than the cost of failing a translation request outright.
+        """
+        window = int(settings.DUPLICATE_SUBMISSION_WINDOW_SECONDS)
+        if window <= 0:
+            return None
+        try:
+            return await self.bigquery.find_recent_duplicate_job(
+                user_id=request.cost_attribution.user_id,
+                source_hash=source_hash,
+                target_language=target_language,
+                domain=domain,
+                window_seconds=window,
+            )
+        except Exception:
+            logger.warning(
+                "Duplicate-submission lookup failed; proceeding as a new submission",
+                exc_info=True,
+            )
+            return None
 
     async def _schedule_background_pipeline(
         self,

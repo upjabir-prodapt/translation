@@ -20,7 +20,12 @@ def mock_storage():
 
 @pytest.fixture
 def mock_bq():
-    return AsyncMock()
+    mock = AsyncMock()
+    # D.5 (EC-15): default to "no duplicate found" so every pre-existing
+    # test exercises the ordinary (non-duplicate) submission path unless
+    # it explicitly overrides this return value.
+    mock.find_recent_duplicate_job.return_value = None
+    return mock
 
 
 @pytest.fixture
@@ -83,8 +88,13 @@ class TestTranslationService:
                 await service.submit_translation(valid_request)
 
     async def test_submit_translation_docx(self, service, mock_storage, valid_request):
+        from tests.conftest import _make_docx_bytes
+
         valid_request.document.format = "docx"
         valid_request.document.filename = "test.docx"
+        valid_request.document.content = base64.b64encode(_make_docx_bytes()).decode(
+            "utf-8"
+        )
         mock_storage.upload_input_pdf.return_value = "gs://bucket/test.docx"
 
         with patch.object(service.orchestrator, "run", new_callable=AsyncMock):
@@ -209,16 +219,268 @@ class TestTranslationService:
         assert [job.status for job in response.jobs] == ["queued", "queued"]
 
 
+class TestSharedSizeLimitEnforcement:
+    """D.3.1/D.3.4: MAX_FILE_SIZE must be enforced identically for
+    PDF/DOCX/TXT on the JSON /translate path, closing the gap where
+    DOCX/TXT's old `else:` metadata branch never checked size at all."""
+
+    @staticmethod
+    def _oversized_req(fmt: str):
+        raw = b"x" * (10 * 1024 * 1024 + 1)
+        return TranslateRequest(
+            document=DocumentInput(
+                content=base64.b64encode(raw).decode(),
+                filename=f"big.{fmt}",
+                format=fmt,
+            ),
+            translation_config=TranslationConfigInput(
+                target_language="fr", domain="commercial"
+            ),
+            cost_attribution=CostAttributionInput(
+                user_id="user1", business_unit="bu", organization="colt"
+            ),
+        )
+
+    async def test_oversized_docx_json_submission_rejected(self, service):
+        with pytest.raises(ValidationError, match="File size exceeds"):
+            await service.submit_translation(self._oversized_req("docx"))
+
+    async def test_oversized_txt_json_submission_rejected(self, service):
+        with pytest.raises(ValidationError, match="File size exceeds"):
+            await service.submit_translation(self._oversized_req("txt"))
+
+
+class TestDuplicateSubmissionIdempotency:
+    """implementation_plan.md D.5 (EC-15): a double-click on submit must
+    reuse the existing job rather than creating a second independent one."""
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_single_submit_returns_existing_job_when_duplicate_found(
+        self, mock_validate, service, mock_bq, mock_storage, valid_request
+    ):
+        mock_validate.return_value = (
+            b"pdf-content",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_bq.find_recent_duplicate_job.return_value = {
+            "job_id": "existing-job-id",
+            "status": "processing",
+        }
+
+        res = await service.submit_translation(valid_request)
+
+        assert res.job_id == "existing-job-id"
+        assert res.status == "processing"
+        assert res.status_url == "/api/v1/translate/existing-job-id"
+        # is_duplicate lets the UI tell the user it reused an existing job
+        # instead of silently returning what looks like a fresh submission
+        # (implementation_plan.md D.5 UI follow-up).
+        assert res.is_duplicate is True
+        # No new upload/job row/enqueue for a detected duplicate.
+        mock_storage.upload_input_pdf.assert_not_awaited()
+        mock_bq.upsert_translation_job.assert_not_awaited()
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_single_submit_creates_new_job_when_no_duplicate(
+        self, mock_validate, service, mock_bq, mock_storage, valid_request
+    ):
+        mock_validate.return_value = (
+            b"pdf-content",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/test.pdf"
+        mock_bq.find_recent_duplicate_job.return_value = None
+
+        with patch.object(service.orchestrator, "run", new_callable=AsyncMock):
+            res = await service.submit_translation(valid_request)
+
+        assert res.status == "queued"
+        assert res.is_duplicate is False
+        mock_bq.upsert_translation_job.assert_called_once()
+
+    async def test_duplicate_lookup_is_skipped_when_window_is_zero(
+        self, service, mock_storage, mock_bq, valid_request
+    ):
+        with (
+            patch(
+                "src.api.services.translation_service.settings.DUPLICATE_SUBMISSION_WINDOW_SECONDS",
+                0,
+            ),
+            patch(
+                "src.api.services.translation_service.PDFValidator.validate_pdf_bytes",
+                return_value=(
+                    b"pdf-content",
+                    {
+                        "page_count": 1,
+                        "filename": "test.pdf",
+                        "size_bytes": 100,
+                        "checksum": "abc",
+                    },
+                ),
+            ),
+            patch.object(service.orchestrator, "run", new_callable=AsyncMock),
+        ):
+            mock_storage.upload_input_pdf.return_value = "gs://bucket/test.pdf"
+            res = await service.submit_translation(valid_request)
+
+        assert res.status == "queued"
+        mock_bq.find_recent_duplicate_job.assert_not_awaited()
+
+    async def test_a_bigquery_lookup_failure_does_not_block_submission(
+        self, service, mock_storage, mock_bq, valid_request
+    ):
+        """A dedupe-lookup error must never fail an otherwise-legitimate
+        submission -- it degrades to "no duplicate found"."""
+        mock_bq.find_recent_duplicate_job.side_effect = RuntimeError("BQ down")
+        with (
+            patch(
+                "src.api.services.translation_service.PDFValidator.validate_pdf_bytes",
+                return_value=(
+                    b"pdf-content",
+                    {
+                        "page_count": 1,
+                        "filename": "test.pdf",
+                        "size_bytes": 100,
+                        "checksum": "abc",
+                    },
+                ),
+            ),
+            patch.object(service.orchestrator, "run", new_callable=AsyncMock),
+        ):
+            mock_storage.upload_input_pdf.return_value = "gs://bucket/test.pdf"
+            res = await service.submit_translation(valid_request)
+
+        assert res.status == "queued"
+        mock_bq.upsert_translation_job.assert_called_once()
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_multi_target_batch_reuses_duplicate_for_one_target_only(
+        self, mock_validate, mock_storage, mock_bq, monkeypatch
+    ):
+        """One target language is a duplicate, the other is genuinely new
+        -- only the new one should trigger an upload/job-row/enqueue, and
+        the response must preserve original request order."""
+        monkeypatch.setattr(
+            "src.api.services.translation_service.settings.API_USE_BACKGROUND_PIPELINE",
+            False,
+        )
+        mock_validate.return_value = (
+            b"pdf",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_storage.upload_input_pdf.return_value = "gs://bucket/shared/test.pdf"
+        mock_tasks = MagicMock()
+
+        async def _find_duplicate(*, target_language, **kwargs):
+            del kwargs
+            if target_language == "fr":
+                return {"job_id": "existing-fr-job", "status": "processing"}
+            return None
+
+        mock_bq.find_recent_duplicate_job.side_effect = _find_duplicate
+        service = TranslationService(
+            storage=mock_storage, bigquery=mock_bq, cloud_tasks=mock_tasks
+        )
+        requests = [
+            TranslateRequest(
+                document=DocumentInput(
+                    content=base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+                    filename="test.pdf",
+                ),
+                translation_config=TranslationConfigInput(
+                    target_language=target, domain="legal"
+                ),
+                cost_attribution=CostAttributionInput(
+                    user_id="user1", business_unit="legal", organization="colt"
+                ),
+            )
+            for target in ("fr", "de")
+        ]
+
+        response = await service.submit_translations(requests)
+
+        assert [job.target_language for job in response.jobs] == ["fr", "de"]
+        assert response.jobs[0].job_id == "existing-fr-job"
+        assert response.jobs[0].status == "processing"
+        assert response.jobs[0].is_duplicate is True
+        assert response.jobs[1].job_id != "existing-fr-job"
+        assert response.jobs[1].is_duplicate is False
+        # Only ONE upload/upsert/enqueue -- for the "de" job, not "fr".
+        mock_storage.upload_input_pdf.assert_awaited_once()
+        mock_bq.upsert_translation_job.assert_awaited_once()
+        assert mock_tasks.enqueue_translate.call_count == 1
+
+    @patch("src.api.services.translation_service.PDFValidator.validate_pdf_bytes")
+    async def test_multi_target_batch_all_duplicates_skips_upload_entirely(
+        self, mock_validate, mock_storage, mock_bq
+    ):
+        mock_validate.return_value = (
+            b"pdf",
+            {
+                "page_count": 1,
+                "filename": "test.pdf",
+                "size_bytes": 100,
+                "checksum": "abc",
+            },
+        )
+        mock_bq.find_recent_duplicate_job.return_value = {
+            "job_id": "existing-job",
+            "status": "queued",
+        }
+        mock_tasks = MagicMock()
+        service = TranslationService(
+            storage=mock_storage, bigquery=mock_bq, cloud_tasks=mock_tasks
+        )
+        requests = [
+            TranslateRequest(
+                document=DocumentInput(
+                    content=base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+                    filename="test.pdf",
+                ),
+                translation_config=TranslationConfigInput(
+                    target_language="fr", domain="legal"
+                ),
+                cost_attribution=CostAttributionInput(
+                    user_id="user1", business_unit="legal", organization="colt"
+                ),
+            )
+        ]
+
+        response = await service.submit_translations(requests)
+
+        assert response.jobs[0].job_id == "existing-job"
+        assert response.jobs[0].is_duplicate is True
+        mock_storage.upload_input_pdf.assert_not_awaited()
+        mock_bq.upsert_translation_job.assert_not_awaited()
+        mock_tasks.enqueue_translate.assert_not_called()
+
+
 class TestPriorityRouting:
     """Server-side queue selection. Clients cannot promote their own work."""
 
     @staticmethod
     def _req(fmt="pdf", client_priority="standard"):
+        from tests.conftest import _make_docx_bytes
         from tests.conftest import _make_pdf_bytes
 
         content_map = {
             "pdf": _make_pdf_bytes(),
-            "docx": b"PK\x03\x04fake",
+            "docx": _make_docx_bytes(),
             "txt": b"plain text",
         }
         raw = content_map[fmt]

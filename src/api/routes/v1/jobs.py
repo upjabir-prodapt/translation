@@ -35,10 +35,18 @@ async def get_jobs_status(
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse, tags=["jobs"])
 async def get_job_status(
-    job_id: str, handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None
-):  # noqa: B008
-    """Get the status of a translation job."""
-    return await handler.get_job_status(job_id)
+    job_id: str,
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
+    handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008
+):
+    """Get the status of a translation job.
+
+    Only the job's owner may view it; another user's job returns 404
+    rather than 403 so this endpoint cannot enumerate job IDs.
+    """
+    return await handler.get_job_status(job_id, current_user.email)
 
 
 @router.get("/jobs", response_model=JobListResponse, tags=["jobs"])
@@ -78,7 +86,14 @@ async def cancel_job(
 @router.get("/jobs/{job_id}/download", response_model=DownloadResponse, tags=["jobs"])
 async def download_output(
     job_id: str,
+    current_user: Annotated[
+        AuthenticatedUser, Depends(get_current_user_context)
+    ] = None,  # noqa: B008
     handler: Annotated[JobsHandler, Depends(get_jobs_handler)] = None,  # noqa: B008
 ):
-    """Get a signed URL to download the translated PDF (mono output only)."""
-    return await handler.download_output(job_id)
+    """Get a signed URL to download the translated PDF (mono output only).
+
+    Only the job's owner may download it; another user's job returns 404
+    rather than 403 so this endpoint cannot enumerate job IDs.
+    """
+    return await handler.download_output(job_id, current_user.email)

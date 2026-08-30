@@ -135,6 +135,19 @@ class TestGetTranslationStatus:
         body = resp.json()
         assert body["job_id"] == "test-job-id-001"
 
+    def test_passes_authenticated_user_email_for_ownership_check(
+        self, api_client, mock_job_service
+    ):
+        """implementation_plan.md D.1 (Sev-1): the route must thread the
+        authenticated caller's identity into the service so ownership can
+        be enforced -- without this wiring, any user holding another
+        user's job_id could read that job's full detail/result."""
+        mock_job_service.get_translation_status.reset_mock()
+        api_client.get("/api/v1/translate/test-job-id-001")
+        mock_job_service.get_translation_status.assert_called_once_with(
+            "test-job-id-001", "user@colt.net"
+        )
+
     def test_response_has_status(self, api_client):
         resp = api_client.get("/api/v1/translate/test-job-id-001")
         body = resp.json()

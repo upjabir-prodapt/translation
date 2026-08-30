@@ -93,6 +93,118 @@ class TestEventLoopIsNotBlocked:
         assert loop_was_responsive
 
 
+class TestProtectedTokenVerification:
+    """implementation_plan.md D.6.1 (EC-01/02/14): every attempt report
+    must include a `token_verification` entry, whether or not the quality
+    judge is enabled."""
+
+    @staticmethod
+    def _judge_mock():
+        judge = MagicMock()
+        judge.evaluate_async = AsyncMock(
+            return_value=MagicMock(
+                final_score=0.95,
+                pass_fail=True,
+                alignment_score=0.9,
+                omission_score=0.9,
+                hallucination_score=0.9,
+                is_fallback=False,
+                to_dict=lambda: {"final_score": 0.95},
+            )
+        )
+        return judge
+
+    @patch("src.worker.services.docx_job_processor.GoogleADKJudgeAgent")
+    @patch("src.worker.services.docx_job_processor.create_translator")
+    @patch("src.worker.services.docx_job_processor.translate_docx")
+    async def test_attempt_report_includes_token_verification_with_judge(
+        self,
+        mock_translate_docx,
+        mock_create_translator,
+        mock_judge_cls,
+        tmp_path: Path,
+    ):
+        mock_translate_docx.side_effect = lambda **kwargs: DocxTranslationResult(
+            output_path=kwargs["output_path"],
+            source_text="Visit https://example.com for help.",
+            translated_text="Aucun lien ici du tout.",
+            dlp_provider=None,
+            dlp_token_rows=[],
+            extracted_terms=[],
+        )
+        mock_create_translator.return_value = MagicMock()
+        mock_judge_cls.return_value = self._judge_mock()
+
+        processor = DocxJobProcessor(glossary_service=MagicMock())
+        processor._cost_service = MagicMock()
+        processor._cost_service.calculate_attempt_cost.return_value = MagicMock(
+            provider="gemini_vertexai", total_cost_usd=0.0, to_dict=lambda: {}
+        )
+
+        result = await processor.translate(
+            {
+                "job_id": "job-1",
+                "input_file": str(tmp_path / "in.docx"),
+                "output_dir": str(tmp_path / "out"),
+                "lang_in": "en",
+                "lang_out": "fr",
+                "domain": "commercial",
+                "model_list": ["gemini-3.5-flash"],
+                "max_model_attempts": 1,
+                "add_cover_page": False,
+            }
+        )
+
+        report = result["attempts"][0]
+        assert "token_verification" in report
+        assert report["token_verification"]["passed"] is False
+        assert (
+            "https://example.com"
+            in report["token_verification"]["missing_by_category"]["url"]
+        )
+
+    @patch("src.worker.services.docx_job_processor.create_translator")
+    @patch("src.worker.services.docx_job_processor.translate_docx")
+    async def test_attempt_report_includes_token_verification_without_judge(
+        self, mock_translate_docx, mock_create_translator, tmp_path: Path
+    ):
+        mock_translate_docx.side_effect = lambda **kwargs: DocxTranslationResult(
+            output_path=kwargs["output_path"],
+            source_text="Order 42 items today.",
+            translated_text="Commandez des articles aujourd'hui.",
+            dlp_provider=None,
+            dlp_token_rows=[],
+            extracted_terms=[],
+        )
+        mock_create_translator.return_value = MagicMock()
+
+        processor = DocxJobProcessor(glossary_service=MagicMock())
+        processor._cost_service = MagicMock()
+        processor._cost_service.calculate_attempt_cost.return_value = MagicMock(
+            provider="gemini_vertexai", total_cost_usd=0.0, to_dict=lambda: {}
+        )
+
+        result = await processor.translate(
+            {
+                "job_id": "job-1",
+                "input_file": str(tmp_path / "in.docx"),
+                "output_dir": str(tmp_path / "out"),
+                "lang_in": "en",
+                "lang_out": "fr",
+                "domain": "commercial",
+                "model_list": ["gemini-3.5-flash"],
+                "max_model_attempts": 1,
+                "add_cover_page": False,
+                "enable_judge": False,
+            }
+        )
+
+        report = result["attempts"][0]
+        assert "token_verification" in report
+        assert report["token_verification"]["passed"] is False
+        assert "42" in report["token_verification"]["missing_by_category"]["digits"]
+
+
 class TestApplyCoverPage:
     def test_apply_cover_page_prepends_cover_and_disclaimer(self, tmp_path: Path):
         output_path = tmp_path / "translated.docx"

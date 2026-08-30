@@ -17,8 +17,10 @@ def handler(mock_service):
 
 class TestJobsHandler:
     async def test_get_job_status(self, handler, mock_service):
-        await handler.get_job_status("job1")
-        mock_service.get_job_status.assert_called_once_with("job1")
+        await handler.get_job_status("job1", "user@example.com")
+        mock_service.get_job_status.assert_called_once_with(
+            "job1", "user@example.com"
+        )
 
     async def test_list_jobs(self, handler, mock_service):
         await handler.list_jobs(
@@ -34,5 +36,7 @@ class TestJobsHandler:
         mock_service.cancel_job.assert_called_once_with("job1", req, "user@example.com")
 
     async def test_download_output(self, handler, mock_service):
-        await handler.download_output("job1")
-        mock_service.get_download_url.assert_called_once_with("job1", "mono")
+        await handler.download_output("job1", "user@example.com")
+        mock_service.get_download_url.assert_called_once_with(
+            "job1", "mono", "user@example.com"
+        )

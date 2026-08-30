@@ -56,6 +56,19 @@ class TestGetJobStatus:
             error_message=None,
         )
 
+    def test_passes_authenticated_user_email_for_ownership_check(
+        self, api_client, mock_job_service
+    ):
+        """implementation_plan.md D.1 (Sev-1): the route must thread the
+        authenticated caller's identity into the service so ownership can
+        be enforced -- without this wiring, `JobService._assert_owner`
+        never runs and any user could read another user's job status."""
+        mock_job_service.get_job_status.reset_mock()
+        api_client.get("/api/v1/jobs/test-job-id-001")
+        mock_job_service.get_job_status.assert_called_once_with(
+            "test-job-id-001", "user@colt.net"
+        )
+
     def test_body_error_structure_on_404(self, api_client, mock_job_service):
         mock_job_service.get_job_status.side_effect = JobNotFoundError("ghost")
         resp = api_client.get("/api/v1/jobs/ghost")
@@ -223,6 +236,27 @@ class TestDownloadOutput:
         )
         resp = api_client.get("/api/v1/jobs/queued-job/download")
         assert resp.status_code == 400
+        # Reset
+        mock_job_service.get_download_url.side_effect = Exception("not configured")
+
+    def test_passes_authenticated_user_email_for_ownership_check(
+        self, api_client, mock_job_service
+    ):
+        """implementation_plan.md D.1 (Sev-1): the route must thread the
+        authenticated caller's identity into the service so ownership can
+        be enforced -- without this, any user holding another user's
+        job_id could obtain a valid signed download URL."""
+        mock_job_service.get_download_url.reset_mock(side_effect=True)
+        mock_job_service.get_download_url.return_value = DownloadResponse(
+            download_url="https://signed.url/output.pdf",
+            expires_in=3600,
+            filename="output.pdf",
+            file_size=None,
+        )
+        api_client.get("/api/v1/jobs/test-job-id-001/download")
+        mock_job_service.get_download_url.assert_called_once_with(
+            "test-job-id-001", "mono", "user@colt.net"
+        )
         # Reset
         mock_job_service.get_download_url.side_effect = Exception("not configured")
 

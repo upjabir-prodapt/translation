@@ -9,6 +9,7 @@ from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from src.config.constants import settings
 from src.config.translation_routing import normalize_language
 
 MAX_TARGET_LANGUAGES_PER_REQUEST = 5
@@ -32,16 +33,45 @@ class DocumentInput(BaseModel):
             raise ValueError("content must be valid base64-encoded data") from e
         return v
 
+    # Cap on the stored filename length (before the extension), leaving
+    # headroom under typical GCS/filesystem path-component limits even
+    # after a UUID job-id prefix is added elsewhere in the path.
+    _MAX_FILENAME_STEM_LENGTH: ClassVar[int] = 100
+
     @field_validator("filename")
     @classmethod
     def validate_filename(cls, v: str) -> str:
-        """Validate filename has supported extension."""
-        lower = v.strip().lower()
-        if not (
-            lower.endswith(".pdf") or lower.endswith(".docx") or lower.endswith(".txt")
-        ):
-            raise ValueError("filename must end with .pdf, .docx, or .txt")
-        return v.strip()
+        """Validate filename has a supported extension, then sanitize it
+        for safe storage as a GCS blob path component.
+
+        Extension check is driven by `settings.ALLOWED_EXTENSIONS`
+        (implementation_plan.md A.4.1) rather than a hardcoded tuple, so
+        the two never drift apart again -- `ALLOWED_EXTENSIONS` used to
+        list unsupported `.doc` and omit supported `.txt` while being
+        read nowhere.
+
+        Sanitization (A.4.4) strips path separators and control
+        characters and caps the length, so a 150-char filename with
+        accents/emoji is accepted but never used verbatim as a blob path
+        component (path traversal / overlong-path safety), while still
+        preserving the real extension and enough of the stem to be
+        recognizable.
+        """
+        stripped = v.strip()
+        lower = stripped.lower()
+        allowed = {str(ext).strip().lower() for ext in settings.ALLOWED_EXTENSIONS}
+        matched_ext = next((ext for ext in allowed if lower.endswith(ext)), None)
+        if matched_ext is None:
+            allowed_display = ", ".join(sorted(allowed))
+            raise ValueError(f"filename must end with one of: {allowed_display}")
+
+        # Strip directory components (path traversal) and control chars,
+        # keeping the rest (including accents/emoji) intact.
+        base_name = stripped.replace("\\", "/").rsplit("/", 1)[-1]
+        base_name = "".join(ch for ch in base_name if ch.isprintable())
+        stem = base_name[: -len(matched_ext)] if base_name else base_name
+        stem = stem[: cls._MAX_FILENAME_STEM_LENGTH] or "document"
+        return f"{stem}{matched_ext}"
 
 
 class TranslationConfigInput(BaseModel):

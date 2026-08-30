@@ -52,6 +52,8 @@ from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper impo
 )
 from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import GRAY80
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
+from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
+from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
@@ -60,6 +62,11 @@ from src.worker.doctranslator.utils.priority_thread_pool_executor import (
 logger = logging.getLogger(__name__)
 
 
+# implementation_plan.md Phase D.4 (EC-11): $text_to_translate is untrusted
+# document content. $security_notice is INJECTION_GUARD_CLAUSE, and the
+# actual text is fenced via wrap_untrusted_content() at the call site
+# (generate_prompt_for_llm) -- see prompt_safety.py for the full threat
+# model and the matching output-side guard in _validate_translation_quality.
 PROMPT_TEMPLATE = Template(
     """$role_block
 
@@ -76,6 +83,8 @@ PROMPT_TEMPLATE = Template(
 $glossary_block
 
 $context_block
+
+$security_notice
 
 ## Output
 
@@ -1274,8 +1283,9 @@ class ILTranslator:
             role_block=role_block,
             glossary_block=glossary_block,
             context_block=context_block,
+            security_notice=INJECTION_GUARD_CLAUSE,
             lang_out=self.translation_config.lang_out,
-            text_to_translate=text,
+            text_to_translate=wrap_untrusted_content(text),
         )
 
     def add_content_filter_hint(self, page: Page, paragraph: PdfParagraph):

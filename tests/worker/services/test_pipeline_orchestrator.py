@@ -1,3 +1,4 @@
+from collections import Counter
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
@@ -83,7 +84,9 @@ class TestPipelineOrchestrator:
         # We need to bypass or mock lots of internal calls
         with patch.object(orchestrator.temp_workspace_service, "create"):
             with patch.object(
-                orchestrator.language_detector, "detect", return_value="en"
+                orchestrator.language_detector,
+                "detect_with_distribution",
+                return_value=("en", Counter({"en": 100})),
             ):
                 with patch.object(
                     orchestrator.intent_router, "get_model_chain", return_value=["m1"]

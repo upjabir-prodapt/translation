@@ -27,5 +27,7 @@ class TranslationHandler:
     ) -> MultiTranslateResponse:
         return await self.translation_service.submit_translations(requests)
 
-    async def get_translation_status(self, job_id: str) -> JobDetailResponse:
-        return await self.job_service.get_translation_status(job_id)
+    async def get_translation_status(
+        self, job_id: str, user_id: str
+    ) -> JobDetailResponse:
+        return await self.job_service.get_translation_status(job_id, user_id)

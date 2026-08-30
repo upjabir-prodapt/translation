@@ -1,9 +1,12 @@
 """Unit tests for top-level translate_docx orchestration and attempt reuse."""
 
+import io
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from src.worker.doctranslator.format.docx.docx_translator import translate_docx
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpResult
@@ -97,3 +100,88 @@ def test_translate_docx_reuses_dlp_result(tmp_path: Path):
     assert result.dlp_token_rows == cached_dlp.token_rows
     # Restored text should replace [EMAIL_1] with test@example.com
     assert "test@example.com" in result.translated_text
+
+
+def _make_docx_with_footnote_bytes() -> bytes:
+    """Real DOCX with a footnote, built via zip/XML surgery (no python-docx
+    authoring API exists for footnotes.xml -- see test_units.py)."""
+    doc = Document()
+    doc.add_paragraph("Hello world")
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+
+    zin = zipfile.ZipFile(buf)
+    names = zin.namelist()
+    content_types = zin.read("[Content_Types].xml").decode()
+    doc_xml = zin.read("word/document.xml").decode()
+    doc_rels = zin.read("word/_rels/document.xml.rels").decode()
+
+    doc_xml = doc_xml.replace(
+        "<w:t>Hello world</w:t></w:r>",
+        '<w:t>Hello world</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r>',
+    )
+    footnotes_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        'wordprocessingml/2006/main">'
+        '<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>'
+        '<w:r><w:t xml:space="preserve"> Note text</w:t></w:r>'
+        "</w:p></w:footnote></w:footnotes>"
+    )
+    content_types = content_types.replace(
+        "</Types>",
+        '<Override PartName="/word/footnotes.xml" ContentType='
+        '"application/vnd.openxmlformats-officedocument.wordprocessingml'
+        '.footnotes+xml"/></Types>',
+    )
+    doc_rels = doc_rels.replace(
+        "</Relationships>",
+        '<Relationship Id="rIdFootnotes1" Type='
+        '"http://schemas.openxmlformats.org/officeDocument/2006/'
+        'relationships/footnotes" Target="footnotes.xml"/></Relationships>',
+    )
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name in names:
+            if name == "[Content_Types].xml":
+                zout.writestr(name, content_types)
+            elif name == "word/document.xml":
+                zout.writestr(name, doc_xml)
+            elif name == "word/_rels/document.xml.rels":
+                zout.writestr(name, doc_rels)
+            else:
+                zout.writestr(name, zin.read(name))
+        zout.writestr("word/footnotes.xml", footnotes_xml)
+    return out.getvalue()
+
+
+def test_translate_docx_translates_and_persists_footnote_text(tmp_path: Path):
+    """implementation_plan.md D.2.1: footnote text must be translated AND
+    survive all the way through translate_docx()'s document.save()."""
+    input_file = tmp_path / "input.docx"
+    output_file = tmp_path / "output.docx"
+    input_file.write_bytes(_make_docx_with_footnote_bytes())
+
+    translator = _FakeTranslator(
+        '[{"id": 0, "output": "Bonjour le monde"}, '
+        '{"id": 1, "output": "Texte de la note"}]'
+    )
+
+    result = translate_docx(
+        input_path=input_file,
+        output_path=output_file,
+        translator=translator,
+        lang_out="fr",
+        job_id="job-footnote",
+        source_language="en",
+        enable_dlp=False,
+        auto_extract_glossary=False,
+    )
+
+    assert "Texte de la note" in result.translated_text
+    reloaded = Document(str(output_file))
+    footnotes_part = reloaded.part.part_related_by(RT.FOOTNOTES)
+    assert b"Texte de la note" in footnotes_part.blob
+    assert b"Note text" not in footnotes_part.blob

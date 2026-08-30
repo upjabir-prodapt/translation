@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.config.domain_prompts import get_domain_prompt_block
+from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
+from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 
 
 def build_translation_prompt(
@@ -11,7 +13,14 @@ def build_translation_prompt(
     lang_out: str,
     domain: str | None = None,
 ) -> str:
-    """Build the standard document translation prompt used across all LLM backends."""
+    """Build the standard document translation prompt used across all LLM backends.
+
+    implementation_plan.md Phase D.4 (EC-11): `text` is untrusted document
+    content, fenced via `wrap_untrusted_content()` and paired with
+    `INJECTION_GUARD_CLAUSE` so the model treats anything inside the
+    delimiters as data to translate, never as instructions -- see
+    prompt_safety.py for the full threat model and output-side guard.
+    """
     domain_block = get_domain_prompt_block(domain)
     domain_section = f"{domain_block}\n\n" if domain_block else ""
 
@@ -21,6 +30,7 @@ def build_translation_prompt(
         "# Task\n"
         f"Translate the INPUT below from {lang_in} into {lang_out}.\n\n"
         f"{domain_section}"
+        f"{INJECTION_GUARD_CLAUSE}\n"
         "# Output format (plain text only)\n"
         "- Reply with nothing except the translated text itself.\n"
         "- Do not add explanations, notes, alternatives, or apologies—only the translation.\n"
@@ -67,6 +77,6 @@ def build_translation_prompt(
         "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "
         "do not silently soften or strengthen them.\n\n"
         "# INPUT\n"
-        f"{text}"
+        f"{wrap_untrusted_content(text)}\n"
         "# Output\n"
     )

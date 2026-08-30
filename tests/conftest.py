@@ -146,6 +146,17 @@ def _make_pdf_bytes(text: str = "Test document for translation.") -> bytes:
     return buf.getvalue()
 
 
+def _make_docx_bytes(text: str = "Test document for translation.") -> bytes:
+    """Create a minimal, valid, non-encrypted .docx using python-docx."""
+    from docx import Document as DocxDocument
+
+    document = DocxDocument()
+    document.add_paragraph(text)
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
 def make_job_doc(
     job_id: str | None = None,
     status: str = "queued",

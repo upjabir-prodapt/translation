@@ -68,8 +68,18 @@ async def submit_translation(
         doc_format = "docx"
     elif lower_filename.endswith(".txt"):
         doc_format = "txt"
-    else:
+    elif lower_filename.endswith(".pdf"):
         doc_format = "pdf"
+    else:
+        # Previously defaulted anything unrecognized (e.g. "report.xyz")
+        # to "pdf" and let it fail deep inside PDFValidator with a
+        # confusing "not a valid PDF" message. Reject explicitly here
+        # instead (implementation_plan.md A.4.3).
+        allowed = ", ".join(sorted(settings.ALLOWED_EXTENSIONS))
+        raise ValidationError(
+            f"Unsupported file type. Allowed extensions: {allowed}",
+            "document.filename",
+        )
     document = DocumentInput(
         content=base64.b64encode(content).decode("utf-8"),
         format=doc_format,
@@ -107,10 +117,14 @@ async def submit_translation(
 )
 async def get_translation_status(
     job_id: str,
-    _current_user: Annotated[
+    current_user: Annotated[
         AuthenticatedUser, Depends(get_current_user_context)
     ] = None,  # noqa: B008
     handler: Annotated[TranslationHandler, Depends(get_translation_handler)] = None,  # noqa: B008
 ):
-    """Get the status of a translation job."""
-    return await handler.get_translation_status(job_id)
+    """Get the status of a translation job.
+
+    Only the job's owner may view it; another user's job returns 404
+    rather than 403 so this endpoint cannot enumerate job IDs.
+    """
+    return await handler.get_translation_status(job_id, current_user.email)

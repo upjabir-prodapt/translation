@@ -23,6 +23,18 @@ class TestAssemblyService:
         res = await service.upload_output("job1", Path("none.pdf"))
         assert res is None
 
+    async def test_upload_output_zero_byte_file_not_uploaded(
+        self, service, mock_storage, tmp_path
+    ):
+        """B.3.4: a zero-byte output must never be uploaded as a
+        'successful' translation (e.g. a scanned/no-text-layer document
+        that somehow produced an empty output file)."""
+        p = tmp_path / "empty.pdf"
+        p.touch()  # zero bytes
+        res = await service.upload_output("job1", p)
+        assert res is None
+        mock_storage.upload_file.assert_not_called()
+
     async def test_upload_output_success(self, service, mock_storage, tmp_path):
         p = tmp_path / "out.pdf"
         p.write_text("content")
@@ -45,3 +57,18 @@ class TestAssemblyService:
         res = await service.upload_outputs("job1", output_files)
         assert res["mono"] == "gs://p1"
         assert res["dual"] == "gs://p2"
+
+    async def test_upload_outputs_skips_zero_byte_files(
+        self, service, mock_storage, tmp_path
+    ):
+        """B.3.4: zero-byte outputs are skipped, non-empty siblings still upload."""
+        empty = tmp_path / "empty.pdf"
+        empty.touch()
+        real = tmp_path / "real.pdf"
+        real.write_text("content")
+
+        mock_storage.upload_file.return_value = "gs://real"
+        res = await service.upload_outputs("job1", {"mono": empty, "dual": real})
+        assert "mono" not in res
+        assert res["dual"] == "gs://real"
+        mock_storage.upload_file.assert_called_once()

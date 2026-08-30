@@ -74,12 +74,34 @@ class JobService:
             return str(result["error_message"])
         return None
 
-    async def get_job_status(self, job_id: str) -> JobStatusResponse:
-        """Get the current status of a job."""
+    @staticmethod
+    def _assert_owner(job_data: dict[str, Any], job_id: str, user_id: str) -> None:
+        """Reject access to a job belonging to another user.
+
+        implementation_plan.md Phase D.1 (Sev-1): `GET /jobs/{job_id}`,
+        `GET /jobs/{job_id}/download`, and `GET /translate/{job_id}` had
+        NO ownership check at all -- any authenticated user holding
+        another user's `job_id` could read their status and obtain a
+        valid signed download URL. Mirrors the check already used by
+        `cancel_job`/`get_jobs_status`: raises `JobNotFoundError` (404),
+        not 403, so this endpoint cannot be used to enumerate job IDs
+        belonging to other users.
+        """
+        owner = (job_data.get("cost_attribution") or {}).get("user_id")
+        if owner != user_id:
+            logger.warning(
+                "Rejected access to job %s: ownership mismatch", job_id
+            )
+            raise JobNotFoundError(job_id)
+
+    async def get_job_status(self, job_id: str, user_id: str) -> JobStatusResponse:
+        """Get the current status of a job owned by `user_id`."""
         job_data = await self._get_job_data(job_id)
 
         if not job_data:
             raise JobNotFoundError(job_id)
+
+        self._assert_owner(job_data, job_id, user_id)
 
         status = str(job_data.get("status", ""))
         progress, current_stage = self._progress_and_stage(status)
@@ -164,12 +186,17 @@ class JobService:
             )
         return MultiJobStatusResponse(jobs=responses)
 
-    async def get_translation_status(self, job_id: str) -> JobDetailResponse:
-        """Get full translation status and result for GET /translate/{job_id}."""
+    async def get_translation_status(
+        self, job_id: str, user_id: str
+    ) -> JobDetailResponse:
+        """Get full translation status/result for GET /translate/{job_id},
+        scoped to the job owned by `user_id`."""
         job_data = await self._get_job_data(job_id)
 
         if not job_data:
             raise JobNotFoundError(job_id)
+
+        self._assert_owner(job_data, job_id, user_id)
 
         status = job_data.get("status", "unknown")
         timestamps = (
@@ -333,9 +360,10 @@ class JobService:
     ) -> None:
         """Cancel a translation job owned by `user_id`.
 
-        Ownership is enforced here, mirroring `get_jobs_status`: a job
-        belonging to another user raises `JobNotFoundError` rather than 403,
-        so this endpoint cannot be used to probe which job IDs exist.
+        Ownership is enforced via `_assert_owner`, mirroring
+        `get_jobs_status`/`get_job_status`: a job belonging to another
+        user raises `JobNotFoundError` rather than 403, so this endpoint
+        cannot be used to probe which job IDs exist.
         """
         # Get current job status
         job_data = await self._get_job_data(job_id)
@@ -343,14 +371,7 @@ class JobService:
         if not job_data:
             raise JobNotFoundError(job_id)
 
-        owner = (job_data.get("cost_attribution") or {}).get("user_id")
-        if owner != user_id:
-            # Deliberately indistinguishable from "no such job".
-            logger.warning(
-                "Rejected cancel of job %s: ownership mismatch",
-                job_id,
-            )
-            raise JobNotFoundError(job_id)
+        self._assert_owner(job_data, job_id, user_id)
 
         status = job_data["status"]
 
@@ -393,13 +414,23 @@ class JobService:
 
         logger.info(f"Cancelled job {job_id}")
 
-    async def get_download_url(self, job_id: str, file_type: str) -> DownloadResponse:
-        """Generate a signed URL for downloading output files."""
+    async def get_download_url(
+        self, job_id: str, file_type: str, user_id: str
+    ) -> DownloadResponse:
+        """Generate a signed URL for downloading output files.
+
+        Scoped to the job owned by `user_id` -- without this check, any
+        authenticated user holding another user's `job_id` could obtain
+        a working signed download URL for that user's translated
+        document (implementation_plan.md Phase D.1, Sev-1).
+        """
         # Get job data
         job_data = await self._get_job_data(job_id)
 
         if not job_data:
             raise JobNotFoundError(job_id)
+
+        self._assert_owner(job_data, job_id, user_id)
 
         if job_data["status"] != "completed":
             raise HTTPException(

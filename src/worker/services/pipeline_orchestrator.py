@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from collections import Counter
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -30,12 +31,16 @@ from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import BigQueryError
 from src.repository.repository_exception import StorageError
+from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
+    ScannedPDFError,
+)
 from src.worker.doctranslator.format.txt.txt_docx_bridge import docx_path_to_txt_bytes
 from src.worker.doctranslator.format.txt.txt_docx_bridge import txt_bytes_to_docx_bytes
 from src.worker.services.assembly_service import AssemblyService
 from src.worker.services.docx_job_processor import DocxJobProcessor
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.intent_router_service import IntentRouterService
+from src.worker.services.language_detection_core import get_supported_languages
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.processor_service import JobProcessor
@@ -55,6 +60,24 @@ _OMIT = object()
 # unbounded number of concurrent asyncio tasks could each spin up their own
 # thread pools / ONNX inference calls, risking memory blowup under load.
 _pipeline_semaphore = asyncio.Semaphore(max(1, int(settings.MAX_CONCURRENT_JOBS)))
+
+# User-facing wording for document-shape worker exceptions, matching
+# PDFValidator._assert_has_text_layer's API-side rejection message
+# (implementation_plan.md Phase B.3.2) so a job that slips past the fast
+# API-side check (or is submitted via the Cloud Tasks worker endpoint
+# directly, bypassing PDFValidator) still fails with the same clear
+# wording instead of leaking "Translation failed: Scanned PDF detected."
+_NO_TEXT_LAYER_MESSAGE = (
+    "This PDF has no extractable text layer (scanned or image-only). "
+    "OCR is not supported — please supply a text-based PDF."
+)
+
+
+def _user_facing_error_message(exc: Exception) -> str:
+    """Map internal worker exceptions to the wording shown to end users."""
+    if isinstance(exc, ScannedPDFError):
+        return _NO_TEXT_LAYER_MESSAGE
+    return str(exc)
 
 
 def _extract_model_version(model_id: str) -> str | None:
@@ -155,7 +178,16 @@ class PipelineOrchestrator:
         *,
         stage: str,
     ) -> None:
-        """Record failure in session, OTel, logs, and BigQuery."""
+        """Record failure in session, OTel, logs, and BigQuery.
+
+        The BigQuery `error_message` field (surfaced verbatim to end
+        users via JobService/_job_error_message) uses
+        `_user_facing_error_message()` so document-shape failures like
+        `ScannedPDFError` read as the same clear wording as the API-side
+        rejection instead of the internal "Translation failed: Scanned
+        PDF detected." string (implementation_plan.md Phase B.3.2). The
+        session/span/log trail keeps the raw `str(exc)` for debugging.
+        """
         await self.session_manager.mark_failure(
             job_id,
             stage=stage,
@@ -190,7 +222,7 @@ class PipelineOrchestrator:
                 job_id,
                 status="failed",
                 completed_at=datetime.now(UTC),
-                error_message=str(exc),
+                error_message=_user_facing_error_message(exc),
             )
             await self.session_manager.mark_persistence_step(
                 job_id, "failed_status_patch", succeeded=True
@@ -292,7 +324,7 @@ class PipelineOrchestrator:
         workspace_input_dir: Path,
         local_input_path: Path,
         requested_source_lang: str | None,
-    ) -> tuple[Path, str]:
+    ) -> tuple[Path, str, Counter[str]]:
         """Download/detect for a job with no sibling batch jobs.
 
         DOCX files are translated natively (no PDF conversion) -- see
@@ -300,6 +332,10 @@ class PipelineOrchestrator:
         language auto-detection for DOCX uses a lightweight text-extraction
         variant since LanguageDetectionService's default path is pymupdf/PDF
         specific.
+
+        Returns `(local_path, source_lang, language_distribution)` --
+        the distribution is empty when the source language was explicit
+        (implementation_plan.md Phase C.5.1).
         """
         del job_id
         await self.storage.download_file(blob_path, local_input_path)
@@ -308,11 +344,15 @@ class PipelineOrchestrator:
             local_input_path = self._convert_txt_to_docx(local_input_path)
 
         source_lang = requested_source_lang
+        language_distribution: Counter[str] = Counter()
         if not source_lang or source_lang == "auto":
-            source_lang = self.language_detector.detect(
-                local_input_path, is_docx=source_doc.get("format") in ("docx", "txt")
+            source_lang, language_distribution = (
+                self.language_detector.detect_with_distribution(
+                    local_input_path,
+                    is_docx=source_doc.get("format") in ("docx", "txt"),
+                )
             )
-        return local_input_path, source_lang
+        return local_input_path, source_lang, language_distribution
 
     async def _prepare_input_shared(
         self,
@@ -323,7 +363,7 @@ class PipelineOrchestrator:
         workspace_input_dir: Path,
         local_input_path: Path,
         requested_source_lang: str | None,
-    ) -> tuple[Path, str]:
+    ) -> tuple[Path, str, Counter[str]]:
         """Download/convert/detect once per `source_hash`, shared across sibling jobs.
 
         Sibling jobs from the same multi-target-language batch (same
@@ -333,6 +373,9 @@ class PipelineOrchestrator:
         prepared file under a shared scratch dir; each job copies it into
         its own workspace so subsequent per-job mutation (DLP masking,
         typesetting, etc) never touches the shared file.
+
+        Returns `(local_path, source_lang, language_distribution)` -- see
+        Phase C.5.1.
         """
         cache = get_shared_document_prep_cache()
         blob_path = self._extract_blob_path(source_doc["gcs_uri"])
@@ -351,13 +394,19 @@ class PipelineOrchestrator:
                 shared_path = self._convert_txt_to_docx(shared_path)
 
             detected_lang: str | None = None
+            distribution: Counter[str] = Counter()
             if not requested_source_lang or requested_source_lang == "auto":
-                detected_lang = self.language_detector.detect(
-                    shared_path, is_docx=source_doc.get("format") in ("docx", "txt")
+                detected_lang, distribution = (
+                    self.language_detector.detect_with_distribution(
+                        shared_path,
+                        is_docx=source_doc.get("format") in ("docx", "txt"),
+                    )
                 )
 
             return PreparedDocument(
-                local_path=shared_path, detected_source_language=detected_lang
+                local_path=shared_path,
+                detected_source_language=detected_lang,
+                detected_language_distribution=distribution,
             )
 
         try:
@@ -394,9 +443,11 @@ class PipelineOrchestrator:
         await asyncio.to_thread(shutil.copy2, prepared.local_path, job_local_path)
 
         source_lang = requested_source_lang
+        language_distribution = Counter()
         if not source_lang or source_lang == "auto":
             source_lang = prepared.detected_source_language
-        return job_local_path, source_lang
+            language_distribution = prepared.detected_language_distribution
+        return job_local_path, source_lang, language_distribution
 
     async def _execute_pipeline(
         self, job_id: str, job_data: dict[str, Any], pipeline_span
@@ -431,30 +482,63 @@ class PipelineOrchestrator:
                 # concurrently in this process, only the first one actually
                 # does this work -- the rest await and reuse its result
                 # instead of re-downloading/re-converting/re-detecting.
-                local_input_path, source_lang = await self._prepare_input_shared(
-                    job_id=job_id,
-                    source_hash=source_hash,
-                    source_doc=source_doc,
-                    workspace_input_dir=workspace.input_dir,
-                    local_input_path=local_input_path,
-                    requested_source_lang=requested_source_lang,
+                local_input_path, source_lang, language_distribution = (
+                    await self._prepare_input_shared(
+                        job_id=job_id,
+                        source_hash=source_hash,
+                        source_doc=source_doc,
+                        workspace_input_dir=workspace.input_dir,
+                        local_input_path=local_input_path,
+                        requested_source_lang=requested_source_lang,
+                    )
                 )
                 source_hash_for_release = source_hash
 
             else:
-                local_input_path, source_lang = await self._prepare_input_solo(
-                    job_id=job_id,
-                    blob_path=blob_path,
-                    source_doc=source_doc,
-                    workspace_input_dir=workspace.input_dir,
-                    local_input_path=local_input_path,
-                    requested_source_lang=requested_source_lang,
+                local_input_path, source_lang, language_distribution = (
+                    await self._prepare_input_solo(
+                        job_id=job_id,
+                        blob_path=blob_path,
+                        source_doc=source_doc,
+                        workspace_input_dir=workspace.input_dir,
+                        local_input_path=local_input_path,
+                        requested_source_lang=requested_source_lang,
+                    )
                 )
 
             await self.session_manager.set_input_path(job_id, local_input_path)
 
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
+
+            # C.5.4: guard auto-detected source == target. The explicit
+            # case is already blocked at the API schema layer
+            # (TranslationConfigInput.source_language_cannot_equal_target),
+            # but "auto" bypasses that validator entirely since the real
+            # source language is unknown until this point.
+            if (
+                (not requested_source_lang or requested_source_lang == "auto")
+                and source_lang
+                and source_lang == target_lang
+            ):
+                raise ValueError(
+                    f"Detected source language '{source_lang}' is the same as "
+                    f"the requested target language '{target_lang}'. No "
+                    "translation is needed."
+                )
+
+            # C.5.3: warn (do not fail) when the detected dominant
+            # language falls outside the configured support set --
+            # select_model_list() silently falls back to the default
+            # Gemini model in this case, which is worth surfacing in logs.
+            if language_distribution and source_lang not in get_supported_languages():
+                logger.warning(
+                    "Job %s: detected dominant source language '%s' is outside "
+                    "the configured language set; model routing will fall back "
+                    "to the default model.",
+                    job_id,
+                    source_lang,
+                )
             processing_options = job_data.get("processing_options") or {}
             enable_dlp = bool(
                 processing_options.get(
@@ -485,7 +569,10 @@ class PipelineOrchestrator:
                 model_chain=model_chain,
             )
 
-            # Persist detected language and routing decision immediately so failed jobs remain analysable
+            # Persist detected language and routing decision immediately so failed jobs remain analysable.
+            # C.5.1: also persist the full per-language distribution (not
+            # just the winner) so a mixed-language document's actual
+            # composition is queryable later instead of being discarded.
             try:
                 await self.bigquery.patch_translation_job(
                     job_id,
@@ -496,6 +583,7 @@ class PipelineOrchestrator:
                             "target_language": target_lang,
                             "domain": domain,
                             "enable_dlp": enable_dlp,
+                            "detected_languages": dict(language_distribution),
                         },
                         "result": {"intent": intent},
                     },

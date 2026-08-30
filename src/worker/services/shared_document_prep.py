@@ -39,7 +39,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from collections import Counter
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,10 @@ class PreparedDocument:
 
     local_path: Path
     detected_source_language: str | None
+    # Full char-weighted language distribution (implementation_plan.md
+    # Phase C.5.1), populated alongside `detected_source_language` when
+    # auto-detection ran. Empty when the source language was explicit.
+    detected_language_distribution: Counter[str] = field(default_factory=Counter)
 
 
 class _SharedPrepEntry:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 from typing import Any
@@ -24,14 +25,21 @@ import tiktoken
 from src.config.constants import settings
 from src.config.domain_prompts import get_domain_prompt_block
 from src.config.domain_prompts import get_domain_prompt_profile
+from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
 from src.worker.doctranslator.format.pdf.translation_config import get_token_multiplier
+from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
+from src.worker.doctranslator.translator.prompt_safety import looks_like_prompt_leak
+from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 from src.worker.doctranslator.translator.translation_cache import build_cache_key
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.translator.translator import BatchTranslationResponse
+from src.worker.services.language_detection_core import MIN_DETECTION_TEXT_LENGTH
+from src.worker.services.language_detection_core import detect_language_for_text
+from src.worker.services.language_detection_core import get_supported_languages
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +62,62 @@ _PLACEHOLDER_ONLY_PATTERN = re.compile(
 _BATCH_ITEM_PATTERN = re.compile(
     r'\{\s*"id"\s*:\s*(\d+)\s*,\s*"output"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}'
 )
+
+# implementation_plan.md D.3.3: a single paragraph whose *input* token count
+# alone approaches LLM_MAX_OUTPUT_TOKENS risks the model's *translated*
+# output being cut off entirely mid-sentence -- translation commonly
+# expands source text by 20-40%, so an 8,000-word single-paragraph input
+# (~10k+ tokens) can demand an output larger than the whole configured
+# output budget, and unlike a truncated *batch* (where
+# `_partial_parse_truncated_batch` can recover other items), a truncated
+# *single* paragraph has nothing left to recover. Rather than guess an
+# exact expansion factor, cap by a conservative fraction of
+# LLM_MAX_OUTPUT_TOKENS and pre-split oversized paragraphs into
+# sentence-bounded sub-chunks that are each safely under the cap, translate
+# them independently, and rejoin in order -- applied BEFORE batching or
+# singleton fallback, since both send the whole paragraph text as one LLM
+# call and would hit the exact same truncation failure mode.
+_OVERSIZED_UNIT_SAFETY_FACTOR = 0.5
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def _split_oversized_text(text: str, max_tokens: int, calc_token_count) -> list[str]:
+    """Split `text` into sentence-boundary chunks each <= `max_tokens`.
+
+    Falls back to a hard word-boundary split for any single "sentence"
+    (no terminal punctuation found) that still exceeds `max_tokens` alone,
+    so this never hands the LLM an unsplittable oversized chunk.
+    """
+    sentences = [s for s in _SENTENCE_SPLIT_PATTERN.split(text) if s]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if current and calc_token_count(candidate) > max_tokens:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
+    final_chunks: list[str] = []
+    for chunk in chunks:
+        if calc_token_count(chunk) <= max_tokens:
+            final_chunks.append(chunk)
+            continue
+        words = chunk.split(" ")
+        piece = ""
+        for word in words:
+            candidate = f"{piece} {word}".strip() if piece else word
+            if piece and calc_token_count(candidate) > max_tokens:
+                final_chunks.append(piece)
+                piece = word
+            else:
+                piece = candidate
+        if piece:
+            final_chunks.append(piece)
+    return final_chunks or [text]
 
 
 def _unescape_json_string(value: str) -> str:
@@ -117,8 +181,9 @@ def _build_prompt(
         "Return a JSON array of the same length. For each item, keep the same "
         '"id" and add "output" with the translated text only. No extra text, '
         "no ```json blocks.\n\n"
+        f"{INJECTION_GUARD_CLAUSE}\n"
         "## Here is the input:\n\n"
-        f"{json_input_str}"
+        f"{wrap_untrusted_content(json_input_str)}"
     )
 
 
@@ -152,6 +217,19 @@ class DocxParagraphTranslator:
         # paragraph cap risks oversized CJK batches without this scaling.
         lang_in = str(getattr(translate_engine, "lang_in", "") or "")
         self._token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
+
+        # implementation_plan.md Phase C.4: normalized target language
+        # code, used to detect units that are already confidently in the
+        # target language (skip -- nothing to translate).
+        try:
+            self._lang_out_normalized = normalize_language(lang_out)
+        except ValueError:
+            self._lang_out_normalized = str(lang_out).strip().lower()
+        # C.5.2: per-language skip counters, logged once per job so it is
+        # visible how many units were skipped and in which languages --
+        # separate from `skipped_count`, which counts ALL pre-filter
+        # skips (numeric/placeholder/too-short included).
+        self.language_skipped_by_language: Counter[str] = Counter()
 
     def _calc_token_count(self, text: str) -> int:
         if self.tokenizer is None:
@@ -202,6 +280,13 @@ class DocxParagraphTranslator:
         Gemini -- a ~3,381-char boilerplate prompt to translate 5 chars --
         and then logged a `length_ratio` validation failure when the model
         unsurprisingly returned something of a different length.
+
+        Also skips (implementation_plan.md Phase C.4, gated by
+        `settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS`) a unit that is
+        confidently detected in a language outside the configured
+        support set, or already confidently in the target language --
+        in both cases sending it to the LLM would be pointless or
+        actively wrong (translating already-correct text).
         """
         text = (unit.text or "").strip()
         if not text:
@@ -210,13 +295,56 @@ class DocxParagraphTranslator:
             return True
         if _NUMERIC_ONLY_PATTERN.fullmatch(text):
             return True
-        return bool(_PLACEHOLDER_ONLY_PATTERN.fullmatch(text))
+        if _PLACEHOLDER_ONLY_PATTERN.fullmatch(text):
+            return True
+        return self._is_unsupported_or_already_target_language(text)
+
+    def _is_unsupported_or_already_target_language(self, text: str) -> bool:
+        """C.4.1/C.4.2/C.4.5: language-based skip, applied only above
+        `MIN_DETECTION_TEXT_LENGTH` -- never let a 3-word cell be skipped
+        on a coin-flip single-unit detection."""
+        if not settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS:
+            return False
+        if len(text) < MIN_DETECTION_TEXT_LENGTH:
+            return False
+        detected = detect_language_for_text(text)
+        if detected is None:
+            return False
+        if detected == self._lang_out_normalized:
+            logger.debug(
+                "Skipping unit already confidently in target language %s",
+                detected,
+            )
+            self.language_skipped_by_language[detected] += 1
+            return True
+        if detected not in get_supported_languages():
+            logger.info(
+                "Skipping unit confidently detected as unsupported language "
+                "'%s' (not in the configured language set)",
+                detected,
+            )
+            self.language_skipped_by_language[detected] += 1
+            return True
+        return False
 
     def _validate_translation(self, input_text: str, output_text: str) -> bool:
         """Return True if the translation should be treated as a fallback failure."""
         if not output_text.strip():
             logger.warning(
                 "DOCX translation validation failed (empty): output is empty or blank"
+            )
+            return True
+
+        if looks_like_prompt_leak(output_text):
+            # implementation_plan.md D.4.2: defense-in-depth output guard --
+            # a genuine translation of arbitrary document content should
+            # never contain our own system-prompt markers verbatim. Treated
+            # exactly like any other validation failure: falls back to
+            # single-unit retry rather than ever being written to the
+            # translated document.
+            logger.warning(
+                "DOCX translation validation failed (prompt_leak): output echoes "
+                "a system-prompt marker, possible injection attempt or leak"
             )
             return True
 
@@ -540,6 +668,77 @@ class DocxParagraphTranslator:
             lang_out=self.lang_out,
         )
 
+    def _expand_oversized_units(
+        self, units: list[TranslatableUnit]
+    ) -> tuple[list[TranslatableUnit], dict[int, list[int]]]:
+        """D.3.3: split any paragraph whose token count risks output
+        truncation into sentence-bounded sub-chunk units.
+
+        Returns `(expanded_units, chunk_map)` where `chunk_map` maps an
+        original oversized unit's id to the ordered list of synthetic
+        chunk-unit ids that replace it in `expanded_units`. Synthetic ids
+        are allocated above the highest id already in `units`, so they
+        cannot collide with real units. Chunks flow through the exact same
+        cache/batch/fallback pipeline as any other unit; `translate_all()`
+        rejoins them back into the original unit id via
+        `_rejoin_oversized_results()` before returning.
+        """
+        max_output_tokens = int(settings.LLM_MAX_OUTPUT_TOKENS)
+        oversized_threshold = max(
+            1, int(max_output_tokens * _OVERSIZED_UNIT_SAFETY_FACTOR)
+        )
+        next_synthetic_id = (max((u.unit_id for u in units), default=-1)) + 1
+        expanded: list[TranslatableUnit] = []
+        chunk_map: dict[int, list[int]] = {}
+
+        for unit in units:
+            token_count = self._calc_token_count(unit.text)
+            if token_count <= oversized_threshold:
+                expanded.append(unit)
+                continue
+            sub_texts = _split_oversized_text(
+                unit.text, oversized_threshold, self._calc_token_count
+            )
+            if len(sub_texts) <= 1:
+                expanded.append(unit)
+                continue
+            logger.info(
+                f"DOCX unit {unit.unit_id} ({token_count} tokens) exceeds the "
+                f"{oversized_threshold}-token safety threshold "
+                f"({_OVERSIZED_UNIT_SAFETY_FACTOR:.0%} of "
+                f"LLM_MAX_OUTPUT_TOKENS={max_output_tokens}); split into "
+                f"{len(sub_texts)} sub-chunk(s) to avoid output truncation."
+            )
+            chunk_ids: list[int] = []
+            for sub_text in sub_texts:
+                chunk_ids.append(next_synthetic_id)
+                expanded.append(
+                    TranslatableUnit(
+                        unit_id=next_synthetic_id,
+                        paragraph=unit.paragraph,
+                        label=unit.label,
+                        text=sub_text,
+                    )
+                )
+                next_synthetic_id += 1
+            chunk_map[unit.unit_id] = chunk_ids
+        return expanded, chunk_map
+
+    @staticmethod
+    def _rejoin_oversized_results(
+        results: dict[int, str], chunk_map: dict[int, list[int]]
+    ) -> None:
+        """Reassemble split-paragraph translations back into the original
+        unit id, in-place on `results`. Missing chunk translations (should
+        not happen -- every chunk goes through the same fallback path as
+        any other unit) fall back to an empty string rather than raising,
+        so one bad chunk cannot lose the rest of an otherwise-good
+        translation."""
+        for original_id, chunk_ids in chunk_map.items():
+            results[original_id] = " ".join(
+                results.pop(chunk_id, "") for chunk_id in chunk_ids
+            ).strip()
+
     def translate_all(self, units: list[TranslatableUnit]) -> dict[int, str]:
         """Translate every unit; returns {unit_id: translated_text}.
 
@@ -564,6 +763,21 @@ class DocxParagraphTranslator:
                 f"DOCX pre-filter skipped {self.skipped_count}/{len(units)} "
                 "non-translatable unit(s) before batching"
             )
+        if self.language_skipped_by_language:
+            # C.5.2: one summary line per job with the per-language
+            # breakdown of units skipped for language reasons (already
+            # confidently in the target language, or confidently outside
+            # the configured support set).
+            logger.info(
+                "DOCX language-based skip summary: %s",
+                dict(self.language_skipped_by_language),
+            )
+
+        # D.3.3: pre-split any oversized paragraph BEFORE batching/fallback --
+        # both send the whole paragraph text as one LLM call and would hit
+        # the same truncation failure mode a giant single-paragraph document
+        # (e.g. an 8,000-word paragraph) can trigger.
+        translatable, chunk_map = self._expand_oversized_units(translatable)
 
         cache_hits, cache_miss_units = self._split_cache_hits(translatable)
         results.update(cache_hits)
@@ -576,6 +790,7 @@ class DocxParagraphTranslator:
                 "DocxTranslateParagraphs", self._last_batch_plan, len(batches)
             )
         if not batches:
+            self._rejoin_oversized_results(results, chunk_map)
             self._log_completion(len(cache_hits), batch_count=0)
             return results
 
@@ -588,6 +803,7 @@ class DocxParagraphTranslator:
                 batch_results = future.result()
                 results.update(batch_results)
 
+        self._rejoin_oversized_results(results, chunk_map)
         self._log_completion(len(cache_hits), batch_count=len(batches))
         return results
 

@@ -106,6 +106,72 @@ def pipeline_mocks(tmp_path: Path):
     return bigquery, storage, tmp_path
 
 
+class TestMarkJobFailedErrorMessageMapping:
+    """B.3.2: `_mark_job_failed`'s BigQuery-persisted, user-facing
+    `error_message` maps ScannedPDFError to the same wording as
+    PDFValidator's API-side rejection, instead of leaking the internal
+    'Scanned PDF detected.' string."""
+
+    @pytest.mark.asyncio
+    async def test_scanned_pdf_error_maps_to_user_facing_message(self, pipeline_mocks):
+        from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
+            ScannedPDFError,
+        )
+
+        bigquery, storage, tmp_path = pipeline_mocks
+        orchestrator = PipelineOrchestrator(
+            bigquery=bigquery,
+            storage=storage,
+            temp_workspace_service=TempWorkspaceService(base_dir=tmp_path / "work"),
+        )
+        workspace = orchestrator.temp_workspace_service.create("job-scanned")
+        await orchestrator.session_manager.start("job-scanned", workspace)
+        pipeline_span = MagicMock()
+        await orchestrator._mark_job_failed(
+            "job-scanned",
+            ScannedPDFError("Scanned PDF detected."),
+            pipeline_span,
+            stage="translate",
+        )
+
+        failed_calls = [
+            c
+            for c in bigquery.patch_translation_job.call_args_list
+            if c[0][1].get("status") == "failed"
+        ]
+        assert len(failed_calls) == 1
+        persisted_message = failed_calls[0][0][1]["error_message"]
+        assert "no extractable text layer" in persisted_message
+        assert "Scanned PDF detected" not in persisted_message
+
+    @pytest.mark.asyncio
+    async def test_other_exceptions_use_str_unchanged(self, pipeline_mocks):
+        """Regression: non-document-shape exceptions keep their original
+        `str(exc)` wording -- only ScannedPDFError is remapped."""
+        bigquery, storage, tmp_path = pipeline_mocks
+        orchestrator = PipelineOrchestrator(
+            bigquery=bigquery,
+            storage=storage,
+            temp_workspace_service=TempWorkspaceService(base_dir=tmp_path / "work"),
+        )
+        workspace = orchestrator.temp_workspace_service.create("job-other")
+        await orchestrator.session_manager.start("job-other", workspace)
+        pipeline_span = MagicMock()
+        await orchestrator._mark_job_failed(
+            "job-other",
+            RuntimeError("some transient LLM error"),
+            pipeline_span,
+            stage="translate",
+        )
+
+        failed_calls = [
+            c
+            for c in bigquery.patch_translation_job.call_args_list
+            if c[0][1].get("status") == "failed"
+        ]
+        assert failed_calls[0][0][1]["error_message"] == "some transient LLM error"
+
+
 class TestPipelineBigQueryFailure:
     @pytest.mark.asyncio
     async def test_write_cost_attribution_failure_marks_job_failed(

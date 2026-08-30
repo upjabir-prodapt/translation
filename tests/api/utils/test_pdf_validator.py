@@ -31,10 +31,127 @@ class TestPDFValidator:
         with pytest.raises(ValidationError, match="Encrypted"):
             PDFValidator.validate_pdf_bytes(b"%PDF-1.4", "test.pdf")
 
+    def test_validate_pdf_bytes_owner_password_only_rejected(self):
+        """An owner-password-only PDF opens freely (is_encrypted=False,
+        needs_pass=0) but restricts the COPY permission bit -- verified
+        live with real PyMuPDF encryption. Must still be rejected so the
+        original restriction is never silently lost."""
+        import fitz
+
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 72), "hello world")
+        owner_password_pdf = doc.tobytes(
+            encryption=fitz.PDF_ENCRYPT_AES_256,
+            owner_pw="owner",
+            permissions=fitz.PDF_PERM_ACCESSIBILITY,
+        )
+        doc.close()
+        with pytest.raises(ValidationError, match="restricts text extraction"):
+            PDFValidator.validate_pdf_bytes(owner_password_pdf, "restricted.pdf")
+
+    def test_validate_pdf_bytes_user_password_rejected(self):
+        """A real user-password-protected PDF is rejected as password_protected."""
+        import fitz
+
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 72), "hello world")
+        user_password_pdf = doc.tobytes(
+            encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="secret", owner_pw="owner"
+        )
+        doc.close()
+        with pytest.raises(ValidationError, match="Password-protected"):
+            PDFValidator.validate_pdf_bytes(user_password_pdf, "protected.pdf")
+
+    def test_validate_pdf_bytes_unrestricted_pdf_accepted(self):
+        """A plain, unencrypted PDF with full permissions passes the new check."""
+        import fitz
+
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 72), "hello world")
+        plain_pdf = doc.tobytes()
+        doc.close()
+        content, metadata = PDFValidator.validate_pdf_bytes(plain_pdf, "plain.pdf")
+        assert content == plain_pdf
+        assert metadata["filename"] == "plain.pdf"
+
+    def test_validate_pdf_bytes_image_only_rejected(self):
+        """B.5.1: an image-only PDF (no extractable text layer on any
+        sampled page) is rejected with a distinct no_text_layer message.
+        Verified live: page.get_text("text") returns '' for an
+        image-only page."""
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page()
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 80))
+        pix.set_rect(pix.irect, (250, 250, 250))
+        page.insert_image(fitz.Rect(50, 50, 250, 130), pixmap=pix)
+        image_only_pdf = doc.tobytes()
+        doc.close()
+        with pytest.raises(ValidationError, match="no extractable text layer"):
+            PDFValidator.validate_pdf_bytes(image_only_pdf, "scanned.pdf")
+
+    def test_validate_pdf_bytes_mostly_scanned_but_one_text_page_accepted(self):
+        """B.5.5: a multi-page PDF where at least one of the sampled
+        (first PDF_TEXT_PROBE_PAGES) pages has real text still passes
+        this API-level probe -- the per-page scanned-detection heuristic
+        deeper in the worker pipeline decides page-by-page OCR-workaround
+        behaviour; this validator only rejects documents with *zero*
+        extractable text across the sample."""
+        import fitz
+
+        doc = fitz.open()
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 80))
+        pix.set_rect(pix.irect, (250, 250, 250))
+        image_page = doc.new_page()
+        image_page.insert_image(fitz.Rect(50, 50, 250, 130), pixmap=pix)
+        text_page = doc.new_page()
+        text_page.insert_text((72, 72), "hello world")
+        mixed_pdf = doc.tobytes()
+        doc.close()
+        content, metadata = PDFValidator.validate_pdf_bytes(mixed_pdf, "mixed.pdf")
+        assert content == mixed_pdf
+        assert metadata["has_text_layer"] is True
+
+    def test_extract_pdf_metadata_has_text_layer_true_for_real_text(self):
+        import fitz
+
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 72), "hello world")
+        content = doc.tobytes()
+        doc.close()
+        meta = PDFValidator.extract_pdf_metadata(content)
+        assert meta["has_text_layer"] is True
+        assert meta["text_char_count"] > 0
+
+    def test_extract_pdf_metadata_has_text_layer_false_for_image_only(self):
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page()
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 80))
+        pix.set_rect(pix.irect, (250, 250, 250))
+        page.insert_image(fitz.Rect(50, 50, 250, 130), pixmap=pix)
+        content = doc.tobytes()
+        doc.close()
+        meta = PDFValidator.extract_pdf_metadata(content)
+        assert meta["has_text_layer"] is False
+        assert meta["text_char_count"] == 0
+
     def test_validate_pdf_bytes_corrupted(self):
-        # fitz.open raises FileDataError for non-PDF, but extract_pdf_metadata wraps it in ValidationError
-        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+        # Content lacking the %PDF- magic bytes is now rejected up front by
+        # the container-sniffing precheck, before fitz.open is ever called.
+        with pytest.raises(ValidationError, match="File is not a valid PDF"):
             PDFValidator.validate_pdf_bytes(b"not a pdf", "test.pdf")
+
+    def test_validate_pdf_bytes_empty(self):
+        with pytest.raises(ValidationError, match="Document is empty"):
+            PDFValidator.validate_pdf_bytes(b"", "test.pdf")
+
+    def test_validate_pdf_bytes_wrong_magic_bytes(self):
+        """A ZIP renamed to .pdf is rejected with a specific message, not a fitz crash."""
+        with pytest.raises(ValidationError, match="File is not a valid PDF"):
+            PDFValidator.validate_pdf_bytes(b"PK\x03\x04fake-zip-content", "fake.pdf")
 
     @patch("src.api.utils.pdf_validator.fitz.open")
     def test_extract_pdf_metadata_success(self, mock_open):
@@ -71,7 +188,16 @@ class TestPDFValidator:
     @pytest.mark.asyncio
     async def test_validate_pdf_file_empty(self):
         file = UploadFile(filename="empty.pdf", file=io.BytesIO(b""))
-        with pytest.raises(ValidationError, match="Failed to extract PDF metadata"):
+        with pytest.raises(ValidationError, match="Document is empty"):
+            await PDFValidator.validate_pdf_file(file)
+
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_wrong_magic_bytes(self):
+        """A ZIP renamed to .pdf is rejected with a specific message."""
+        file = UploadFile(
+            filename="fake.pdf", file=io.BytesIO(b"PK\x03\x04fake-zip-content")
+        )
+        with pytest.raises(ValidationError, match="File is not a valid PDF"):
             await PDFValidator.validate_pdf_file(file)
 
     def test_validate_pdf_bytes_fitz_file_data_error(self):

@@ -29,7 +29,7 @@ class TestJobService:
     async def test_get_job_status_not_found(self, service, mock_bq):
         mock_bq.get_translation_job.return_value = None
         with pytest.raises(JobNotFoundError):
-            await service.get_job_status("nonexistent")
+            await service.get_job_status("nonexistent", "user@example.com")
 
     async def test_get_job_status_success(self, service, mock_bq, mock_storage):
         mock_bq.get_translation_job.return_value = {
@@ -37,11 +37,25 @@ class TestJobService:
             "status": "completed",
             "result": {"output_gcs_uri": "gs://bucket/mono.pdf"},
             "submitted_at": "2026-05-08T12:00:00Z",
+            "cost_attribution": {"user_id": "user@example.com"},
         }
         mock_storage.generate_signed_url.return_value = "http://download"
-        status = await service.get_job_status("job1")
+        status = await service.get_job_status("job1", "user@example.com")
         assert status.status == "completed"
         assert status.download_url == "http://download"
+
+    async def test_get_job_status_ownership_mismatch_raises_not_found(
+        self, service, mock_bq
+    ):
+        """D.1 (Sev-1): a job belonging to another user must be
+        indistinguishable from a non-existent one."""
+        mock_bq.get_translation_job.return_value = {
+            "job_id": "job1",
+            "status": "completed",
+            "cost_attribution": {"user_id": "owner@example.com"},
+        }
+        with pytest.raises(JobNotFoundError):
+            await service.get_job_status("job1", "attacker@example.com")
 
     async def test_get_jobs_status_preserves_order_and_signs_completed(
         self, service, mock_bq, mock_storage
@@ -197,13 +211,28 @@ class TestCancelJobOwnership:
             "job_id": "job1",
             "status": "completed",
             "result": {"output_gcs_uri": "gs://bucket/mono.pdf"},
+            "cost_attribution": {"user_id": OWNER},
         }
         mock_storage.generate_signed_url.return_value = "http://download"
         mock_storage.get_file_info.return_value = {"size": 1024}
 
-        res = await service.get_download_url("job1", "mono")
+        res = await service.get_download_url("job1", "mono", OWNER)
         assert res.download_url == "http://download"
         assert res.file_size == 1024
+
+    async def test_get_download_url_ownership_mismatch_raises_not_found(
+        self, service, mock_bq
+    ):
+        """D.1 (Sev-1): another user must not be able to obtain a signed
+        download URL for someone else's job."""
+        mock_bq.get_translation_job.return_value = {
+            "job_id": "job1",
+            "status": "completed",
+            "result": {"output_gcs_uri": "gs://bucket/mono.pdf"},
+            "cost_attribution": {"user_id": OWNER},
+        }
+        with pytest.raises(JobNotFoundError):
+            await service.get_download_url("job1", "mono", "attacker@example.com")
 
     async def test_get_translation_status_success(self, service, mock_bq):
         mock_bq.get_translation_job.return_value = {
@@ -215,9 +244,22 @@ class TestCancelJobOwnership:
             "result": {"mono_pdf_path": "gs://b/out.pdf"},
             "submitted_at": "2026-05-08T12:00:00Z",
         }
-        res = await service.get_translation_status("job1")
+        res = await service.get_translation_status("job1", "u1")
         assert res.job_id == "job1"
         assert res.status == "completed"
+
+    async def test_get_translation_status_ownership_mismatch_raises_not_found(
+        self, service, mock_bq
+    ):
+        """D.1 (Sev-1): another user must not be able to view someone
+        else's job detail/result via GET /translate/{job_id}."""
+        mock_bq.get_translation_job.return_value = {
+            "job_id": "job1",
+            "status": "completed",
+            "cost_attribution": {"user_id": "u1"},
+        }
+        with pytest.raises(JobNotFoundError):
+            await service.get_translation_status("job1", "attacker@example.com")
 
     async def test_stream_job_progress(self, service, mock_bq):
         mock_bq.get_translation_job.side_effect = [

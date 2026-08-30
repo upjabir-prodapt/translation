@@ -16,6 +16,14 @@ class TranslateResponse(BaseModel):
     job_id: str = Field(..., description=JOB_ID_DESCRIPTION)
     status: str = Field(..., description="Initial job status (always 'queued')")
     status_url: str = Field(..., description="URL to poll for job status")
+    is_duplicate: bool = Field(
+        False,
+        description=(
+            "True when job_id refers to an existing job reused for this "
+            "submission (implementation_plan.md D.5 / EC-15 idempotency "
+            "window) rather than a newly created one."
+        ),
+    )
 
 
 class MultiTranslateJobResponse(BaseModel):
@@ -25,6 +33,14 @@ class MultiTranslateJobResponse(BaseModel):
     target_language: str = Field(..., description="Normalized target language")
     status: str = Field(..., description="Initial job status")
     status_url: str = Field(..., description="URL to poll for this job")
+    is_duplicate: bool = Field(
+        False,
+        description=(
+            "True when job_id refers to an existing job reused for this "
+            "target language (implementation_plan.md D.5 / EC-15 "
+            "idempotency window) rather than a newly created one."
+        ),
+    )
 
 
 class MultiTranslateResponse(BaseModel):

@@ -11,8 +11,6 @@ from typing import Any
 
 import pymupdf
 from langdetect import DetectorFactory
-from langdetect import LangDetectException
-from langdetect import detect_langs
 from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
@@ -38,6 +36,10 @@ from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutp
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.translator.factory import create_translator
 from src.worker.loaders.assets import get_doclayout_onnx_model_path
+from src.worker.services.language_detection_core import aggregate_languages
+from src.worker.services.language_detection_core import detect_language_for_text
+from src.worker.services.language_detection_core import is_detectable_text
+from src.worker.services.language_detection_core import normalize_detected_language
 from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestrator
 from src.worker.services.task_models import DocTranslatorTranslationConfig
 
@@ -85,7 +87,12 @@ class JobProcessor:
     PROGRESS_FINALIZE = 0.8
     PROGRESS_COMPLETE = 0.9
 
-    MAX_LANGUAGES_PER_PAGE = 10
+    # Renamed from MAX_LANGUAGES_PER_PAGE (implementation_plan.md Phase
+    # C.3): the guard message used to say "more than 2 languages" while
+    # this constant was actually 10 -- a real message/constant
+    # contradiction. The name now matches what it actually is, and the
+    # message below renders the live value instead of a hardcoded "2".
+    MAX_DISTINCT_LANGUAGES_PER_PAGE = 10
     MAX_DETECTION_CHARS = settings.LANGUAGE_DETECTION_MAX_CHARS
     MIN_DETECTION_TEXT_LENGTH = 20
     MIN_DETECTION_ALPHA_CHARS = 5
@@ -283,15 +290,39 @@ class JobProcessor:
         return int(value or 0)
 
     def detect_source_language(self, input_file: str | Path) -> str:
+        """Detect the dominant source language of a PDF.
+
+        Kept backward-compatible (returns just the winning language code)
+        for existing callers; see `detect_source_language_with_distribution()`
+        for the full char-weighted distribution
+        (implementation_plan.md Phase C.5.1).
+        """
+        detected_language, _ = self.detect_source_language_with_distribution(
+            input_file
+        )
+        return detected_language
+
+    def detect_source_language_with_distribution(
+        self, input_file: str | Path
+    ) -> tuple[str, "Counter[str]"]:
+        """Detect source language and return the full per-language distribution.
+
+        Returns `(dominant_language, full_language_counter)` -- the full
+        char-weighted `Counter` (not just the winner) is returned so
+        callers can persist the complete language distribution for a
+        mixed-language document (implementation_plan.md Phase C.5.1)
+        instead of discarding everything but `most_common(1)`.
+        """
         document_languages: Counter[str] = Counter()
         processed_chars = 0
         with pymupdf.open(str(input_file)) as doc:
             for page_number, page in enumerate(doc, start=1):
                 page_languages, page_chars = self._detect_page_languages(page)
-                if len(page_languages) > self.MAX_LANGUAGES_PER_PAGE:
+                if len(page_languages) > self.MAX_DISTINCT_LANGUAGES_PER_PAGE:
                     detected = ", ".join(sorted(page_languages))
                     raise ValueError(
-                        f"Detected more than 2 languages on page {page_number}: {detected}"
+                        f"Detected more than {self.MAX_DISTINCT_LANGUAGES_PER_PAGE} "
+                        f"languages on page {page_number}: {detected}"
                     )
                 document_languages.update(page_languages)
                 processed_chars += page_chars
@@ -303,10 +334,21 @@ class JobProcessor:
                     )
                     break
         if not document_languages:
-            raise ValueError("Unable to detect source language from PDF text")
-        detected_language, _ = document_languages.most_common(1)[0]
+            # This branch fires when no page yielded any detectable text
+            # -- the same underlying condition PDFValidator's API-side
+            # text-layer probe rejects. Use the identical user-facing
+            # wording (implementation_plan.md Phase B.3.3) instead of the
+            # internal "Unable to detect source language from PDF text",
+            # since a scanned/image-only PDF is the far more common cause
+            # than a genuinely undetectable (but present) language.
+            raise ValueError(
+                "This PDF has no extractable text layer (scanned or "
+                "image-only). OCR is not supported — please supply a "
+                "text-based PDF."
+            )
+        detected_language = aggregate_languages(document_languages)
         logger.info(f"Detected source language {detected_language} from {input_file}")
-        return detected_language
+        return detected_language, document_languages
 
     def _detect_page_languages(self, page: Any) -> tuple[Counter[str], int]:
         page_languages: Counter[str] = Counter()
@@ -332,27 +374,17 @@ class JobProcessor:
         return re.sub(r"\s+", " ", text).strip()
 
     def _is_detectable_text(self, text: str) -> bool:
-        alpha_count = sum(1 for ch in text if ch.isalpha())
-        return (
-            len(text) >= self.MIN_DETECTION_TEXT_LENGTH
-            and alpha_count >= self.MIN_DETECTION_ALPHA_CHARS
-        )
+        # Delegates to the shared core (implementation_plan.md Phase C.1)
+        # so PDF and DOCX/TXT detection use identical thresholds; kept as
+        # a thin method (not removed) since it is part of this class's
+        # existing public-ish surface (tests, LanguageDetectionService).
+        return is_detectable_text(text)
 
     def _detect_language_for_text(self, text: str) -> str | None:
-        try:
-            candidates = detect_langs(text)
-        except LangDetectException:
-            return None
-        if not candidates:
-            return None
-        best_match = candidates[0]
-        if best_match.prob < self.MIN_DETECTION_CONFIDENCE:
-            return None
-        return self._normalize_detected_language(best_match.lang)
+        return detect_language_for_text(text)
 
     def _normalize_detected_language(self, language: str) -> str:
-        normalized = str(language).strip().lower()
-        return self.DETECTED_LANGUAGE_ALIASES.get(normalized, normalized)
+        return normalize_detected_language(language)
 
     def _build_translation_config(
         self,
@@ -463,9 +495,17 @@ class JobProcessor:
         elif event_type == "finish":
             return await self._handle_finish_event(event)
         elif event_type == "error":
-            raise RuntimeError(
-                f"Translation failed: {event.get('error', 'Unknown error')}"
-            )
+            # `ProgressMonitor.translate_error()` (progress_monitor.py)
+            # passes the *original exception object* through this event,
+            # not a string. Re-raise it as-is instead of always wrapping
+            # in a generic RuntimeError, so document-shape errors like
+            # ScannedPDFError survive with their real type -- required
+            # for TranslationAttemptRunner's non-retryable-exception check
+            # (implementation_plan.md Phase B.3.1) to actually see them.
+            error = event.get("error")
+            if isinstance(error, BaseException):
+                raise error
+            raise RuntimeError(f"Translation failed: {error or 'Unknown error'}")
         return None
 
     async def _handle_progress_update(self, event: dict[str, Any]) -> None:

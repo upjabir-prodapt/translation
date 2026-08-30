@@ -10,7 +10,9 @@ import orjson
 import tiktoken
 from tqdm import tqdm
 
+from src.config.constants import settings
 from src.config.domain_prompts import get_domain_role_block
+from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.pdf.document_il import Document
@@ -37,12 +39,18 @@ from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper impo
     is_pure_numeric_paragraph,
 )
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
+from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
+from src.worker.doctranslator.translator.prompt_safety import looks_like_prompt_leak
+from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.translator.translator import BatchTranslationResponse
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
 )
+from src.worker.services.language_detection_core import MIN_DETECTION_TEXT_LENGTH
+from src.worker.services.language_detection_core import detect_language_for_text
+from src.worker.services.language_detection_core import get_supported_languages
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +106,8 @@ Output:
 $contextual_hints_block
 
 $glossary_tables_block
+
+$security_notice
 
 ## Here is the input:
 
@@ -599,6 +609,43 @@ class ILTranslatorLLMOnly:
             if pbar:
                 pbar.advance(1)
             return True
+        if self._is_unsupported_or_already_target_language(paragraph.unicode):
+            if pbar:
+                pbar.advance(1)
+            return True
+        return False
+
+    def _is_unsupported_or_already_target_language(self, text: str) -> bool:
+        """PDF equivalent of the DOCX pipeline's language-based skip
+        (implementation_plan.md Phase C.4.3), gated by
+        `settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS` and applied only above
+        `MIN_DETECTION_TEXT_LENGTH` (C.4.4/C.4.5) so a short paragraph is
+        never skipped on a coin-flip single-unit detection."""
+        if not settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS:
+            return False
+        if not text or len(text) < MIN_DETECTION_TEXT_LENGTH:
+            return False
+        detected = detect_language_for_text(text)
+        if detected is None:
+            return False
+        lang_out = str(getattr(self.translation_config, "lang_out", "") or "")
+        try:
+            lang_out_normalized = normalize_language(lang_out)
+        except ValueError:
+            lang_out_normalized = lang_out.strip().lower()
+        if detected == lang_out_normalized:
+            logger.debug(
+                "Skipping paragraph already confidently in target language %s",
+                detected,
+            )
+            return True
+        if detected not in get_supported_languages():
+            logger.info(
+                "Skipping paragraph confidently detected as unsupported "
+                "language '%s' (not in the configured language set)",
+                detected,
+            )
+            return True
         return False
 
     def _handle_skipped_paragraph(self, paragraph: PdfParagraph, pbar):
@@ -609,6 +656,7 @@ class ILTranslatorLLMOnly:
             and len(paragraph.unicode) >= self.translation_config.min_text_length
             and not is_pure_numeric_paragraph(paragraph)
             and not is_placeholder_only_paragraph(paragraph)
+            and not self._is_unsupported_or_already_target_language(paragraph.unicode)
         ):
             return
         if pbar:
@@ -783,6 +831,23 @@ class ILTranslatorLLMOnly:
         llm_translate_tracker,
     ) -> bool:
         """Check translation quality heuristics. Returns True if should fallback."""
+        if looks_like_prompt_leak(output_unicode):
+            # implementation_plan.md D.4.2: defense-in-depth output guard --
+            # mirrors the DOCX pipeline's equivalent check in
+            # paragraph_translator.py._validate_translation(). Treated
+            # exactly like any other quality failure: falls back rather
+            # than ever being written into the translated PDF.
+            llm_translate_tracker.set_error_message(
+                "Translation result echoes a system-prompt marker, possible "
+                "injection attempt or leak, fallback."
+            )
+            logger.warning(
+                "Translation result echoes a system-prompt marker, possible "
+                "injection attempt or leak, fallback."
+            )
+            llm_translate_tracker.set_placeholder_full_match()
+            return True
+
         trimed_input = re.sub(r"[. 。…，]{20,}", ".", input_unicode)
         input_token_count = self.calc_token_count(trimed_input)
         output_token_count = self.calc_token_count(output_unicode)
@@ -1195,8 +1260,9 @@ class ILTranslatorLLMOnly:
             role_block=role_block,
             glossary_usage_rules_block=glossary_usage_rules_block,
             contextual_hints_block=contextual_hints_block,
-            json_input_str=json_input_str,
+            json_input_str=wrap_untrusted_content(json_input_str),
             glossary_tables_block=glossary_tables_block,
+            security_notice=INJECTION_GUARD_CLAUSE,
             lang_out=self.translation_config.lang_out,
         )
 

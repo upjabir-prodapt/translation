@@ -29,5 +29,7 @@ class TestTranslationHandler:
         mock_trans_service.submit_translation.assert_called_once_with(req)
 
     async def test_get_translation_status(self, handler, mock_job_service):
-        await handler.get_translation_status("job1")
-        mock_job_service.get_translation_status.assert_called_once_with("job1")
+        await handler.get_translation_status("job1", "user@example.com")
+        mock_job_service.get_translation_status.assert_called_once_with(
+            "job1", "user@example.com"
+        )

@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 
 
 class DetectScannedFile:
+    """Detect scanned/image-only pages and reject or route around them.
+
+    implementation_plan.md Phase B.4: `translation_config.auto_enable_ocr_workaround`
+    is never set `True` by `processor_service._build_translation_config()`
+    (the sole place `TranslationConfig` is constructed in this codebase),
+    so the `auto_enable_ocr_workaround` branch in `process()` below is
+    currently dead code, and the "OCR workaround" it would enable is NOT
+    real OCR -- it only changes how already-detected-scanned pages are
+    *rendered* (fill color, line width, gc_level; see
+    `pdf_creater.py`/`il_creater.py`), not how text is *extracted* from
+    them. There is no OCR text-recognition step anywhere in this
+    pipeline: `rapidocr-onnxruntime` (see
+    `docvision/table_detection/rapidocr.py`) is wired only into table
+    *layout* detection, and `table_model=None` is hardcoded in
+    `processor_service._build_translation_config()`, so `TableParser`
+    (which would use it) never runs either.
+
+    In the shipped configuration, a document whose scanned-page ratio
+    exceeds `threshold` always raises `ScannedPDFError` (see `process()`)
+    -- there is no automatic OCR fallback. `PDFValidator`'s
+    `_assert_has_text_layer()` (implementation_plan.md Phase B.1) now
+    rejects the common case (a wholly image-only PDF) even earlier, at
+    the API boundary, before this stage ever runs. Real OCR text
+    recognition, if ever required, is a separate project.
+    """
+
     stage_name = "DetectScannedFile"
 
     def __init__(self, translation_config: TranslationConfig):

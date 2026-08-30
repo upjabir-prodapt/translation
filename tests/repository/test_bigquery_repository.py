@@ -107,6 +107,83 @@ class TestBigQueryRepository:
         assert res["job_id"] == "job1"
 
     @pytest.mark.asyncio
+    async def test_find_recent_duplicate_job_returns_none_when_window_is_zero(
+        self, repo, mock_bq_client
+    ):
+        """implementation_plan.md D.5 (EC-15): window_seconds<=0 disables
+        the check entirely, without even issuing a query."""
+        result = await repo.find_recent_duplicate_job(
+            user_id="u1",
+            source_hash="hash1",
+            target_language="fr",
+            domain="legal",
+            window_seconds=0,
+        )
+        assert result is None
+        mock_bq_client.query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_find_recent_duplicate_job_found(self, repo, mock_bq_client):
+        mock_row = MagicMock()
+        mock_row.get = lambda k, d=None: {
+            "job_id": "existing-job",
+            "status": "processing",
+        }.get(k, d)
+        mock_query_job = MagicMock()
+        mock_query_job.result = MagicMock(return_value=[mock_row])
+        mock_bq_client.query.return_value = mock_query_job
+
+        result = await repo.find_recent_duplicate_job(
+            user_id="u1",
+            source_hash="hash1",
+            target_language="fr",
+            domain="legal",
+            window_seconds=30,
+        )
+
+        assert result["job_id"] == "existing-job"
+        query = mock_bq_client.query.call_args.args[0]
+        assert "status NOT IN ('cancelled', 'failed')" in query
+        job_config = mock_bq_client.query.call_args.kwargs["job_config"]
+        param_names = {p.name for p in job_config.query_parameters}
+        assert param_names == {
+            "user_id",
+            "source_hash",
+            "target_language",
+            "domain",
+            "cutoff",
+        }
+
+    @pytest.mark.asyncio
+    async def test_find_recent_duplicate_job_not_found(self, repo, mock_bq_client):
+        mock_query_job = MagicMock()
+        mock_query_job.result.return_value = []
+        mock_bq_client.query.return_value = mock_query_job
+
+        result = await repo.find_recent_duplicate_job(
+            user_id="u1",
+            source_hash="hash1",
+            target_language="fr",
+            domain="legal",
+            window_seconds=30,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_recent_duplicate_job_google_error(self, repo, mock_bq_client):
+        mock_bq_client.query.side_effect = GoogleAPIError("Fail")
+        with pytest.raises(
+            BigQueryError, match="Failed to query for a duplicate translation job"
+        ):
+            await repo.find_recent_duplicate_job(
+                user_id="u1",
+                source_hash="hash1",
+                target_language="fr",
+                domain="legal",
+                window_seconds=30,
+            )
+
+    @pytest.mark.asyncio
     async def test_get_translation_jobs_by_ids_uses_array_parameter(
         self, repo, mock_bq_client
     ):

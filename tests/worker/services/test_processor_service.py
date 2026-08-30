@@ -139,11 +139,15 @@ class TestJobProcessorCore:
             await processor.translate(mock_config)
 
     def test_detect_language_for_text_low_confidence(self, processor):
+        """C.1.1: `_detect_language_for_text` now delegates to the shared
+        `language_detection_core.detect_language_for_text`, so the
+        underlying `detect_langs` call is patched there instead of on
+        `processor_service` directly."""
         mock_candidate = MagicMock()
         mock_candidate.lang = "en"
         mock_candidate.prob = 0.1  # Below default threshold
         with patch(
-            "src.worker.services.processor_service.detect_langs",
+            "src.worker.services.language_detection_core.detect_langs",
             return_value=[mock_candidate],
         ):
             assert processor._detect_language_for_text("some text") is None
@@ -152,20 +156,77 @@ class TestJobProcessorCore:
         from langdetect import LangDetectException
 
         with patch(
-            "src.worker.services.processor_service.detect_langs",
+            "src.worker.services.language_detection_core.detect_langs",
             side_effect=LangDetectException(0, "Error"),
         ):
             assert processor._detect_language_for_text("some text") is None
 
     def test_detect_source_language_no_langs(self, processor):
+        """B.3.3: this branch now raises the same user-facing
+        no-text-layer wording as PDFValidator's API-side rejection,
+        since it fires under the same underlying condition (no
+        detectable text on any sampled page)."""
         mock_doc = MagicMock()
         mock_doc.__iter__.return_value = []
         with patch(
             "src.worker.services.processor_service.pymupdf.open",
             return_value=MagicMock(__enter__=lambda _: mock_doc),
         ):
-            with pytest.raises(ValueError, match="Unable to detect"):
+            with pytest.raises(ValueError, match="no extractable text layer"):
                 processor.detect_source_language("dummy.pdf")
+
+    def test_max_distinct_languages_per_page_message_matches_constant(self, processor):
+        """C.3.1/C.6.5: the guard message must render the real constant
+        value, not a hardcoded '2' (the bug: message said "more than 2
+        languages" while the constant was actually 10)."""
+        many_languages = {f"lang{i}": 100 for i in range(processor.MAX_DISTINCT_LANGUAGES_PER_PAGE + 1)}
+        mock_page = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.__iter__.return_value = [mock_page]
+        with (
+            patch(
+                "src.worker.services.processor_service.pymupdf.open",
+                return_value=MagicMock(__enter__=lambda _: mock_doc),
+            ),
+            patch.object(
+                processor,
+                "_detect_page_languages",
+                return_value=(Counter(many_languages), 1000),
+            ),
+        ):
+            with pytest.raises(
+                ValueError,
+                match=(
+                    f"more than {processor.MAX_DISTINCT_LANGUAGES_PER_PAGE} "
+                    "languages"
+                ),
+            ):
+                processor.detect_source_language("dummy.pdf")
+
+    def test_detect_source_language_with_distribution_returns_full_counter(
+        self, processor
+    ):
+        """C.5.1 prerequisite: the full per-language Counter must be
+        returned alongside the winner, not discarded."""
+        mock_doc = MagicMock()
+        mock_page = MagicMock()
+        mock_doc.__iter__.return_value = [mock_page]
+        with (
+            patch(
+                "src.worker.services.processor_service.pymupdf.open",
+                return_value=MagicMock(__enter__=lambda _: mock_doc),
+            ),
+            patch.object(
+                processor,
+                "_detect_page_languages",
+                return_value=(Counter({"de": 700, "en": 300}), 1000),
+            ),
+        ):
+            winner, distribution = processor.detect_source_language_with_distribution(
+                "dummy.pdf"
+            )
+            assert winner == "de"
+            assert distribution == Counter({"de": 700, "en": 300})
 
 
 class TestJobProcessorLanguageDetection:
@@ -242,6 +303,33 @@ class TestJobProcessorLanguageDetection:
     async def test_handle_translation_event_unknown(self, processor):
         res = await processor._handle_translation_event({"type": "unknown"}, {})
         assert res is None
+
+    async def test_handle_translation_event_error_preserves_exception_type(
+        self, processor
+    ):
+        """B.3.1 prerequisite: the original exception object (e.g.
+        ScannedPDFError) set by ProgressMonitor.translate_error() must
+        survive as-is, not be flattened into a generic RuntimeError, so
+        TranslationAttemptRunner's non-retryable-exception check can
+        recognize it."""
+        from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
+            ScannedPDFError,
+        )
+
+        original = ScannedPDFError("Scanned PDF detected.")
+        event = {"type": "error", "error": original}
+        with pytest.raises(ScannedPDFError) as exc_info:
+            await processor._handle_translation_event(event, {})
+        assert exc_info.value is original
+
+    async def test_handle_translation_event_error_string_wrapped_in_runtime_error(
+        self, processor
+    ):
+        """Backward compatibility: a plain string error still raises a
+        descriptive RuntimeError (unchanged behaviour)."""
+        event = {"type": "error", "error": "boom"}
+        with pytest.raises(RuntimeError, match="Translation failed: boom"):
+            await processor._handle_translation_event(event, {})
 
     @patch("src.worker.services.processor_service.async_translate")
     async def test_run_single_attempt_success(self, mock_translate, processor):

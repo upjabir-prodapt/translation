@@ -136,3 +136,89 @@ class TestTranslationAttemptRunner:
 
         mock_build.assert_called_once()
         assert mock_build.call_args.kwargs["shared_context"] == mock_shared_context
+
+    @patch.object(JobProcessor, "_run_single_attempt", new_callable=AsyncMock)
+    @patch.object(JobProcessor, "_build_translation_config")
+    async def test_run_attempt_reraises_scanned_pdf_error_immediately(
+        self, mock_build, mock_run, runner, processor
+    ):
+        """B.3.1/B.5.4: a ScannedPDFError must propagate immediately even
+        when this is NOT the last model in the chain (attempt_index !=
+        max_attempts) -- it is a document-shape failure, not a
+        model-specific one, so retrying with a different model wastes a
+        full re-parse for a guaranteed-identical failure."""
+        from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
+            ScannedPDFError,
+        )
+
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.working_dir = Path(tempfile.gettempdir()) / "work"
+        mock_build.return_value = mock_trans_config
+        mock_run.side_effect = ScannedPDFError("Scanned PDF detected.")
+
+        with pytest.raises(ScannedPDFError):
+            await runner.run_attempt(
+                model_index=0,
+                model_list=["gemini-2.5-flash", "gemini-2.5-pro"],
+                config={"job_id": "1", "output_dir": tempfile.gettempdir()},
+                output_base_dir=Path(tempfile.gettempdir()),
+                max_attempts=2,  # NOT the last attempt -- would otherwise retry
+                judge=MagicMock(),
+            )
+        # Only the one, failing attempt should ever have run.
+        mock_run.assert_awaited_once()
+
+    @patch.object(JobProcessor, "_run_single_attempt", new_callable=AsyncMock)
+    @patch.object(JobProcessor, "_build_translation_config")
+    async def test_run_attempt_reraises_input_file_generated_error_immediately(
+        self, mock_build, mock_run, runner, processor
+    ):
+        from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
+            InputFileGeneratedByDocTranslatorError,
+        )
+
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.working_dir = Path(tempfile.gettempdir()) / "work"
+        mock_build.return_value = mock_trans_config
+        mock_run.side_effect = InputFileGeneratedByDocTranslatorError(
+            "already translated"
+        )
+
+        with pytest.raises(InputFileGeneratedByDocTranslatorError):
+            await runner.run_attempt(
+                model_index=0,
+                model_list=["gemini-2.5-flash", "gemini-2.5-pro"],
+                config={"job_id": "1", "output_dir": tempfile.gettempdir()},
+                output_base_dir=Path(tempfile.gettempdir()),
+                max_attempts=2,
+                judge=MagicMock(),
+            )
+        mock_run.assert_awaited_once()
+
+    @patch.object(JobProcessor, "_run_single_attempt", new_callable=AsyncMock)
+    @patch.object(JobProcessor, "_build_translation_config")
+    async def test_run_attempt_retries_other_exceptions_when_not_last_attempt(
+        self, mock_build, mock_run, runner, processor
+    ):
+        """Regression: ordinary (retryable) exceptions still follow the
+        original behaviour -- return None to signal "try the next model"
+        instead of raising, when this is not the final attempt."""
+        mock_trans_config = MagicMock(spec=TranslationConfig)
+        mock_trans_config.working_dir = Path(tempfile.gettempdir()) / "work"
+        mock_build.return_value = mock_trans_config
+        mock_run.side_effect = RuntimeError("transient LLM error")
+
+        result, attempt_config, translation_config, quality_result, report = (
+            await runner.run_attempt(
+                model_index=0,
+                model_list=["gemini-2.5-flash", "gemini-2.5-pro"],
+                config={"job_id": "1", "output_dir": tempfile.gettempdir()},
+                output_base_dir=Path(tempfile.gettempdir()),
+                max_attempts=2,
+                judge=MagicMock(),
+            )
+        )
+        assert result is None
+        assert translation_config is None
+        assert quality_result is None
+        assert report is None

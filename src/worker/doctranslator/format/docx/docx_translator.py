@@ -24,6 +24,7 @@ from src.worker.doctranslator.format.docx.paragraph_translator import (
 )
 from src.worker.doctranslator.format.docx.term_extractor import DocxTermExtractor
 from src.worker.doctranslator.format.docx.units import extract_units
+from src.worker.doctranslator.format.docx.units import flush_note_parts
 from src.worker.doctranslator.format.docx.units import write_translated_text
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.services.dlp_service import DlpProvider
@@ -68,7 +69,7 @@ def translate_docx(
     job/attempt succeeds).
     """
     document = Document(str(input_path))
-    units = extract_units(document)
+    units, note_parts = extract_units(document)
     logger.info(f"[docx] job={job_id} extracted {len(units)} translatable units")
 
     dlp_provider: DlpProvider | None = None
@@ -148,6 +149,11 @@ def translate_docx(
 
     for unit, translated_text in zip(units, translated_parts, strict=False):
         write_translated_text(unit, translated_text)
+    # D.2.1: footnotes.xml/endnotes.xml are not modeled by python-docx --
+    # `write_translated_text()` above only mutated a detached lxml tree for
+    # any footnote/endnote units, so it must be re-serialized back into the
+    # part's blob before `document.save()` or those edits are silently lost.
+    flush_note_parts(note_parts)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(output_path))

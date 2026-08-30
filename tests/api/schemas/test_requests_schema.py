@@ -42,6 +42,18 @@ class TestDocumentInput:
         doc = DocumentInput(content=content, filename="report.txt", format="txt")
         assert doc.format == "txt"
 
+    @pytest.mark.parametrize(
+        "filename", ["archive.zip", "sheet.csv", "document.pages", "macro.docm"]
+    )
+    def test_unsupported_container_extensions_rejected(self, filename):
+        """EC-06e/A.5.7: .zip, .csv, .pages, .docm are all rejected up front
+        by the filename-extension check, before any content is validated."""
+        content = base64.b64encode(b"data").decode()
+        with pytest.raises(
+            PydanticValidationError, match="filename must end with one of"
+        ):
+            DocumentInput(content=content, filename=filename)
+
     @pytest.mark.parametrize("filename", ["file.exe", "file", "file.PDF"])
     def test_invalid_filename_extension_raises(self, filename):
         """Only .pdf, .docx, and .txt extensions are accepted (case-insensitive strip)."""
@@ -57,7 +69,9 @@ class TestDocumentInput:
             doc = DocumentInput(content=content, filename=filename)
             assert doc is not None
         else:
-            with pytest.raises(PydanticValidationError, match=".pdf, .docx, or .txt"):
+            with pytest.raises(
+                PydanticValidationError, match="filename must end with one of"
+            ):
                 DocumentInput(content=content, filename=filename)
 
     def test_filename_stripped_of_whitespace(self):
@@ -77,6 +91,26 @@ class TestDocumentInput:
     def test_missing_filename_raises(self):
         with pytest.raises(PydanticValidationError):
             DocumentInput(content=VALID_PDF_B64)  # type: ignore[call-arg]
+
+    def test_long_accented_emoji_filename_is_sanitized(self):
+        """A 150-char filename with accents/emoji is accepted but truncated
+        and stripped of anything unsafe as a GCS blob path component
+        (implementation_plan.md A.4.4 / A.5.9)."""
+        stem = "Rapport_étude_😀_" * 10  # far longer than the 100-char cap
+        filename = f"{stem}.docx"
+        assert len(filename) > 150
+        content = base64.b64encode(b"dummy").decode()
+        doc = DocumentInput(content=content, filename=filename)
+        assert doc.filename.endswith(".docx")
+        assert len(doc.filename) <= 100 + len(".docx")
+        assert "/" not in doc.filename
+        assert "\\" not in doc.filename
+
+    def test_path_traversal_filename_is_sanitized(self):
+        """Directory components are stripped from the filename before storage."""
+        content = base64.b64encode(b"dummy").decode()
+        doc = DocumentInput(content=content, filename="../../etc/passwd.pdf")
+        assert doc.filename == "passwd.pdf"
 
 
 # ---------------------------------------------------------------------------

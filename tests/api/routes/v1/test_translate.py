@@ -104,6 +104,20 @@ class TestSubmitTranslation:
         )
         assert resp.status_code == 422
 
+    def test_unsupported_extension_returns_422(self, api_client, minimal_pdf_bytes):
+        """A.4.3: unrecognized extensions (e.g. .zip) must be rejected
+        explicitly instead of silently defaulting to 'pdf' and failing
+        deep inside PDFValidator with a confusing message."""
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            files={
+                "file": ("archive.zip", minimal_pdf_bytes, "application/zip"),
+            },
+        )
+        assert resp.status_code == 422
+        assert "Unsupported file type" in resp.text
+
     def test_rejects_invalid_token(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
@@ -186,6 +200,19 @@ class TestGetTranslationStatus:
         resp = api_client.get("/api/v1/translate/test-job-id-001")
         body = resp.json()
         assert body["job_id"] == "test-job-id-001"
+
+    def test_passes_authenticated_user_email_for_ownership_check(
+        self, api_client, mock_job_service
+    ):
+        """implementation_plan.md D.1 (Sev-1): the route must thread the
+        authenticated caller's identity into the service so ownership can
+        be enforced -- without this wiring, any user holding another
+        user's job_id could read that job's full detail/result."""
+        mock_job_service.get_translation_status.reset_mock()
+        api_client.get("/api/v1/translate/test-job-id-001")
+        mock_job_service.get_translation_status.assert_called_once_with(
+            "test-job-id-001", "user@colt.net"
+        )
 
     def test_response_has_status(self, api_client):
         resp = api_client.get("/api/v1/translate/test-job-id-001")

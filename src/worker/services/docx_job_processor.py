@@ -36,6 +36,10 @@ from src.worker.services.dlp_service import DlpResult
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
+from src.worker.services.token_verification_service import (
+    log_token_verification_warning,
+)
+from src.worker.services.token_verification_service import verify_protected_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +192,19 @@ class DocxJobProcessor:
                 translator, selected_model, selected_region
             )
 
+            # implementation_plan.md D.6.1 (EC-01/02/14): best-effort,
+            # non-blocking check that protected tokens (URLs, emails,
+            # currency, CIDR blocks, ticket IDs, CLI flags, bare digit
+            # sequences) present in the source still appear verbatim in
+            # the translation. Logged as a quality warning and recorded
+            # in the attempt report; never fails the attempt or the job.
+            token_verification = verify_protected_tokens(
+                result.source_text, result.translated_text
+            )
+            log_token_verification_warning(
+                token_verification, job_id=job_id, attempt_index=attempt_index
+            )
+
             if not enable_judge or judge is None:
                 attempt_reports.append(
                     {
@@ -207,6 +224,7 @@ class DocxJobProcessor:
                         ),
                         "cost_usd": token_usage.get("estimated_cost_usd", 0.0),
                         "docx_path": str(output_path),
+                        "token_verification": token_verification.to_dict(),
                     }
                 )
                 best_result = result
@@ -254,6 +272,7 @@ class DocxJobProcessor:
                     ),
                     "cost_usd": token_usage.get("estimated_cost_usd", 0.0),
                     "docx_path": str(output_path),
+                    "token_verification": token_verification.to_dict(),
                 }
             )
 

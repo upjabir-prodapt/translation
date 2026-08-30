@@ -14,8 +14,8 @@ class JobsHandler:
     def __init__(self, job_service: JobService):
         self.job_service = job_service
 
-    async def get_job_status(self, job_id: str) -> JobStatusResponse:
-        return await self.job_service.get_job_status(job_id)
+    async def get_job_status(self, job_id: str, user_id: str) -> JobStatusResponse:
+        return await self.job_service.get_job_status(job_id, user_id)
 
     async def get_jobs_status(
         self, job_ids: list[str], user_id: str
@@ -32,5 +32,5 @@ class JobsHandler:
     ) -> None:
         await self.job_service.cancel_job(job_id, request, user_id)
 
-    async def download_output(self, job_id: str) -> DownloadResponse:
-        return await self.job_service.get_download_url(job_id, "mono")
+    async def download_output(self, job_id: str, user_id: str) -> DownloadResponse:
+        return await self.job_service.get_download_url(job_id, "mono", user_id)

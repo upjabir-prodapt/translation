@@ -277,6 +277,14 @@ class Settings(BaseSettings):
     # fallbacks. Set to 0 to disable the guard entirely.
     LLM_MAX_INFLIGHT_CALLS: int = 16
 
+    # Skip (pass through unchanged, never send to the LLM) any DOCX/PDF
+    # unit confidently (>= language_detection_core.MIN_DETECTION_CONFIDENCE)
+    # detected in a language outside the configured set
+    # (language_mapper.json), or already confidently in the target
+    # language (implementation_plan.md Phase C.4). Default True; can be
+    # turned off without a redeploy if it ever needs to be disabled.
+    SKIP_UNSUPPORTED_LANGUAGE_UNITS: bool = True
+
     ONNX_LAYOUT_BATCH_SIZE: int
     ONNX_INTRA_OP_NUM_THREADS: int
     ONNX_INTER_OP_NUM_THREADS: int
@@ -345,6 +353,20 @@ class Settings(BaseSettings):
 
     MAX_FILE_SIZE: int
     ALLOWED_EXTENSIONS: set[str]
+    # Number of leading pages sampled by PDFValidator to detect an
+    # image-only/no-text-layer PDF (implementation_plan.md Phase B).
+    # Capped so a 500-page scanned file is still cheap to reject.
+    PDF_TEXT_PROBE_PAGES: int = 5
+
+    # -----------------------------
+    # Duplicate-submission idempotency (implementation_plan.md D.5, EC-15)
+    # -----------------------------
+    # A double-click / accidental resubmit of the identical
+    # (user, source document, target language, domain) combination within
+    # this many seconds returns the existing job instead of creating a new
+    # one. 0 disables the check entirely (every submission always creates a
+    # new job, matching the pre-D.5 behaviour).
+    DUPLICATE_SUBMISSION_WINDOW_SECONDS: int = 30
 
     # -----------------------------
     # Logging

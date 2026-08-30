@@ -5,6 +5,7 @@ import json
 import re
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from typing import Any
 
 from google.api_core.exceptions import GoogleAPIError
@@ -256,6 +257,73 @@ class BigQueryRepository:
                     table=self.jobs_table,
                     query=query,
                 ) from exc
+
+    async def find_recent_duplicate_job(
+        self,
+        *,
+        user_id: str,
+        source_hash: str,
+        target_language: str,
+        domain: str,
+        window_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Return the most recent job matching (user, source, target, domain)
+        submitted within `window_seconds`, or None if there isn't one.
+
+        implementation_plan.md Phase D.5 (EC-15): a double-click on the
+        submit button previously created two independent jobs (two
+        `uuid4()` calls) -- `source_hash` only ever deduped in-process
+        parse/download work via `shared_document_prep.py`, never job
+        identity. This is the idempotency-key lookup that lets the caller
+        return the existing job instead of creating a new one.
+
+        Deliberately excludes `cancelled`/`failed` jobs -- a user who
+        cancelled or whose job failed should be able to immediately
+        resubmit the identical request without waiting out the window.
+        """
+        if window_seconds <= 0:
+            return None
+        jobs_table = self._validate_table_name(self.jobs_table)
+        # nosec B608 – table name validated; all filter values bound via
+        # parameters.
+        query = f"""
+        SELECT *
+        FROM `{jobs_table}`
+        WHERE JSON_VALUE(cost_attribution, '$.user_id') = @user_id
+          AND source_hash = @source_hash
+          AND JSON_VALUE(translation_config, '$.target_language') = @target_language
+          AND JSON_VALUE(translation_config, '$.domain') = @domain
+          AND status NOT IN ('cancelled', 'failed')
+          AND submitted_at >= @cutoff
+        ORDER BY submitted_at DESC
+        LIMIT 1
+        """  # noqa: S608  # nosec B608
+        cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                bigquery.ScalarQueryParameter("source_hash", "STRING", source_hash),
+                bigquery.ScalarQueryParameter(
+                    "target_language", "STRING", target_language
+                ),
+                bigquery.ScalarQueryParameter("domain", "STRING", domain),
+                bigquery.ScalarQueryParameter("cutoff", "TIMESTAMP", cutoff),
+            ]
+        )
+        try:
+            query_job = await asyncio.to_thread(
+                self.client.query, query, job_config=job_config
+            )
+            rows = list(await asyncio.to_thread(query_job.result))
+            if not rows:
+                return None
+            return self._deserialize_job_row(rows[0])
+        except GoogleAPIError as exc:
+            raise self._make_bq_error(
+                f"Failed to query for a duplicate translation job: {exc}",
+                table=self.jobs_table,
+                query=query,
+            ) from exc
 
     async def get_translation_jobs_by_ids(
         self, job_ids: list[str]
