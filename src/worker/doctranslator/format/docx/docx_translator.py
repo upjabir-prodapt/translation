@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 from docx import Document
@@ -45,6 +46,14 @@ class DocxTranslationResult:
     dlp_token_rows: list[dict]
     extracted_terms: list[tuple[str, str]]
     dlp_result: DlpResult | None = None
+    #: Aligned (source, translation) unit pairs, in document order.
+    #: The quality judge chunks on pairs so source and target cannot drift
+    #: apart (German output runs 10-20% longer than English source, so
+    #: chunking the two texts independently misaligns them and makes
+    #: omission/hallucination scoring meaningless). DOCX is single-pass and
+    #: in-process, so these are handed over in memory -- unlike the PDF path
+    #: there is no per-part JSON round trip to reconstruct them from.
+    segments: list[tuple[str, str]] = field(default_factory=list)
 
 
 def translate_docx(
@@ -167,4 +176,5 @@ def translate_docx(
         dlp_token_rows=dlp_token_rows,
         extracted_terms=extracted_terms,
         dlp_result=dlp_result,
+        segments=list(zip(source_parts, translated_parts, strict=True)),
     )

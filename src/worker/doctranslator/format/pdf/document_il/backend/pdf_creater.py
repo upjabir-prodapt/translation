@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 SUBSET_FONT_STAGE_NAME = "Subset font"
 SAVE_PDF_STAGE_NAME = "Save PDF"
 
+# Upper bound on the paragraph text echoed into diagnostic error logs.
+_UNICODE_LOG_PREVIEW_CHARS = 200
+
+
+def _describe_box(box) -> str:
+    """Compact `WxH@(x,y)` description of a box for diagnostic logs."""
+    if box is None:
+        return "none"
+    try:
+        return f"{box.x2 - box.x:.1f}x{box.y2 - box.y:.1f}@({box.x:.1f},{box.y:.1f})"
+    except Exception:
+        return "unknown"
+
 
 class RenderUnit(ABC):
     """Abstract base class for all renderable units."""
@@ -582,9 +595,22 @@ class PDFCreater:
                     f"Paragraph: {paragraph}. ",
                 )
         if not chars and paragraph.unicode and paragraph.debug_id:
+            # Log identifying fields rather than the whole PdfParagraph
+            # repr: the repr includes every character/style object and ran
+            # to multiple kilobytes per occurrence, which during an incident
+            # (hundreds of dropped paragraphs) is itself a memory and
+            # log-cost amplifier.
+            unicode_text = paragraph.unicode or ""
+            preview = unicode_text[:_UNICODE_LOG_PREVIEW_CHARS].replace("\n", "\\n")
+            truncated = "..." if len(unicode_text) > _UNICODE_LOG_PREVIEW_CHARS else ""
             logger.error(
-                f"Unable to export paragraphs that have "
-                f"not yet been formatted: {paragraph}",
+                "Unable to export paragraphs that have not yet been formatted: "
+                f"debug_id={paragraph.debug_id} "
+                f"layout_label={paragraph.layout_label} "
+                f"unicode_chars={len(unicode_text)} "
+                f"box={_describe_box(paragraph.box)} "
+                f"scale={paragraph.scale} "
+                f"unicode_preview={preview!r}{truncated}",
             )
             return chars
         return chars

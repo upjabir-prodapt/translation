@@ -28,6 +28,9 @@ from src.worker.doctranslator.format.pdf.document_il import (
     PdfSameStyleUnicodeCharacters,
 )
 from src.worker.doctranslator.format.pdf.document_il import PdfStyle
+from src.worker.doctranslator.format.pdf.document_il.midend.translation_validation import (
+    reject_reason_for_translation,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
 from src.worker.doctranslator.format.pdf.document_il.utils.layout_helper import (
     get_char_unicode_string,
@@ -1133,6 +1136,31 @@ class ILTranslator:
             if llm_translate_tracker := tracker.last_llm_translate_tracker():
                 llm_translate_tracker.set_placeholder_full_match()
             return False
+
+        # Defence in depth: never let obviously broken model output replace
+        # the source paragraph. A leaked system prompt or a 10x-too-long
+        # answer cannot be typeset into the paragraph's box, which used to
+        # leave the composition empty and drop the paragraph from the
+        # output PDF entirely. Keeping the original text is strictly better
+        # than losing it. The batch translator (il_translator_llm_only)
+        # applies the same guards via `translation_validation`.
+        reject_reason = reject_reason_for_translation(
+            translate_input.unicode,
+            translated_text,
+            self.calc_token_count,
+        )
+        if reject_reason is not None:
+            if llm_translate_tracker := tracker.last_llm_translate_tracker():
+                llm_translate_tracker.set_error_message(reject_reason)
+                llm_translate_tracker.set_placeholder_full_match()
+            logger.warning(
+                f"Rejected LLM translation, keeping source text. "
+                f"paragraph_id={paragraph.debug_id} reason={reject_reason} "
+                f"input_chars={len(translate_input.unicode)} "
+                f"output_chars={len(translated_text)}"
+            )
+            return False
+
         paragraph.unicode = translated_text
         paragraph.pdf_paragraph_composition = self.parse_translate_output(
             translate_input,

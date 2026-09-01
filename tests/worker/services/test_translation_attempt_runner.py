@@ -27,17 +27,36 @@ class TestTranslationAttemptRunner:
     async def test_evaluate_attempt_quality(self, runner):
         mock_judge = MagicMock()
         mock_judge.model = "judge-model"
-        mock_judge.evaluate_async = AsyncMock(return_value=MagicMock(final_score=0.9))
+        mock_judge.evaluate_segments_async = AsyncMock(
+            return_value=MagicMock(final_score=0.9)
+        )
 
         res = await runner._evaluate_attempt_quality(
-            judge=mock_judge, source_text="s", translated_text="t"
+            judge=mock_judge, segments=[("s", "t")], job_id="job-1"
         )
         assert res.final_score == 0.9
+        assert mock_judge.evaluate_segments_async.await_args.kwargs["job_id"] == "job-1"
+
+    async def test_evaluate_attempt_quality_without_segments_is_inconclusive(
+        self, runner
+    ):
+        """No segments means the judge could not measure anything.
+
+        This must not be reported as a score of 0.0: on every split PDF the
+        parent working_dir held no tracking file, so this branch fired on
+        every attempt, scored below QUALITY_THRESHOLD, and drove the loop
+        into re-translating the whole document on every remaining model.
+        """
+        mock_judge = MagicMock()
+        mock_judge.model = "judge-model"
+        mock_judge.evaluate_segments_async = AsyncMock()
 
         res = await runner._evaluate_attempt_quality(
-            judge=mock_judge, source_text="", translated_text=""
+            judge=mock_judge, segments=[], job_id="job-1"
         )
-        assert res.final_score == 0.0
+        assert res.inconclusive is True
+        assert res.coverage_ratio == 0.0
+        mock_judge.evaluate_segments_async.assert_not_awaited()
 
     def test_write_quality_report(self, runner, tmp_path):
         runner._write_quality_report(tmp_path, {"quality": {"score": 0.9}})
@@ -61,7 +80,7 @@ class TestTranslationAttemptRunner:
 
         mock_judge = MagicMock()
         mock_judge.model = "judge"
-        mock_judge.evaluate_async = AsyncMock(
+        mock_judge.evaluate_segments_async = AsyncMock(
             return_value=QualityJudgeResult(
                 alignment_score=0.9,
                 omission_score=0.9,
@@ -74,8 +93,8 @@ class TestTranslationAttemptRunner:
         )
 
         with patch(
-            "src.worker.services.translation_attempt_runner.extract_attempt_text",
-            return_value=("source", "target"),
+            "src.worker.services.translation_attempt_runner.extract_attempt_segments",
+            return_value=[("source", "target")],
         ):
             result, _, _, quality, report = await runner.run_attempt(
                 model_index=0,
@@ -107,7 +126,7 @@ class TestTranslationAttemptRunner:
         mock_run.return_value = {"status": "success"}
 
         mock_judge = MagicMock()
-        mock_judge.evaluate_async = AsyncMock(
+        mock_judge.evaluate_segments_async = AsyncMock(
             return_value=QualityJudgeResult(
                 alignment_score=0.9,
                 omission_score=0.9,
@@ -121,8 +140,8 @@ class TestTranslationAttemptRunner:
 
         mock_shared_context = MagicMock()
         with patch(
-            "src.worker.services.translation_attempt_runner.extract_attempt_text",
-            return_value=("source", "target"),
+            "src.worker.services.translation_attempt_runner.extract_attempt_segments",
+            return_value=[("source", "target")],
         ):
             await runner.run_attempt(
                 model_index=0,

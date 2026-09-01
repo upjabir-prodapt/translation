@@ -53,9 +53,24 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
 
 
 def llm_retry(
-    *, logger: logging.Logger
+    *,
+    logger: logging.Logger,
+    also_retry_on: tuple[type[BaseException], ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Build a Tenacity decorator for shared LLM retry policy."""
+    """Build a Tenacity decorator for shared LLM retry policy.
+
+    `also_retry_on` widens the policy with call-site-specific exception
+    types that `is_retryable_llm_exception` cannot recognise -- notably a
+    malformed/unparseable structured response, which is transient in
+    practice (the same prompt usually parses on the next sample) but looks
+    like a plain `ValueError` to a generic predicate.
+    """
+
+    def _should_retry(exc: BaseException) -> bool:
+        if also_retry_on and isinstance(exc, also_retry_on):
+            return True
+        return is_retryable_llm_exception(exc)
+
     return retry(
         stop=stop_after_attempt(settings.LLM_RETRY_MAX_ATTEMPTS),
         wait=wait_exponential(
@@ -63,7 +78,7 @@ def llm_retry(
             min=settings.LLM_RETRY_MIN_SECONDS,
             max=settings.LLM_RETRY_MAX_SECONDS,
         ),
-        retry=retry_if_exception(is_retryable_llm_exception),
+        retry=retry_if_exception(_should_retry),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )

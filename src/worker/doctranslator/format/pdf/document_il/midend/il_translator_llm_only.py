@@ -28,6 +28,12 @@ from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import
 from src.worker.doctranslator.format.pdf.document_il.midend.il_translator import (
     PageTranslateTracker,
 )
+from src.worker.doctranslator.format.pdf.document_il.midend.translation_validation import (
+    PROMPT_LEAK_REASON,
+)
+from src.worker.doctranslator.format.pdf.document_il.midend.translation_validation import (
+    is_token_ratio_out_of_band,
+)
 from src.worker.doctranslator.format.pdf.document_il.utils.fontmap import FontMapper
 from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_cid_paragraph,
@@ -837,14 +843,8 @@ class ILTranslatorLLMOnly:
             # paragraph_translator.py._validate_translation(). Treated
             # exactly like any other quality failure: falls back rather
             # than ever being written into the translated PDF.
-            llm_translate_tracker.set_error_message(
-                "Translation result echoes a system-prompt marker, possible "
-                "injection attempt or leak, fallback."
-            )
-            logger.warning(
-                "Translation result echoes a system-prompt marker, possible "
-                "injection attempt or leak, fallback."
-            )
+            llm_translate_tracker.set_error_message(PROMPT_LEAK_REASON)
+            logger.warning(PROMPT_LEAK_REASON)
             llm_translate_tracker.set_placeholder_full_match()
             return True
 
@@ -865,13 +865,15 @@ class ILTranslatorLLMOnly:
             logger.warning("Translation result is the same as input, fallback.")
             return True
 
-        if not (0.3 < output_token_count / input_token_count < 3):
-            llm_translate_tracker.set_error_message(
-                f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
+        # Shared with the single-paragraph translator via
+        # `translation_validation` so both paths use one token-ratio band.
+        if is_token_ratio_out_of_band(input_token_count, output_token_count):
+            message = (
+                "Translation result is too long or too short. "
+                f"Input: {input_token_count}, Output: {output_token_count}"
             )
-            logger.warning(
-                f"Translation result is too long or too short. Input: {input_token_count}, Output: {output_token_count}"
-            )
+            llm_translate_tracker.set_error_message(message)
+            logger.warning(message)
             llm_translate_tracker.set_placeholder_full_match()
             return True
 

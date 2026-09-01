@@ -22,6 +22,10 @@ _TASK_NAME_SAFE = re.compile(r"[^a-zA-Z0-9_-]")
 PRIORITY_HIGH = "high"
 PRIORITY_STANDARD = "standard"
 
+# Cloud Tasks documented maximum dispatch deadline for HTTP targets.
+# https://cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks
+MAX_DISPATCH_DEADLINE_SECONDS = 1800
+
 
 class CloudTasksService:
     """Enqueue translation jobs onto a Cloud Tasks HTTP queue."""
@@ -177,6 +181,17 @@ class CloudTasksService:
         }
 
         deadline = int(settings.CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS)
+        if deadline > MAX_DISPATCH_DEADLINE_SECONDS:
+            # Cloud Tasks rejects HTTP-target deadlines above 30 minutes.
+            # Clamping keeps a mis-set env var (several .env files still
+            # carry 3600) from failing every enqueue.
+            logger.warning(
+                "CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS=%s exceeds the Cloud Tasks "
+                "HTTP-target maximum of %ss; clamping",
+                deadline,
+                MAX_DISPATCH_DEADLINE_SECONDS,
+            )
+            deadline = MAX_DISPATCH_DEADLINE_SECONDS
         if deadline > 0:
             task["dispatch_deadline"] = duration_pb2.Duration(seconds=deadline)
 

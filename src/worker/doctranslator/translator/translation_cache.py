@@ -21,83 +21,33 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
 
 from src.config.constants import settings
 from src.worker.doctranslator.utils.atomic_integer import AtomicInteger
+from src.worker.services.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 
 # Bump this when the prompt templates change materially so stale cached
 # translations produced by an old prompt are not served under the new one.
-PROMPT_VERSION = "v1"
-
-_client: Any = None
-_cache_enabled: bool | None = None
+#
+# v2: removed the double-wrapping of already-built prompts on the
+# `llm_translate()` path (BaseTranslator._run_translation_batch). The cache
+# key is derived from the *inner* text, which did not change, so without this
+# bump every previously-seen paragraph would keep being served the poisoned
+# "translated our own system prompt" result produced by the old behaviour.
+PROMPT_VERSION = "v2"
 
 
 def _get_client():
-    """Lazily construct a module-level singleton Redis client.
+    """Return the shared worker Redis client (None disables caching).
 
-    Constructed lazily so importing this module never requires live
-    network access to Memorystore. Fails closed (caching disabled) if
-    the client cannot be constructed, consistent with the fail-open
-    behavior of get()/set() below.
+    The pool/TLS/PSC handling that used to live here now lives in
+    `src.worker.services.redis_client` so the job lease can share one
+    connection pool with the cache instead of opening a second one against
+    the same Memorystore endpoint.
     """
-    global _client, _cache_enabled
-    if _cache_enabled is False:
-        return None
-    if _client is not None:
-        return _client
-    if not settings.REDIS_HOST:
-        logger.warning(
-            "[translation_cache] REDIS_HOST not configured; caching disabled",
-        )
-        _cache_enabled = False
-        return None
-    try:
-        import redis
-
-        # redis-py's ConnectionPool does not accept a bare `ssl=` kwarg --
-        # TLS must be requested via `connection_class=SSLConnection` instead
-        # (the plain `Connection` class doesn't know the `ssl` argument).
-        # Memorystore's PSC endpoint presents a certificate that isn't
-        # verifiable via the system trust store from arbitrary VPC clients,
-        # so certificate verification is disabled here (network isolation via
-        # PSC is the actual security boundary, per
-        # docs/infra/redis-memorystore-psc-setup.md) — this matches the
-        # documented connectivity smoke test (`ssl_cert_reqs=None`).
-        extra_tls_kwargs: dict[str, Any] = {}
-        if settings.REDIS_TLS_ENABLED:
-            connection_class = redis.SSLConnection
-            extra_tls_kwargs["ssl_cert_reqs"] = None
-        else:
-            connection_class = redis.Connection
-        pool = redis.ConnectionPool(
-            connection_class=connection_class,
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            db=settings.REDIS_DB,
-            password=settings.REDIS_PASSWORD or None,
-            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
-            socket_connect_timeout=settings.REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
-            decode_responses=True,
-            **extra_tls_kwargs,
-        )
-        _client = redis.Redis(connection_pool=pool)
-        # Fail fast at construction time so a dead Memorystore endpoint
-        # disables caching immediately rather than on the first miss.
-        _client.ping()
-        _cache_enabled = True
-        return _client
-    except Exception:
-        logger.warning(
-            "[translation_cache] Redis client init failed; caching disabled",
-            exc_info=True,
-        )
-        _client = None
-        _cache_enabled = False
-        return None
+    return get_redis_client()
 
 
 def build_cache_key(

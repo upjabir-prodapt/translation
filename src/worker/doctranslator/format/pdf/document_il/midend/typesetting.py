@@ -34,6 +34,17 @@ from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutp
 
 logger = logging.getLogger(__name__)
 
+
+def _describe_box(box) -> str:
+    """Compact `WxH@(x,y)` description of a box for diagnostic logs."""
+    if box is None:
+        return "none"
+    try:
+        return f"{box.x2 - box.x:.1f}x{box.y2 - box.y:.1f}@({box.x:.1f},{box.y:.1f})"
+    except Exception:
+        return "unknown"
+
+
 LINE_BREAK_REGEX = regex.compile(
     r"^["
     r"a-z"
@@ -945,6 +956,7 @@ class Typesetting:
         initial_scale: float = 1.0,
         use_english_line_break: bool = True,
         apply_layout: bool = False,
+        force: bool = False,
     ) -> tuple[float, list[TypesettingUnit] | None]:
         """查找最优缩放因子并可选择性地执行布局
 
@@ -955,6 +967,11 @@ class Typesetting:
             initial_scale: 初始缩放因子
             use_english_line_break: 是否使用英文换行规则
             apply_layout: 是否应用布局到 paragraph（True 时执行实际排版）
+            force: 当所有缩放因子都放不下时，仍以 min_scale 强制排版并提交
+                （允许溢出），而不是让 composition 保持为空。An empty
+                composition means the paragraph is silently dropped from the
+                output PDF by pdf_creater.render_paragraph_to_char, so
+                overflowing text is strictly preferable to losing it.
 
         Returns:
             tuple[float, list[TypesettingUnit] | None]: (最终缩放因子，排版后的单元列表或 None)
@@ -985,18 +1002,7 @@ class Typesetting:
                 if all_units_fit:
                     if apply_layout:
                         # 实际应用排版结果
-                        paragraph.scale = scale
-                        paragraph.pdf_paragraph_composition = []
-                        for unit in typeset_units:
-                            chars, curves, forms = unit.render()
-                            for char in chars:
-                                paragraph.pdf_paragraph_composition.append(
-                                    PdfParagraphComposition(pdf_character=char),
-                                )
-                            for curve in curves:
-                                page.pdf_curve.append(curve)
-                            for form in forms:
-                                page.pdf_form.append(form)
+                        self._commit_layout(paragraph, page, typeset_units, scale)
                         final_typeset_units = typeset_units
                     return scale, final_typeset_units
             except Exception:
@@ -1005,6 +1011,16 @@ class Typesetting:
 
             # 添加与原 retypeset 一致的逻辑检查
             if not hasattr(paragraph, "debug_id") or not paragraph.debug_id:
+                if force and apply_layout:
+                    return scale, self._force_commit_layout(
+                        paragraph,
+                        page,
+                        typesetting_units,
+                        box,
+                        scale,
+                        line_skip,
+                        use_english_line_break,
+                    )
                 return scale, final_typeset_units
 
             # 减小缩放因子
@@ -1069,10 +1085,94 @@ class Typesetting:
                 initial_scale,
                 use_english_line_break=False,
                 apply_layout=apply_layout,
+                force=force,
+            )
+
+        # 所有缩放因子都放不下。默认行为是返回一个空的 composition，
+        # 但这会让该段落在输出 PDF 中被静默丢弃。force 模式下改为以
+        # min_scale 强制排版并提交，接受溢出。
+        if force and apply_layout:
+            return min_scale, self._force_commit_layout(
+                paragraph,
+                page,
+                typesetting_units,
+                box,
+                min_scale,
+                line_skip,
+                use_english_line_break,
             )
 
         # 最后返回最小缩放因子
         return min_scale, final_typeset_units
+
+    def _commit_layout(
+        self,
+        paragraph: il_version_1.PdfParagraph,
+        page: il_version_1.Page,
+        typeset_units: list[TypesettingUnit],
+        scale: float,
+    ) -> None:
+        """Render `typeset_units` into the paragraph composition and page."""
+        paragraph.scale = scale
+        paragraph.pdf_paragraph_composition = []
+        for unit in typeset_units:
+            chars, curves, forms = unit.render()
+            for char in chars:
+                paragraph.pdf_paragraph_composition.append(
+                    PdfParagraphComposition(pdf_character=char),
+                )
+            for curve in curves:
+                page.pdf_curve.append(curve)
+            for form in forms:
+                page.pdf_form.append(form)
+
+    def _force_commit_layout(
+        self,
+        paragraph: il_version_1.PdfParagraph,
+        page: il_version_1.Page,
+        typesetting_units: list[TypesettingUnit],
+        box: Box,
+        scale: float,
+        line_skip: float,
+        use_english_line_break: bool,
+    ) -> list[TypesettingUnit] | None:
+        """Lay out at `scale` and commit even when the text does not fit.
+
+        Overflowing a neighbouring paragraph is visible and fixable; an
+        empty composition is not -- pdf_creater drops the paragraph and
+        only logs `Unable to export paragraphs that have not yet been
+        formatted`. Returns None when even the forced pass produces
+        nothing, in which case the composition is left empty (current
+        behaviour) so the failure stays observable.
+        """
+        try:
+            typeset_units, _ = self._layout_typesetting_units(
+                typesetting_units,
+                box,
+                scale,
+                line_skip,
+                paragraph,
+                use_english_line_break,
+            )
+        except Exception:
+            logger.exception(
+                "Forced typesetting pass raised; paragraph will be dropped. "
+                f"debug_id={getattr(paragraph, 'debug_id', None)} scale={scale}"
+            )
+            return None
+
+        if not typeset_units:
+            logger.error(
+                "Forced typesetting pass produced no units; paragraph will be "
+                "dropped from the output PDF. "
+                f"debug_id={getattr(paragraph, 'debug_id', None)} scale={scale} "
+                f"unicode_chars={len(paragraph.unicode or '')} "
+                f"box={_describe_box(box)}"
+            )
+            return None
+
+        self._commit_layout(paragraph, page, typeset_units, scale)
+        return typeset_units
 
     def _get_optimal_scale(
         self,
@@ -1099,6 +1199,7 @@ class Typesetting:
         typesetting_units: list[TypesettingUnit],
         precomputed_scale: float,
         use_english_line_break: bool = True,
+        force: bool = False,
     ):
         """使用预计算的缩放因子进行排版"""
         if not paragraph.box:
@@ -1112,6 +1213,7 @@ class Typesetting:
             precomputed_scale,
             use_english_line_break,
             apply_layout=True,
+            force=force,
         )
 
     def typesetting_document(self, document: il_version_1.Document):
@@ -1293,6 +1395,26 @@ class Typesetting:
             self.retypeset_with_precomputed_scale(
                 paragraph, page, typesetting_units, precomputed_scale
             )
+
+            # A paragraph whose text cannot be made to fit at any scale used
+            # to end up here with an empty composition, which pdf_creater
+            # then silently drops from the output PDF (logging only
+            # "Unable to export paragraphs that have not yet been
+            # formatted"). Retry once in force mode: commit the layout at
+            # minimum scale and accept overflow rather than lose the text.
+            if typesetting_units and not paragraph.pdf_paragraph_composition:
+                logger.error(
+                    "Typesetting produced an empty composition; forcing a "
+                    "min-scale layout (text may overflow). "
+                    f"debug_id={getattr(paragraph, 'debug_id', None)} "
+                    f"layout_label={getattr(paragraph, 'layout_label', None)} "
+                    f"unicode_chars={len(paragraph.unicode or '')} "
+                    f"units={len(typesetting_units)} "
+                    f"box={_describe_box(paragraph.box)}"
+                )
+                self.retypeset_with_precomputed_scale(
+                    paragraph, page, typesetting_units, precomputed_scale, force=True
+                )
 
             # 重排版后，重新设置段落各字符的 render order
             self._update_paragraph_render_order(paragraph)

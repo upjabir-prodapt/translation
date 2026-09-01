@@ -171,6 +171,14 @@ class Settings(BaseSettings):
     # is available in Redis Cluster mode). Keep the trailing separator.
     REDIS_KEY_PREFIX: str = "translation-cache:"
 
+    # --- Cross-instance job lease (see services/job_lease.py) ------------
+    # How long a lease survives without a heartbeat. Must comfortably exceed
+    # the refresh interval so a slow GC pause or a stalled event loop cannot
+    # let a healthy owner's lease lapse, while staying short enough that a
+    # genuinely dead instance frees the job promptly.
+    JOB_LEASE_TTL_SECONDS: int = 300
+    JOB_LEASE_REFRESH_SECONDS: float = 60.0
+
     API_USE_BACKGROUND_PIPELINE: bool
 
     # -----------------------------
@@ -194,7 +202,12 @@ class Settings(BaseSettings):
     HIGH_PRIORITY_ROUTING_ENABLED: bool = True
     CLOUD_TASKS_WORKER_URL: str = ""
     CLOUD_TASKS_OIDC_SERVICE_ACCOUNT: str = ""
-    CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS: int = 3600
+    # Cloud Tasks caps the dispatch deadline for HTTP targets at 30 minutes
+    # (the documented interval is [15s, 1800s]); larger values are rejected
+    # by the API. Keep this in sync with the worker's Cloud Run --timeout,
+    # otherwise a job still running past the deadline is re-dispatched onto
+    # a second instance while the first keeps going, doubling the load.
+    CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS: int = 1800
     # Worker-only: override OIDC audience if different from CLOUD_TASKS_WORKER_URL
     WORKER_OIDC_AUDIENCE: str = ""
     # Local/dev only — never enable in production
@@ -209,6 +222,32 @@ class Settings(BaseSettings):
     JUDGE_MODEL_REGION: str = ""
     QUALITY_THRESHOLD: float
     QUALITY_EARLY_ACCEPT_THRESHOLD: float
+
+    # --- Chunked judging -------------------------------------------------
+    # The judge used to send the entire document in one call, which made
+    # every judgement all-or-nothing: one timeout or one unparseable
+    # response collapsed the score to a fallback and burned the whole model
+    # chain. It now scores aligned (source, translation) segment pairs in
+    # chunks, so a single failure costs coverage rather than the verdict.
+    #
+    # Chunks are grouped on *source* characters, never splitting a pair.
+    # Source is the invariant across attempts, so identical chunk
+    # boundaries make attempt-to-attempt score comparison valid.
+    QUALITY_JUDGE_CHUNK_CHARS: int = 8000
+    # Cap on chunks actually sent. 16 == LLM_MAX_INFLIGHT_CALLS, i.e. one
+    # wave, so judge latency and cost are O(1) in document size rather than
+    # linear. Above the cap a seeded stratified sample spanning the whole
+    # document is used; raise this to trade latency for coverage.
+    QUALITY_JUDGE_MAX_CHUNKS: int = 16
+    # Safety net for the whole judging pass: LLM_JUDGE_TIMEOUT_SECONDS x
+    # LLM_RETRY_MAX_ATTEMPTS x two waves is a ~12 min theoretical worst
+    # case, which on its own would push a job past the Cloud Tasks dispatch
+    # deadline. On expiry the judge stops issuing chunks and aggregates
+    # whatever completed.
+    QUALITY_JUDGE_TOTAL_BUDGET_SECONDS: float = 420.0
+    # Below this fraction of the document judged, the score is reported as
+    # a fallback: it is a sample too thin to defend.
+    QUALITY_JUDGE_MIN_COVERAGE_RATIO: float = 0.5
     MAX_MODEL_ATTEMPTS: int
     GEMINI_MODEL: str
     GEMINI_MODEL_REGION: str = ""
@@ -256,7 +295,11 @@ class Settings(BaseSettings):
     # Without these a hung/slow generation is simply waited out; "timeout"
     # is already in the retryable-substring list so tenacity picks it up.
     LLM_CALL_TIMEOUT_SECONDS: float = 90.0
-    LLM_JUDGE_TIMEOUT_SECONDS: float = 60.0
+    # Raised 60 -> 120 for headroom on 429 backoff. Judge payloads are now
+    # chunked to QUALITY_JUDGE_CHUNK_CHARS, so this deadline is rarely the
+    # binding constraint; when it is, the cost is one chunk's coverage
+    # rather than the whole verdict.
+    LLM_JUDGE_TIMEOUT_SECONDS: float = 120.0
 
     # --- Adaptive batch sizing (see doctranslator/batching.py) -----------
     LLM_ADAPTIVE_BATCHING_ENABLED: bool = True
@@ -416,6 +459,17 @@ class Settings(BaseSettings):
 
     ASSETS_ROOT: str
     TEMP_DIR: str
+
+    # -----------------------------
+    # Memory pressure
+    # -----------------------------
+
+    # Fraction of the container's cgroup memory limit at which the
+    # translation pipeline logs a structured WARNING. Purely observational:
+    # nothing is aborted, it exists so an OOM SIGKILL is preceded by a log
+    # line naming the job and phase instead of appearing out of nowhere.
+    # Set to 0 to disable.
+    MEMORY_PRESSURE_WARN_FRACTION: float = 0.85
 
     PROJECT_ROOT: Path = Field(
         default_factory=lambda: find_project_root(Path(__file__).resolve())

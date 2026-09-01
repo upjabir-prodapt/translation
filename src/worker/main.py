@@ -17,6 +17,10 @@ from src.config.constants import settings
 from src.config.logging_config import setup_logging
 from src.config.telemetry import setup_telemetry
 from src.config.telemetry import shutdown_telemetry
+from src.worker.lifecycle import in_flight_job_count
+from src.worker.lifecycle import in_flight_job_ids
+from src.worker.lifecycle import install_signal_handlers
+from src.worker.lifecycle import request_shutdown
 from src.worker.middleware.exception_handler import exception_handler_middleware
 from src.worker.routes.health import router as health_router
 from src.worker.routes.tasks import router as tasks_router
@@ -43,6 +47,10 @@ async def lifespan(_app: FastAPI):
             logger.error("[OTEL] Worker OpenTelemetry failed to initialize")
 
     logger.info("Starting translation worker v%s", settings.API_VERSION)
+    # Record SIGTERM the instant Cloud Run sends it. Without this the only
+    # shutdown signal we ever saw was the SIGKILL ~10s later, which is
+    # indistinguishable from an OOM kill in Cloud Logging.
+    install_signal_handlers()
     startup_assets = StartupAssetsService()
     _app.state.startup_preflight_status = None
 
@@ -77,12 +85,21 @@ async def lifespan(_app: FastAPI):
     logger.info("Worker startup complete")
     yield
 
+    # Idempotent: normally already set by the SIGTERM handler above. Logs
+    # the in-flight census either way so "SIGKILL during deploy with a job
+    # running" is distinguishable from "OOM" without guesswork.
+    request_shutdown("lifespan")
+
     task: asyncio.Task | None = getattr(_app.state, "asset_background_warmup", None)
     if task and not task.done():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-    logger.info("Worker shutting down")
+    logger.info(
+        "Worker shutting down, in_flight_jobs=%d job_ids=%s",
+        in_flight_job_count(),
+        ",".join(in_flight_job_ids()) or "-",
+    )
     shutdown_telemetry(_app)
 
 

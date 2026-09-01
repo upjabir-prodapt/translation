@@ -277,3 +277,39 @@ def get_memory_usage_with_throttle(
         pid=pid, include_children=include_children, prefer_pss=prefer_pss
     )
     return memory, current_time
+
+
+# cgroup files exposing the container's memory ceiling. v2 first (Cloud Run
+# gen2 and modern kernels), then v1.
+_CGROUP_LIMIT_PATHS = (
+    "/sys/fs/cgroup/memory.max",
+    "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+)
+
+# cgroup v1 reports "no limit" as a huge sentinel rather than "max".
+_CGROUP_NO_LIMIT_THRESHOLD = 1 << 62
+
+
+def get_container_memory_limit_bytes() -> int | None:
+    """Return this container's memory ceiling in bytes, or None if unlimited.
+
+    Cloud Run enforces `--memory` via cgroups, so reading the cgroup file is
+    the only way for the process to learn the limit it will be OOM-killed
+    at. Returns None when running outside a limited cgroup (e.g. local dev),
+    in which case pressure monitoring is simply disabled.
+    """
+    for path in _CGROUP_LIMIT_PATHS:
+        try:
+            raw = Path(path).read_text().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value <= 0 or value >= _CGROUP_NO_LIMIT_THRESHOLD:
+            return None
+        return value
+    return None

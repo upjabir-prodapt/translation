@@ -73,6 +73,13 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY . .
 
+# Scratch space for the translation pipeline. On Cloud Run /tmp is a
+# RAM-backed tmpfs, so writing working files there counts against the
+# container memory limit; with --execution-environment=gen2 this path lives
+# on the (disk-backed) container filesystem instead. TEMP_DIR points here in
+# the Cloud Run deploy; local runs keep their own value.
+RUN mkdir -p /workspace/tmp && chmod 700 /workspace/tmp
+
 EXPOSE 8000
 
 CMD ["python", "main_worker.py"]

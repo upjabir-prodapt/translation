@@ -43,14 +43,18 @@ class TestEventLoopIsNotBlocked:
                 dlp_provider=None,
                 dlp_token_rows=[],
                 extracted_terms=[],
+                segments=[("Hello world", "Bonjour le monde")],
             )
 
         mock_translate_docx.side_effect = _record_thread
         mock_create_translator.return_value = MagicMock()
         judge = MagicMock()
-        judge.evaluate_async = AsyncMock(
+        judge.evaluate_segments_async = AsyncMock(
             return_value=MagicMock(
-                final_score=0.95, pass_fail=True, to_dict=lambda: {"final_score": 0.95}
+                final_score=0.95,
+                pass_fail=True,
+                inconclusive=False,
+                to_dict=lambda: {"final_score": 0.95},
             )
         )
         mock_judge_cls.return_value = judge
@@ -101,7 +105,7 @@ class TestProtectedTokenVerification:
     @staticmethod
     def _judge_mock():
         judge = MagicMock()
-        judge.evaluate_async = AsyncMock(
+        judge.evaluate_segments_async = AsyncMock(
             return_value=MagicMock(
                 final_score=0.95,
                 pass_fail=True,
@@ -109,6 +113,8 @@ class TestProtectedTokenVerification:
                 omission_score=0.9,
                 hallucination_score=0.9,
                 is_fallback=False,
+                inconclusive=False,
+                coverage_ratio=1.0,
                 to_dict=lambda: {"final_score": 0.95},
             )
         )
@@ -131,6 +137,9 @@ class TestProtectedTokenVerification:
             dlp_provider=None,
             dlp_token_rows=[],
             extracted_terms=[],
+            segments=[
+                ("Visit https://example.com for help.", "Aucun lien ici du tout.")
+            ],
         )
         mock_create_translator.return_value = MagicMock()
         mock_judge_cls.return_value = self._judge_mock()
@@ -175,6 +184,7 @@ class TestProtectedTokenVerification:
             dlp_provider=None,
             dlp_token_rows=[],
             extracted_terms=[],
+            segments=[("Order 42 items today.", "Commandez des articles aujourd'hui.")],
         )
         mock_create_translator.return_value = MagicMock()
 
@@ -283,16 +293,18 @@ class TestDocxJobProcessorAttemptReuse:
         mock_judge = MagicMock()
         mock_judge_cls.return_value = mock_judge
         # Attempt 1 scores 0.5 (fail), Attempt 2 scores 0.95 (pass)
-        mock_judge.evaluate_async = AsyncMock(
+        mock_judge.evaluate_segments_async = AsyncMock(
             side_effect=[
                 MagicMock(
                     final_score=0.5,
                     pass_fail=False,
+                    inconclusive=False,
                     to_dict=lambda: {"final_score": 0.5},
                 ),
                 MagicMock(
                     final_score=0.95,
                     pass_fail=True,
+                    inconclusive=False,
                     to_dict=lambda: {"final_score": 0.95},
                 ),
             ]
@@ -313,6 +325,7 @@ class TestDocxJobProcessorAttemptReuse:
             dlp_token_rows=dlp_res.token_rows,
             extracted_terms=extracted_terms,
             dlp_result=dlp_res,
+            segments=[("source", "target 1")],
         )
         res2 = DocxTranslationResult(
             output_path=tmp_path / "iter_2" / "input.docx",
@@ -322,6 +335,7 @@ class TestDocxJobProcessorAttemptReuse:
             dlp_token_rows=dlp_res.token_rows,
             extracted_terms=extracted_terms,
             dlp_result=dlp_res,
+            segments=[("source", "target 2")],
         )
         mock_translate_docx.side_effect = [res1, res2]
 

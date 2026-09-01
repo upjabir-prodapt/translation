@@ -1,16 +1,56 @@
 """Redis-backed translation cache tests."""
 
+import functools
+import inspect
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-from src.worker.doctranslator.translator import translation_cache as tc_module
 from src.worker.doctranslator.translator.translation_cache import TranslationCache
 from src.worker.doctranslator.translator.translation_cache import build_cache_key
+from src.worker.services import redis_client as redis_client_module
 
 
 def _reset_module_singletons():
-    tc_module._client = None
-    tc_module._cache_enabled = None
+    # The pooled client is no longer private to this module: it now lives in
+    # the shared `redis_client` module that the cache and the job lease both
+    # consume, so there is one connection pool per process rather than one
+    # per Redis feature.
+    redis_client_module.reset_for_tests()
+
+
+def _patch_settings(func):
+    """Patch `settings` in the cache module *and* the shared redis_client
+    module with one shared mock.
+
+    Connection parameters (host/port/TLS/timeouts) are read by redis_client
+    now that the client factory moved there, while REDIS_CACHE_TTL_SECONDS is
+    still read by translation_cache -- so a test that configures only one of
+    the two would silently exercise the real settings for the other.
+
+    Applied as the innermost decorator so its mock arrives last, matching the
+    bottom-up argument order `unittest.mock.patch` uses.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        mock_settings = MagicMock()
+        with (
+            patch(
+                "src.worker.doctranslator.translator.translation_cache.settings",
+                mock_settings,
+            ),
+            patch("src.worker.services.redis_client.settings", mock_settings),
+        ):
+            return func(*args, mock_settings, **kwargs)
+
+    # pytest resolves a test's parameters through `__wrapped__`, so without
+    # this it would see the trailing `mock_settings` parameter, find no
+    # fixture by that name and error out at collection.
+    del wrapper.__wrapped__
+    wrapper.__signature__ = inspect.Signature(
+        list(inspect.signature(func).parameters.values())[:-1]
+    )
+    return wrapper
 
 
 class TestBuildCacheKey:
@@ -91,9 +131,9 @@ class TestTranslationCacheRedisBackend:
     def teardown_method(self):
         _reset_module_singletons()
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_get_returns_cached_value_on_hit(
         self, mock_pool, mock_redis_cls, mock_settings
     ):
@@ -116,9 +156,9 @@ class TestTranslationCacheRedisBackend:
         assert result == "bonjour le monde"
         mock_client.get.assert_called_once_with("some-key")
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_get_returns_none_on_miss(self, mock_pool, mock_redis_cls, mock_settings):
         mock_settings.REDIS_HOST = "10.0.0.5"
         mock_settings.REDIS_PORT = 6379
@@ -136,9 +176,9 @@ class TestTranslationCacheRedisBackend:
         cache = TranslationCache()
         assert cache.get("missing-key") is None
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_set_writes_with_seven_day_ttl(
         self, mock_pool, mock_redis_cls, mock_settings
     ):
@@ -176,7 +216,7 @@ class TestTranslationCacheFailOpen:
     def teardown_method(self):
         _reset_module_singletons()
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
+    @_patch_settings
     def test_no_redis_host_disables_caching(self, mock_settings):
         mock_settings.REDIS_HOST = ""
 
@@ -192,9 +232,9 @@ class TestTranslationCacheFailOpen:
             lang_out="fr",
         )
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_ping_failure_disables_caching(
         self, mock_pool, mock_redis_cls, mock_settings
     ):
@@ -226,9 +266,9 @@ class TestTranslationCacheFailOpen:
         )
         assert mock_redis_cls.call_count == 1
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_get_error_is_swallowed(self, mock_pool, mock_redis_cls, mock_settings):
         mock_settings.REDIS_HOST = "10.0.0.5"
         mock_settings.REDIS_PORT = 6379
@@ -246,9 +286,9 @@ class TestTranslationCacheFailOpen:
         cache = TranslationCache()
         assert cache.get("any-key") is None
 
-    @patch("src.worker.doctranslator.translator.translation_cache.settings")
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
+    @_patch_settings
     def test_set_error_is_swallowed(self, mock_pool, mock_redis_cls, mock_settings):
         mock_settings.REDIS_HOST = "10.0.0.5"
         mock_settings.REDIS_PORT = 6379

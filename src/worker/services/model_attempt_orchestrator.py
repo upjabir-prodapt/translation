@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import logging
 import shutil
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from src.config.constants import settings
+from src.config.tracing import set_root_span_attributes
 from src.repository.translation_storage_repository import (
     get_translation_storage_repository,
 )
@@ -22,6 +24,8 @@ from src.worker.doctranslator.format.pdf.translation_config import TranslationCo
 from src.worker.doctranslator.format.pdf.translation_config import (
     TranslationCoverPageMetadata,
 )
+from src.worker.services.attempt_decision import AttemptDecision
+from src.worker.services.attempt_decision import decide_after_attempt
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
 from src.worker.services.quality_judge_service import QualityJudgeResult
 from src.worker.services.translation_attempt_runner import TranslationAttemptRunner
@@ -166,6 +170,13 @@ class ModelAttemptOrchestrator:
                 )
 
             if not attempt_result or not attempt_report:
+                # A failed attempt still parsed the whole document into its
+                # own working_dir. Leaving it until TempWorkspaceService
+                # cleanup at job end made peak temp usage scale with
+                # MAX_MODEL_ATTEMPTS -- and TEMP_DIR is RAM-backed on Cloud
+                # Run, so that directly fed the OOM SIGKILLs.
+                _cleanup_attempt_working_dir(translation_config)
+                gc.collect()
                 continue
 
             if not enable_judge or quality_result is None:
@@ -214,26 +225,37 @@ class ModelAttemptOrchestrator:
                 # up its working_dir immediately rather than at job end.
                 _cleanup_attempt_working_dir(translation_config)
 
-            if quality_result.pass_fail:
-                break
-
-            # QUALITY_EARLY_ACCEPT_THRESHOLD was declared in Settings but
-            # never read anywhere, so a near-miss score still burned a full
-            # extra attempt (re-parsing and re-translating the whole
-            # document). Accept a score that is already comfortably good
-            # rather than paying 2-3x latency chasing a marginal gain.
-            early_accept = float(settings.QUALITY_EARLY_ACCEPT_THRESHOLD)
-            if 0 < early_accept <= final_score:
-                logger.info(
-                    f"Early-accepting attempt {attempt_config['attempt_index']} "
-                    f"(score={final_score:.3f} >= "
-                    f"QUALITY_EARLY_ACCEPT_THRESHOLD={early_accept}); "
-                    "skipping remaining model attempts"
+            # Shared with DocxJobProcessor so the two model-attempt loops
+            # cannot drift apart again (see services/attempt_decision.py).
+            decision = decide_after_attempt(
+                quality_result,
+                attempt_index=int(attempt_config["attempt_index"]),
+                pipeline="pdf",
+            )
+            if decision is AttemptDecision.INCONCLUSIVE_ACCEPT:
+                set_root_span_attributes(
+                    {
+                        "judge.inconclusive": True,
+                        "translation.stopped_reason": "judge_inconclusive",
+                    }
                 )
+            if decision.should_stop:
                 break
 
         if best_attempt_result is None:
             raise RuntimeError("All translation attempts failed")
+
+        # No further attempt will run, so the per-part IL trees cached to let
+        # attempts 2-3 skip re-parsing are now dead weight held for the rest
+        # of the job (cover-page rendering, upload, BigQuery writes). With
+        # the judge fixed most jobs stop at attempt 1, so this is almost
+        # always freed without ever having been read.
+        if shared_context is not None:
+            try:
+                shared_context.clear_cached_il_docs()
+            except Exception:
+                logger.debug("Failed to release cached IL documents", exc_info=True)
+        gc.collect()
 
         winning_attempt_idx = (
             best_attempt_config.get("attempt_index") if best_attempt_config else 1

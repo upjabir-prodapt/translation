@@ -136,6 +136,9 @@ class BaseTranslator(ABC):
             rate_limit_params=rate_limit_params,
             operation="do_translate",
             batch_items=batch_items,
+            # Raw-text path: the caller hands us bare document text, so the
+            # standard translation prompt has to be built here.
+            build_prompt=True,
         )
 
     def do_llm_translate(
@@ -157,6 +160,14 @@ class BaseTranslator(ABC):
             rate_limit_params=rate_limit_params,
             operation="do_llm_translate",
             batch_items=batch_items,
+            # Every `llm_translate()` caller (PDF single/batch translators,
+            # DOCX batch translator, both term extractors) already passes a
+            # fully-built prompt. Re-wrapping it in `build_translation_prompt`
+            # made the model translate our own instructions into the target
+            # language, which then could not be typeset and got dropped from
+            # the output PDF ("Unable to export paragraphs that have not yet
+            # been formatted"). The caller owns the prompt on this path.
+            build_prompt=False,
         )
 
     def _cache_key_for(self, text: str) -> str | None:
@@ -179,7 +190,11 @@ class BaseTranslator(ABC):
         rate_limit_params: dict | None,
         operation: str,
         batch_items: int | None = None,
+        build_prompt: bool = True,
     ) -> str:
+        # Cache on the *incoming* text, never on `contents`: the prompt
+        # wrapper is a pure function of (text, lang_in, lang_out, domain),
+        # all of which are already part of the key.
         cache_key = self._cache_key_for(text if isinstance(text, str) else None)
         if cache_key is not None:
             cached = get_translation_cache().get(cache_key)
@@ -190,7 +205,7 @@ class BaseTranslator(ABC):
                 )
                 return cached
 
-        contents = self.prompt(text)
+        contents = self.prompt(text) if build_prompt else text
         c_len = len(contents)
         input_chars = len(text) if isinstance(text, str) else 0
         rl_keys = sorted(rate_limit_params.keys()) if rate_limit_params else []

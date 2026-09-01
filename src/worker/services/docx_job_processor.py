@@ -32,10 +32,13 @@ from src.worker.doctranslator.format.pdf.translation_config import (
     TranslationCoverPageMetadata,
 )
 from src.worker.doctranslator.translator.factory import create_translator
+from src.worker.services.attempt_decision import AttemptDecision
+from src.worker.services.attempt_decision import decide_after_attempt
 from src.worker.services.dlp_service import DlpResult
 from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
+from src.worker.services.quality_judge_service import QualityJudgeResult
 from src.worker.services.token_verification_service import (
     log_token_verification_warning,
 )
@@ -234,36 +237,47 @@ class DocxJobProcessor:
                 best_attempt_index = attempt_index
                 break
 
-            if not result.translated_text.strip() or not result.source_text.strip():
-                quality_result = None
-                final_score = 0.0
-            else:
-                quality_result = await judge.evaluate_async(
-                    source_text=result.source_text,
-                    translated_text=result.translated_text,
+            # `result.segments` are the aligned (source, translation) unit
+            # pairs, handed over in memory -- DOCX is single-pass in-process,
+            # so unlike the PDF path there is no per-part tracking JSON to
+            # reconstruct them from and a round trip would be pure overhead.
+            if not result.segments:
+                # An inconclusive verdict, never a numeric 0.0: the previous
+                # `quality_result = None` here collided with the "judge
+                # disabled" meaning of None, and because both exit conditions
+                # below were guarded on `quality_result is not None`, neither
+                # could fire -- so an unjudgeable DOCX ran the entire model
+                # chain and then reported no quality at all on the cover page.
+                quality_result = QualityJudgeResult(
+                    alignment_score=0.0,
+                    omission_score=0.0,
+                    hallucination_score=0.0,
+                    final_score=0.0,
+                    pass_fail=False,
+                    reasons=["No translated segments were available to judge."],
+                    model=judge.model,
+                    is_fallback=True,
+                    inconclusive=True,
+                    coverage_ratio=0.0,
                 )
-                final_score = quality_result.final_score
+            else:
+                quality_result = await judge.evaluate_segments_async(
+                    result.segments, job_id=job_id
+                )
+            final_score = quality_result.final_score
 
             attempt_reports.append(
                 {
                     "attempt_number": attempt_index,
                     "model_id": selected_model,
-                    "alignment_score": quality_result.alignment_score
-                    if quality_result
-                    else None,
-                    "omission_score": quality_result.omission_score
-                    if quality_result
-                    else None,
-                    "hallucination_score": quality_result.hallucination_score
-                    if quality_result
-                    else None,
-                    "final_score": quality_result.final_score
-                    if quality_result
-                    else None,
-                    "pass_fail": quality_result.pass_fail if quality_result else None,
-                    "is_fallback": getattr(quality_result, "is_fallback", False)
-                    if quality_result
-                    else False,
+                    "alignment_score": quality_result.alignment_score,
+                    "omission_score": quality_result.omission_score,
+                    "hallucination_score": quality_result.hallucination_score,
+                    "final_score": quality_result.final_score,
+                    "pass_fail": quality_result.pass_fail,
+                    "is_fallback": quality_result.is_fallback,
+                    "inconclusive": quality_result.inconclusive,
+                    "coverage_ratio": quality_result.coverage_ratio,
                     "total_tokens": token_usage.get("total_tokens", 0),
                     "prompt_tokens": token_usage.get("prompt_tokens", 0),
                     "completion_tokens": token_usage.get("completion_tokens", 0),
@@ -276,65 +290,63 @@ class DocxJobProcessor:
                 }
             )
 
-            if quality_result is not None:
-                try:
-                    q_path = attempt_output_dir / "quality_report.json"
-                    q_path.write_text(
-                        json.dumps(quality_result.to_dict(), indent=2), encoding="utf-8"
+            try:
+                q_path = attempt_output_dir / "quality_report.json"
+                q_path.write_text(
+                    json.dumps(quality_result.to_dict(), indent=2), encoding="utf-8"
+                )
+                dlp_applied = bool(
+                    enable_dlp
+                    and (
+                        cached_dlp_result is not None or result.dlp_provider is not None
                     )
-                    dlp_applied = bool(
-                        enable_dlp
-                        and (
-                            cached_dlp_result is not None
-                            or result.dlp_provider is not None
-                        )
+                )
+                sample_rate = int(getattr(settings, "TRACKING_SAMPLE_PERCENTAGE", 10))
+                is_sampled = sample_rate >= 100 or (
+                    sample_rate > 0
+                    and int(hashlib.sha256(str(job_id).encode()).hexdigest()[:8], 16)
+                    % 100
+                    < sample_rate
+                )
+                if dlp_applied and is_sampled:
+                    storage = get_translation_storage_repository()
+                    await storage.upload_attempt_artifacts(
+                        job_id=job_id,
+                        attempt_index=attempt_index,
+                        quality_report_path=q_path,
                     )
-                    sample_rate = int(
-                        getattr(settings, "TRACKING_SAMPLE_PERCENTAGE", 10)
-                    )
-                    is_sampled = sample_rate >= 100 or (
-                        sample_rate > 0
-                        and int(
-                            hashlib.sha256(str(job_id).encode()).hexdigest()[:8], 16
-                        )
-                        % 100
-                        < sample_rate
-                    )
-                    if dlp_applied and is_sampled:
-                        storage = get_translation_storage_repository()
-                        await storage.upload_attempt_artifacts(
-                            job_id=job_id,
-                            attempt_index=attempt_index,
-                            quality_report_path=q_path,
-                        )
-                except Exception:
-                    logger.debug(
-                        f"Failed to upload DOCX quality report for attempt {attempt_index}",
-                        exc_info=True,
-                    )
+            except Exception:
+                logger.debug(
+                    f"Failed to upload DOCX quality report for attempt {attempt_index}",
+                    exc_info=True,
+                )
 
-            if final_score > best_score:
+            # `best_quality` always records a real verdict now, including an
+            # inconclusive one. It previously became None whenever the judge
+            # failed, which silently emptied the cover page's confidence
+            # score and the returned quality_report.
+            if final_score > best_score or best_result is None:
                 best_score = final_score
                 best_result = result
                 best_model_id = selected_model
-                best_quality = quality_result.to_dict() if quality_result else None
+                best_quality = quality_result.to_dict()
                 best_token_usage = token_usage
                 best_attempt_index = attempt_index
 
-            if quality_result is not None and quality_result.pass_fail:
-                break
-
-            # Mirror ModelAttemptOrchestrator: honour the previously-unused
-            # QUALITY_EARLY_ACCEPT_THRESHOLD so a near-miss does not cost a
-            # full extra translation pass.
-            early_accept = float(settings.QUALITY_EARLY_ACCEPT_THRESHOLD)
-            if quality_result is not None and 0 < early_accept <= final_score:
-                logger.info(
-                    f"Early-accepting DOCX attempt {attempt_index} "
-                    f"(score={final_score:.3f} >= "
-                    f"QUALITY_EARLY_ACCEPT_THRESHOLD={early_accept}); "
-                    "skipping remaining model attempts"
+            # Shared with ModelAttemptOrchestrator. This loop used to carry a
+            # hand-written copy of the rule prefixed "Mirror
+            # ModelAttemptOrchestrator", and the copy had already drifted:
+            # both of its exits were guarded on `quality_result is not None`,
+            # so a judge failure fell through and ran the whole model chain.
+            decision = decide_after_attempt(
+                quality_result, attempt_index=attempt_index, pipeline="docx"
+            )
+            if decision is AttemptDecision.INCONCLUSIVE_ACCEPT:
+                logger.warning(
+                    f"DOCX job {job_id}: accepting attempt {attempt_index} on an "
+                    "inconclusive judge verdict"
                 )
+            if decision.should_stop:
                 break
 
         if best_result is None:

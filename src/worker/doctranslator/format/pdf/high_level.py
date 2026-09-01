@@ -2,8 +2,10 @@ import asyncio
 import concurrent.futures
 import contextvars
 import copy
+import gc
 import hashlib
 import io
+import json
 import logging
 import pathlib
 import re
@@ -628,20 +630,71 @@ async def async_translate(translation_config: TranslationConfig):
     await finish_event.wait()
 
 
-class MemoryMonitor:
-    """Monitor memory usage of current process and all child processes."""
+# Deliberately a plain module global rather than a threading.local: the
+# pipeline runs in an executor thread (and split parts in a further thread
+# pool) while MemoryMonitor reads it from its own monitor thread, so a
+# thread-local value would always read back as "unknown" there. With
+# concurrency=1 there is one job per instance, so a single approximate
+# "what is the pipeline doing" label is exactly what the diagnostic needs.
+# str assignment/read is atomic under the GIL, so no lock is required.
+_current_phase = "unknown"
 
-    def __init__(self, interval=0.1):
+
+def _set_phase(phase: str) -> None:
+    """Record the pipeline phase for memory-pressure diagnostics."""
+    global _current_phase
+    _current_phase = phase
+
+
+def _get_phase() -> str:
+    return _current_phase
+
+
+def _collect_garbage(phase: str) -> None:
+    """Free cyclic garbage at a pipeline phase boundary.
+
+    The IL tree, the pymupdf documents and the typesetting units form
+    large reference cycles, so CPython's refcounting alone leaves them
+    resident until a generational collection happens to run. On a
+    concurrency=1 Cloud Run instance where TEMP_DIR is RAM-backed, that
+    residency is the difference between finishing and being OOM-killed.
+    """
+    _set_phase(phase)
+    collected = gc.collect()
+    logger.debug(
+        f"[pdf_translate] gc at phase boundary: phase={phase} collected={collected}"
+    )
+
+
+class MemoryMonitor:
+    """Monitor memory usage of current process and all child processes.
+
+    Also emits a structured WARNING when usage crosses
+    ``settings.MEMORY_PRESSURE_WARN_FRACTION`` of the container's cgroup
+    memory limit. This is observational only -- nothing is aborted -- but
+    it means an OOM SIGKILL is preceded by a log line naming the job and
+    the phase, instead of the container simply vanishing.
+    """
+
+    def __init__(self, interval=0.1, job_id: str | None = None):
         """Initialize memory monitor.
 
         Args:
             interval: Monitoring interval in seconds, defaults to 0.1s (100ms)
+            job_id: Job identifier included in pressure warnings.
         """
         self.interval = interval
         self.peak_memory_usage = 0
         self.monitor_thread = None
         self.stop_event = None
         self.last_pss_check_time = None
+        self.job_id = job_id or "unknown"
+        self.memory_limit_bytes = memory.get_container_memory_limit_bytes()
+        try:
+            self.warn_fraction = float(settings.MEMORY_PRESSURE_WARN_FRACTION)
+        except Exception:
+            self.warn_fraction = 0.85
+        self._pressure_warned = False
 
     def __enter__(self):
         """Start memory monitoring."""
@@ -680,10 +733,32 @@ class MemoryMonitor:
                 total_memory_mb = total_memory / (1024 * 1024)
                 if total_memory_mb > self.peak_memory_usage:
                     self.peak_memory_usage = total_memory_mb
+                self._maybe_warn_pressure(total_memory)
             except Exception as e:
                 logger.warning(f"Error monitoring memory: {e}")
 
             time.sleep(self.interval)
+
+    def _maybe_warn_pressure(self, total_memory_bytes: int) -> None:
+        """Log once when memory crosses the configured pressure threshold."""
+        if self._pressure_warned or not self.memory_limit_bytes:
+            return
+        if self.warn_fraction <= 0:
+            return
+        threshold = self.memory_limit_bytes * self.warn_fraction
+        if total_memory_bytes < threshold:
+            return
+        self._pressure_warned = True
+        logger.warning(
+            "memory pressure: job_id=%s phase=%s used_mb=%.1f limit_mb=%.1f "
+            "fraction=%.3f threshold_fraction=%.2f",
+            self.job_id,
+            _get_phase(),
+            total_memory_bytes / (1024 * 1024),
+            self.memory_limit_bytes / (1024 * 1024),
+            total_memory_bytes / self.memory_limit_bytes,
+            self.warn_fraction,
+        )
 
     def get_peek_memory_psutil(self):
         """Get peak memory usage using psutil (for backwards compatibility)."""
@@ -841,6 +916,103 @@ def _merge_part_dlp_into_parent(
         translation_config.dlp_chunk_mode = "il_paragraph"
 
 
+def _merge_part_tracking_into_parent(
+    part_index: int,
+    part_config: TranslationConfig,
+    split_point,
+    merged_tracking: dict[int, dict],
+    lock: threading.Lock,
+) -> None:
+    """Collect a completed part's translate_tracking.json for the parent.
+
+    Each part writes a complete, correct `translate_tracking.json` into its
+    own working_dir -- and `_run_split_translation` then rmtree's that
+    directory in its `finally:` block. Nothing ever wrote the parent's copy,
+    so on *every* PDF large enough to split, the quality judge read a
+    non-existent file, got empty text, and scored the attempt 0.0. That
+    always sat below QUALITY_THRESHOLD, so `pass_fail` never broke the
+    attempt loop and every job ran the full model chain. Snapshotting the
+    part's tracking here, before cleanup, is what gives the judge something
+    to read.
+
+    Overlap pages are dropped: `tracker.page[j]` maps 1:1 onto `docs.page[j]`
+    (see `il_translator_llm_only.process_page`), and `ResultMerger._merge_pdfs`
+    discards exactly the first `overlap_pages` pages of every part after the
+    first. Keeping them would feed the judge the same pages two or three
+    times over -- on a deck split at every slide that is ~2.9x the real
+    document -- and would misreport omission/hallucination on duplicated text.
+
+    `cross_page` / `cross_column` are accumulated unchanged: those buckets
+    hold paragraphs deliberately excluded from `page` (via `translated_ids`),
+    so they are not duplicates of anything and have in fact never been judged.
+    """
+    tracking_path = Path(str(part_config.working_dir)) / "translate_tracking.json"
+    if not tracking_path.exists():
+        logger.warning(
+            f"[pdf_translate] No translate_tracking.json for part {part_index} "
+            f"at {tracking_path}; the quality judge will see less of this document."
+        )
+        return
+    try:
+        data = json.loads(tracking_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception(
+            f"[pdf_translate] Failed to parse part {part_index} tracking at {tracking_path}"
+        )
+        return
+
+    overlap = max(0, int(getattr(split_point, "overlap_pages", 0) or 0))
+    pages = list(data.get("page") or [])
+    kept_pages = pages[overlap:] if overlap else pages
+
+    with lock:
+        merged_tracking[part_index] = {
+            "page": kept_pages,
+            "cross_page": list(data.get("cross_page") or []),
+            "cross_column": list(data.get("cross_column") or []),
+        }
+    logger.debug(
+        f"[pdf_translate] Merged tracking for part {part_index}: "
+        f"pages_in_part={len(pages)} overlap_dropped={overlap} kept={len(kept_pages)}"
+    )
+
+
+def _write_parent_tracking(
+    translation_config: TranslationConfig,
+    merged_tracking: dict[int, dict],
+) -> None:
+    """Write the concatenated per-part tracking to the parent working_dir.
+
+    Parts are emitted in split-point index order (they complete out of
+    order under `as_completed`) so the judge's chunk boundaries are stable
+    across attempts -- which is what makes cross-attempt score comparison
+    meaningful.
+    """
+    if not merged_tracking:
+        return
+    working_dir = getattr(translation_config, "working_dir", None)
+    if not working_dir:
+        return
+    combined: dict[str, list] = {"page": [], "cross_page": [], "cross_column": []}
+    for part_index in sorted(merged_tracking):
+        part = merged_tracking[part_index]
+        for bucket in combined:
+            combined[bucket].extend(part.get(bucket) or [])
+    path = Path(str(working_dir)) / "translate_tracking.json"
+    try:
+        path.write_text(
+            json.dumps(combined, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        logger.info(
+            f"[pdf_translate] Wrote merged parent tracking to {path}: "
+            f"pages={len(combined['page'])} "
+            f"cross_page={len(combined['cross_page'])} "
+            f"cross_column={len(combined['cross_column'])}"
+        )
+    except Exception:
+        logger.exception(f"[pdf_translate] Failed to write merged tracking to {path}")
+
+
 def _run_split_translation(
     pm: ProgressMonitor,
     translation_config: TranslationConfig,
@@ -858,6 +1030,8 @@ def _run_split_translation(
     original_doc = Document(original_pdf_path)
     part_configs: dict[int, TranslationConfig] = {}
     dlp_merge_lock = threading.Lock()
+    tracking_merge_lock = threading.Lock()
+    merged_tracking: dict[int, dict] = {}
 
     for i, split_point in enumerate(split_points):
         part_config = _build_part_config(
@@ -903,6 +1077,16 @@ def _run_split_translation(
                 _merge_part_dlp_into_parent(
                     part_config, translation_config, dlp_merge_lock
                 )
+                # Must happen before the `finally:` below rmtree's the part
+                # working_dir -- that cleanup is what left the parent with no
+                # translate_tracking.json for the judge to read.
+                _merge_part_tracking_into_parent(
+                    i,
+                    part_config,
+                    split_points[i],
+                    merged_tracking,
+                    tracking_merge_lock,
+                )
             except Exception as e:
                 logger.error(f"Error in part {i}: {e}")
                 pm.translate_error(e)
@@ -910,6 +1094,7 @@ def _run_split_translation(
             finally:
                 translation_config.cleanup_part_working_dir(i)
 
+    _write_parent_tracking(translation_config, merged_tracking)
     translation_config.watermark_output_mode = original_watermark_mode
     _check_translation_continuity(results, split_points)
     merger = ResultMerger(translation_config)
@@ -933,6 +1118,15 @@ def _dispatch_translation(
 
     split_manager = SplitManager(translation_config)
     split_points = split_manager.determine_split_points(translation_config)
+
+    # Record the *real* split so cost attribution does not have to guess it
+    # by re-running a default-constructed strategy against the same PDF.
+    try:
+        translation_config.shared_context_cross_split_part.split_page_ranges = [
+            (sp.start_page, sp.end_page, sp.token_count) for sp in split_points
+        ]
+    except Exception:
+        logger.debug("Could not record split page ranges", exc_info=True)
 
     if not split_points:
         logger.warning("No split points determined, falling back to single translation")
@@ -994,6 +1188,20 @@ def _try_migrate_toc(
         logger.error(f"Failed to migrate TOC from {translation_config.input_file}: {e}")
 
 
+def _job_id_for_logging(translation_config: TranslationConfig) -> str:
+    """Best-effort job identifier for memory-pressure warnings.
+
+    TranslationConfig has no first-class job id; the working directory is
+    created under `<TEMP_JOBS_ROOT>/<job_id>/...`, and `dlp_job_id` carries
+    it when DLP is enabled.
+    """
+    dlp_job_id = getattr(translation_config, "dlp_job_id", None)
+    if dlp_job_id:
+        return str(dlp_job_id)
+    working_dir = getattr(translation_config, "working_dir", None)
+    return str(working_dir) if working_dir else "unknown"
+
+
 def _finalize_translate_result(
     pm: ProgressMonitor,
     translation_config: TranslationConfig,
@@ -1002,7 +1210,10 @@ def _finalize_translate_result(
     """Run the full translation pipeline and populate result metadata."""
     start_time = time.time()
     peak_memory_usage = 0
-    with MemoryMonitor() as memory_monitor:
+    _set_phase("start")
+    with MemoryMonitor(
+        job_id=_job_id_for_logging(translation_config)
+    ) as memory_monitor:
         result = _dispatch_translation(pm, translation_config, original_pdf_path)
         peak_memory_usage = memory_monitor.peak_memory_usage
 
@@ -1511,12 +1722,22 @@ def _do_translate_single(
         translation_config.shared_context_cross_split_part.set_cached_il_doc(
             part_idx, xml_converter.deepcopy(docs)
         )
+        _collect_garbage("parse")
 
     _run_translation_phase(docs, translation_config, xml_converter)
+    _collect_garbage("translate")
 
     mono_watermark_bytes, dual_watermark_bytes = _try_generate_watermark_bytes(
         doc_pdf2zh, translation_config, docs, mediabox_data
     )
+
+    # `doc_pdf2zh` is not referenced past this point (the sanitized copy on
+    # disk at `temp_pdf_path` is what PDFCreater reads). Closing it releases
+    # the MuPDF-side buffers for the whole input document, which refcounting
+    # alone would not do until the function returned.
+    _close_document(doc_pdf2zh, "input pdf")
+    doc_pdf2zh = None
+    _collect_garbage("watermark")
 
     logger.info("[pdf_translate] Phase: typesetting")
     Typesetting(translation_config).typesetting_document(docs)
@@ -1525,6 +1746,7 @@ def _do_translate_single(
         xml_converter.write_json(
             docs, translation_config.get_working_file_path("typsetting.json")
         )
+    _collect_garbage("typesetting")
 
     pdf_creater = PDFCreater(temp_pdf_path, docs, translation_config, mediabox_data)
     logger.info("[pdf_translate] Phase: PDF generation (draw ops, fonts, subset, save)")
@@ -1535,7 +1757,26 @@ def _do_translate_single(
         result, mono_watermark_bytes, dual_watermark_bytes, translation_config
     )
     result.original_pdf_path = translation_config.input_file
+
+    # The IL tree for every page of the document is the single largest
+    # in-memory object in the pipeline and is dead once the PDF is written.
+    # Release it before returning so the caller's quality-judging phase (and
+    # the next model attempt) does not run on top of it.
+    del docs
+    del pdf_creater
+    _collect_garbage("render")
+
     return result
+
+
+def _close_document(doc, label: str) -> None:
+    """Best-effort close of a pymupdf Document."""
+    if doc is None:
+        return
+    try:
+        doc.close()
+    except Exception:
+        logger.debug(f"Failed to close {label} document", exc_info=True)
 
 
 def generate_first_page_with_watermark(

@@ -185,3 +185,38 @@ def test_translate_docx_translates_and_persists_footnote_text(tmp_path: Path):
     footnotes_part = reloaded.part.part_related_by(RT.FOOTNOTES)
     assert b"Texte de la note" in footnotes_part.blob
     assert b"Note text" not in footnotes_part.blob
+
+
+def test_translate_docx_returns_aligned_segment_pairs(tmp_path: Path):
+    """The judge chunks on pairs, not on two concatenated blobs.
+
+    Target text runs 10-20% longer than source in many language pairs, so
+    chunking the two texts independently would compare paragraph N of the
+    source against paragraph N-3 of the translation and report the
+    difference as omission plus hallucination. DOCX is single-pass and
+    in-process, so the pairs are handed over in memory rather than round
+    tripped through JSON as on the PDF path.
+    """
+    input_file = tmp_path / "input.docx"
+    output_file = tmp_path / "output.docx"
+
+    doc = Document()
+    doc.add_paragraph("Hello world")
+    doc.add_paragraph("Second paragraph")
+    doc.save(str(input_file))
+
+    result = translate_docx(
+        input_path=input_file,
+        output_path=output_file,
+        translator=_FakeTranslator(),
+        lang_out="fr",
+        job_id="job-seg",
+        source_language="en",
+        enable_dlp=False,
+        auto_extract_glossary=False,
+    )
+
+    assert result.segments
+    # One pair per translated unit, and the two views of the document agree.
+    assert [s for s, _ in result.segments] == result.source_text.split("\n")
+    assert [t for _, t in result.segments] == result.translated_text.split("\n")

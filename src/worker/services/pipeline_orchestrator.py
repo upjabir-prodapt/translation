@@ -276,17 +276,40 @@ class PipelineOrchestrator:
         local_input_path: Path,
         token_usage: dict[str, Any],
         model_id: str,
+        split_page_ranges: list | None = None,
     ) -> dict[str, float | int]:
-        """Split the PDF into chunks, compute proportional costs, and return job totals."""
+        """Compute proportional per-chunk costs and return job totals.
+
+        `split_page_ranges` are the parts the translation actually ran, as
+        recorded by `_dispatch_translation`. Re-deriving chunks here with a
+        default-constructed `StructureAwareSplitStrategy` was a second,
+        independent split decision that could -- and did -- disagree with the
+        first: one run attributed cost across 52 re-derived chunks for a
+        document that was translated as 40 parts. Re-deriving is kept only as
+        a fallback for jobs that never went down the split path.
+        """
+        from src.worker.doctranslator.format.pdf.split_manager import SplitPoint
         from src.worker.doctranslator.format.pdf.split_manager import (
             StructureAwareSplitStrategy,
         )
         from src.worker.utils.cost_utils import aggregate_chunk_cost_records
 
-        class _Cfg:
-            input_file = local_input_path
+        if split_page_ranges:
+            chunks = [
+                SplitPoint(
+                    start_page=int(start),
+                    end_page=int(end),
+                    chunk_index=index,
+                    token_count=int(tokens),
+                )
+                for index, (start, end, tokens) in enumerate(split_page_ranges)
+            ]
+        else:
 
-        chunks = StructureAwareSplitStrategy().determine_split_points(_Cfg())
+            class _Cfg:
+                input_file = local_input_path
+
+            chunks = StructureAwareSplitStrategy().determine_split_points(_Cfg())
         cost_service = get_vertex_llm_cost_service()
         records = cost_service.compute_per_chunk_costs(
             chunks=chunks,
@@ -735,6 +758,7 @@ class PipelineOrchestrator:
                 local_input_path=local_input_path,
                 token_usage=token_usage,
                 model_id=str(attempt_result.get("model_id") or ""),
+                split_page_ranges=attempt_result.get("split_page_ranges"),
             )
             attributed_input_tokens = int(accumulated_chunk_costs["input_tokens"])
             attributed_output_tokens = int(accumulated_chunk_costs["output_tokens"])

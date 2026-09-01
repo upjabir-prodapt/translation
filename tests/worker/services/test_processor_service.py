@@ -343,8 +343,12 @@ class TestJobProcessorLanguageDetection:
             processor, "_handle_translation_event", new_callable=AsyncMock
         ) as mock_handle:
             mock_handle.return_value = {"status": "done"}
-            res = await processor._run_single_attempt(MagicMock(), {})
-            assert res == {"status": "done"}
+            config = MagicMock()
+            config.shared_context_cross_split_part.split_page_ranges = [(0, 9, 3000)]
+            res = await processor._run_single_attempt(config, {})
+            # The real split is carried forward so per-chunk cost attribution
+            # does not re-derive a different one.
+            assert res == {"status": "done", "split_page_ranges": [(0, 9, 3000)]}
 
     @patch(
         "src.worker.services.model_attempt_orchestrator.ModelAttemptOrchestrator.run_model_chain",

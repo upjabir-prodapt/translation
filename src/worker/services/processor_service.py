@@ -150,6 +150,16 @@ class JobProcessor:
         async for event in async_translate(translation_config):
             result = await self._handle_translation_event(event, config)
             if result is not None:
+                # Carry the real split forward so per-chunk cost attribution
+                # matches the parts that actually ran.
+                result["split_page_ranges"] = list(
+                    getattr(
+                        translation_config.shared_context_cross_split_part,
+                        "split_page_ranges",
+                        [],
+                    )
+                    or []
+                )
                 return result
         raise RuntimeError("Translation completed without finish event")
 

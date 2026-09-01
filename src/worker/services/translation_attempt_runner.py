@@ -25,7 +25,7 @@ from src.worker.doctranslator.format.pdf.translation_config import TranslationCo
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.quality_judge_service import GoogleADKJudgeAgent
 from src.worker.services.quality_judge_service import QualityJudgeResult
-from src.worker.services.quality_judge_service import extract_attempt_text
+from src.worker.services.quality_judge_service import extract_attempt_segments
 from src.worker.services.token_verification_service import (
     log_token_verification_warning,
 )
@@ -133,9 +133,13 @@ class TranslationAttemptRunner:
 
         quality_result: QualityJudgeResult | None = None
         token_verification_dict: dict[str, Any] | None = None
-        source_text, translated_text = extract_attempt_text(
-            Path(str(translation_config.working_dir))
-        )
+        # Aligned pairs, not two blobs: the judge chunks on pairs so source
+        # and target cannot drift apart, and a paragraph translated to
+        # nothing is scored as an omission instead of silently shifting
+        # every later paragraph against the wrong source.
+        segments = extract_attempt_segments(Path(str(translation_config.working_dir)))
+        source_text = "\n".join(source for source, _ in segments)
+        translated_text = "\n".join(target for _, target in segments if target)
         if judge is not None:
             with tracer_pipeline.start_as_current_span(
                 "pipeline.quality_judge",
@@ -144,8 +148,8 @@ class TranslationAttemptRunner:
             ):
                 quality_result = await self._evaluate_attempt_quality(
                     judge=judge,
-                    source_text=source_text,
-                    translated_text=translated_text,
+                    segments=segments,
+                    job_id=str(attempt_config.get("job_id", "")),
                 )
         # implementation_plan.md D.6.1 (EC-01/02/14): best-effort,
         # non-blocking check that protected tokens (URLs, emails,
@@ -188,23 +192,28 @@ class TranslationAttemptRunner:
         self,
         *,
         judge: GoogleADKJudgeAgent,
-        source_text: str,
-        translated_text: str,
+        segments: list[tuple[str, str]],
+        job_id: str,
     ) -> QualityJudgeResult:
-        if not source_text.strip() or not translated_text.strip():
+        if not segments:
+            # Previously this returned a hard-coded final_score=0.0. On every
+            # split PDF the parent working_dir held no tracking file, so this
+            # branch fired on *every* attempt, scored 0.0 (< QUALITY_THRESHOLD),
+            # and the loop dutifully re-translated the whole document on every
+            # remaining model. "I could not measure this" is not "this is bad".
             return QualityJudgeResult(
                 alignment_score=0.0,
                 omission_score=0.0,
                 hallucination_score=0.0,
                 final_score=0.0,
                 pass_fail=False,
-                reasons=["Missing source/translated text for quality evaluation."],
+                reasons=["No translated segments were available to judge."],
                 model=judge.model,
                 is_fallback=True,
+                inconclusive=True,
+                coverage_ratio=0.0,
             )
-        return await judge.evaluate_async(
-            source_text=source_text, translated_text=translated_text
-        )
+        return await judge.evaluate_segments_async(segments, job_id=job_id)
 
     def collect_token_usage(
         self,

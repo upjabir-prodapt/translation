@@ -1,11 +1,38 @@
 import logging
 from dataclasses import dataclass
 from dataclasses import field
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 MAX_CHUNK_TOKEN_COUNT = 8000
 _TOKENS_PER_PAGE_ESTIMATE = 300
+
+#: Fixed-size fallback chunk length, used when the document has no usable
+#: outline. 20 pages x 300 tokens/page = 6000, comfortably under
+#: MAX_CHUNK_TOKEN_COUNT.
+_FALLBACK_CHUNK_PAGES = 20
+
+
+class BoundaryOrigin(Enum):
+    """Where a section boundary came from, which decides its overlap.
+
+    This distinction is the whole reason overlap is no longer a single
+    global constant. An OUTLINE boundary is a *declared* section start: the
+    author (or the exporting tool) asserted that a new section begins on
+    that page, so no paragraph straddles it and copying preceding pages into
+    the part buys nothing. A FALLBACK boundary is an arbitrary cut every N
+    pages that lands mid-sentence as often as not, and there overlap is
+    doing real work.
+
+    Getting this wrong is expensive in both directions: a PowerPoint export
+    with one bookmark per slide produced 40 parts on a 40-page deck, each
+    with 2 overlap pages, so 117 pages were parsed and translated to
+    produce 40 -- and every overlap page was then discarded by the merger.
+    """
+
+    OUTLINE = "outline"
+    FALLBACK = "fallback"
 
 
 @dataclass
@@ -81,9 +108,25 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
     pages are later stripped from the merged output by ResultMerger.
     """
 
-    def __init__(self, min_pages_to_split: int = 10, overlap_pages: int = 2):
+    def __init__(
+        self,
+        min_pages_to_split: int = 10,
+        overlap_pages: int = 2,
+        min_pages_per_part: int = 10,
+        max_pages_per_part: int = 25,
+    ):
         self.min_pages_to_split = min_pages_to_split
         self.overlap_pages = overlap_pages
+        # Outline sections shorter than min_pages_per_part are coalesced with
+        # their neighbours, stopping before max_pages_per_part. Nothing
+        # previously placed a floor on section size or a ceiling on section
+        # count, so a deck bookmarked per slide became one pipeline per
+        # slide. Roughly 90% of a part's wall time is fixed overhead
+        # (typesetting, font subsetting, PDF write, and the final N-way
+        # merge) rather than translation, so part *count* is the cost driver.
+        # 25 pages x 300 tokens/page = 7500, just under MAX_CHUNK_TOKEN_COUNT.
+        self.min_pages_per_part = min_pages_per_part
+        self.max_pages_per_part = max_pages_per_part
 
     # ------------------------------------------------------------------
     # Public interface
@@ -110,32 +153,64 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
                 )
             ]
 
-        section_starts, titles = self._get_sections_from_toc(doc, total_pages)
+        section_starts, titles, origin = self._get_sections_from_toc(doc, total_pages)
         logger.info(
             f"Document has {total_pages} pages; "
-            f"detected {len(section_starts)} section(s)."
+            f"detected {len(section_starts)} section(s) via {origin.value} boundaries."
         )
 
-        return self._build_split_points(section_starts, titles, total_pages)
+        if origin is BoundaryOrigin.OUTLINE:
+            section_starts, titles = self._coalesce_small_sections(
+                section_starts, titles, total_pages
+            )
+
+        split_points = self._build_split_points(
+            section_starts, titles, total_pages, origin
+        )
+        # Previously referenced only from tests. Run it on the production
+        # path too, but log rather than raise: an oversized chunk is a cost
+        # and quality signal, not a reason to fail a translation the user is
+        # waiting on.
+        try:
+            validate_chunk_metadata(split_points)
+        except ValueError as exc:
+            logger.warning(f"[split_manager] {exc}")
+        return split_points
 
     # ------------------------------------------------------------------
     # Section detection
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _fixed_chunk_fallback(total_pages: int) -> tuple[list[int], list[str | None]]:
+    def _fixed_chunk_fallback(
+        total_pages: int, reason: str = ""
+    ) -> tuple[list[int], list[str | None], BoundaryOrigin]:
         """Return fixed 20-page chunk boundaries as fallback split points."""
-        logger.debug("No usable TOC found; falling back to fixed 20-page chunks.")
-        fallback_starts = list(range(0, total_pages, 20))
+        logger.info(
+            f"[split_manager] TOC-based splitting unavailable ({reason}); "
+            f"falling back to fixed {_FALLBACK_CHUNK_PAGES}-page chunks "
+            f"for {total_pages} pages."
+        )
+        fallback_starts = list(range(0, total_pages, _FALLBACK_CHUNK_PAGES))
         fallback_titles: list[str | None] = [None] * len(fallback_starts)
-        return fallback_starts, fallback_titles
+        return fallback_starts, fallback_titles, BoundaryOrigin.FALLBACK
 
     @staticmethod
     def _extract_toc_entries(toc: list) -> list:
         """Return the best set of TOC entries (prefer level-1, fall back to level-2)."""
+        lv1 = [e for e in toc if e[0] == 1]
+        lv2 = [e for e in toc if e[0] == 2]
+        logger.info(
+            f"[split_manager] TOC inspection: total_raw_entries={len(toc)}, "
+            f"level_1_entries={len(lv1)}, level_2_entries={len(lv2)}"
+        )
         for target_level in (1, 2):
             entries = [e for e in toc if e[0] == target_level]
             if entries:
+                logger.info(
+                    f"[split_manager] Using level-{target_level} TOC entries "
+                    f"({len(entries)} items)."
+                )
                 return entries
         return []
 
@@ -167,28 +242,102 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
 
     def _get_sections_from_toc(
         self, doc, total_pages: int
-    ) -> tuple[list[int], list[str | None]]:
-        """Return (section_start_pages, titles) derived from PDF TOC.
+    ) -> tuple[list[int], list[str | None], BoundaryOrigin]:
+        """Return (section_start_pages, titles, origin) derived from PDF TOC.
 
         Falls back to fixed-size chunks when no usable TOC is present.
-        Page numbers are 0-based.
+        Page numbers are 0-based. The origin is returned rather than inferred
+        later because it decides the overlap for every boundary, and once
+        only page numbers remain there is no way to tell an author-declared
+        section start from an arbitrary every-20-pages cut.
         """
         toc = doc.get_toc()
         if not toc:
-            return self._fixed_chunk_fallback(total_pages)
+            return self._fixed_chunk_fallback(
+                total_pages, reason="no outline/TOC found in document"
+            )
 
         entries = self._extract_toc_entries(toc)
         if not entries:
-            return self._fixed_chunk_fallback(total_pages)
+            return self._fixed_chunk_fallback(
+                total_pages,
+                reason=f"no level-1 or level-2 entries among {len(toc)} raw TOC items",
+            )
 
         section_starts, titles = self._deduplicate_and_sort_sections(entries)
         if len(section_starts) > 1:
-            logger.debug(
-                f"Using TOC-based sections: {list(zip(section_starts, titles, strict=False))}"
+            logger.info(
+                f"[split_manager] Derived {len(section_starts)} TOC sections: "
+                f"section_starts={section_starts[:10]}{'...' if len(section_starts) > 10 else ''} "
+                f"sample_titles={titles[:5]}"
             )
+            return section_starts, titles, BoundaryOrigin.OUTLINE
+
+        return self._fixed_chunk_fallback(
+            total_pages,
+            reason=f"only 1 deduplicated section resolved from TOC ({section_starts})",
+        )
+
+    # ------------------------------------------------------------------
+    # Section coalescing
+    # ------------------------------------------------------------------
+
+    def _coalesce_small_sections(
+        self,
+        section_starts: list[int],
+        titles: list[str | None],
+        total_pages: int,
+    ) -> tuple[list[int], list[str | None]]:
+        """Merge adjacent outline sections up to `min_pages_per_part` pages.
+
+        Safe for exactly the reason overlap 0 is safe on these boundaries:
+        outline sections are self-contained, so concatenating consecutive
+        ones yields a contiguous, coherent page range -- it is simply a
+        bigger section. The first section's title is preserved because that
+        is the one used for the part's section header.
+
+        Merging stops before a part would exceed `max_pages_per_part`, so a
+        document whose sections are already sensibly sized is untouched.
+        Fallback chunks never reach this method: they are already exactly
+        `_FALLBACK_CHUNK_PAGES` long by construction.
+        """
+        if len(section_starts) <= 1:
             return section_starts, titles
 
-        return self._fixed_chunk_fallback(total_pages)
+        merged_starts: list[int] = []
+        merged_titles: list[str | None] = []
+        i = 0
+        n = len(section_starts)
+        while i < n:
+            start = section_starts[i]
+            j = i
+            while j + 1 < n:
+                current_pages = (
+                    self._section_end_page(j, section_starts, total_pages) - start + 1
+                )
+                if current_pages >= self.min_pages_per_part:
+                    break
+                # Pages this part would span if the next section joined it.
+                prospective_pages = (
+                    self._section_end_page(j + 1, section_starts, total_pages)
+                    - start
+                    + 1
+                )
+                if prospective_pages > self.max_pages_per_part:
+                    break
+                j += 1
+            merged_starts.append(start)
+            merged_titles.append(titles[i])
+            i = j + 1
+
+        if len(merged_starts) != len(section_starts):
+            logger.info(
+                f"[split_manager] Coalesced {len(section_starts)} outline section(s) "
+                f"into {len(merged_starts)} part(s) "
+                f"(min_pages_per_part={self.min_pages_per_part}, "
+                f"max_pages_per_part={self.max_pages_per_part})."
+            )
+        return merged_starts, merged_titles
 
     # ------------------------------------------------------------------
     # SplitPoint construction
@@ -203,10 +352,23 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
         return total_pages - 1
 
     def _section_actual_start_and_overlap(
-        self, i: int, section_start: int
+        self, i: int, section_start: int, origin: BoundaryOrigin
     ) -> tuple[int, int]:
-        """Return (actual_start, overlap) for a section, applying overlap only after the first."""
-        if i == 0:
+        """Return (actual_start, overlap) for a section.
+
+        Overlap exists so a part's first *kept* page can see its true
+        predecessor while cross-page paragraphs are merged. Those pages are
+        fully parsed and translated and then thrown away by
+        `ResultMerger._merge_pdfs(from_page=overlap)` -- `_build_part_config`
+        includes them in `should_translate_pages` -- so they are pure cost
+        wherever they are not buying that context.
+
+        On an OUTLINE boundary they buy nothing: the author declared a
+        section starts there, so no paragraph crosses it. On a FALLBACK
+        boundary -- an arbitrary cut every 20 pages -- they buy exactly what
+        they were introduced for.
+        """
+        if i == 0 or origin is BoundaryOrigin.OUTLINE:
             return section_start, 0
         actual_start = max(0, section_start - self.overlap_pages)
         return actual_start, section_start - actual_start
@@ -216,13 +378,14 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
         section_starts: list[int],
         titles: list[str | None],
         total_pages: int,
+        origin: BoundaryOrigin = BoundaryOrigin.FALLBACK,
     ) -> list[SplitPoint]:
         split_points: list[SplitPoint] = []
 
         for i, section_start in enumerate(section_starts):
             section_end = self._section_end_page(i, section_starts, total_pages)
             actual_start, overlap = self._section_actual_start_and_overlap(
-                i, section_start
+                i, section_start, origin
             )
             page_count = section_end - actual_start + 1
             split_points.append(
@@ -235,11 +398,19 @@ class StructureAwareSplitStrategy(BaseSplitStrategy):
                     token_count=page_count * _TOKENS_PER_PAGE_ESTIMATE,
                 )
             )
-            logger.debug(
-                f"Chunk {i}: pages {actual_start}–{section_end} "
-                f"(overlap={overlap}, title={titles[i]!r})"
+            logger.info(
+                f"[split_manager] Chunk {i}: pages {actual_start}..{section_end} "
+                f"(actual_page_count={page_count}, overlap={overlap}, "
+                f"origin={origin.value}, title={titles[i]!r}, "
+                f"token_estimate={split_points[-1].token_count})"
             )
 
+        pages_parsed = sum(sp.end_page - sp.start_page + 1 for sp in split_points)
+        logger.info(
+            f"[split_manager] Split summary: parts={len(split_points)} "
+            f"pages_parsed={pages_parsed}/{total_pages} "
+            f"(x{pages_parsed / total_pages:.2f}) origin={origin.value}"
+        )
         return split_points
 
 

@@ -54,6 +54,12 @@ class SharedContextCrossSplitPart:
         self.valid_char_count_total: int = 0
         self.total_valid_text_token_count: int = 0
         self._cached_il_docs: dict[int, Any] = {}
+        # (start_page, end_page, token_count) for the parts this document was
+        # actually split into. Recorded so downstream cost attribution uses
+        # the real split instead of re-deriving one with a default-constructed
+        # strategy -- a 40-part run was previously billed against 52
+        # re-derived chunks.
+        self.split_page_ranges: list[tuple[int, int, int]] = []
 
     def get_cached_il_doc(self, part_index: int = 0) -> Any | None:
         """Retrieve cached parsed IL document for a part, if previously stored."""
@@ -69,6 +75,24 @@ class SharedContextCrossSplitPart:
         """Check whether any parsed IL documents have been cached."""
         with self._lock:
             return bool(self._cached_il_docs)
+
+    def clear_cached_il_docs(self) -> None:
+        """Drop every cached IL tree.
+
+        The cache exists purely to let model attempts 2-3 skip re-parsing the
+        PDF; it holds a deepcopy of every part's full IL tree for the whole
+        job. Once an attempt has been accepted no further attempt will run,
+        so this is nothing but resident memory -- and on a Cloud Run instance
+        already peaking near 7 GB, holding it until job teardown is what
+        turns a large document into an OOM SIGKILL.
+        """
+        with self._lock:
+            count = len(self._cached_il_docs)
+            self._cached_il_docs.clear()
+        if count:
+            logger.info(
+                f"Released {count} cached IL document(s) after attempt accepted"
+            )
 
     def initialize_glossaries(self, initial_glossaries: list[Glossary] | None):
         with self._lock:
