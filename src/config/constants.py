@@ -389,6 +389,18 @@ class Settings(BaseSettings):
     HUB_IAP_AUDIENCE: str = ""
     # Entra security group required for Translation entitlement (checked against IAP JWT `groups` claim).
     TRANSLATION_REQUIRED_GROUP: str = ""
+    # Hard ceiling on a sliding session's total lifetime, measured from the
+    # `auth_time` claim stamped at the original IAP login and preserved
+    # unchanged across every renewal. POST /auth/refresh refuses to mint past
+    # this point, so 8 hours after signing in the user must authenticate with
+    # IAP again regardless of how continuously active they have been.
+    SESSION_ABSOLUTE_MAX_MINUTES: int = 480
+    # When False (rollout default), a token carrying NO `scopes` claim is
+    # accepted for backward compatibility with sessions minted before scopes
+    # existed; a token that *has* `scopes` must still include this service's
+    # own scope. Flip to True once every legacy token has expired -- that is
+    # the step that actually closes the cross-service bypass.
+    REQUIRE_SCOPE_CLAIM: bool = False
 
     # -----------------------------
     # File Limits
