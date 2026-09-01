@@ -19,6 +19,14 @@ from src.config.constants import settings
 
 logger = logging.getLogger(__name__)
 
+# Value of the `typ` claim that separates the two token kinds. Without it a
+# long-lived refresh token would also pass as a short-lived access token,
+# silently extending the access-token lifetime to the refresh window.
+ACCESS_TOKEN_TYPE = "access"  # noqa: S105
+REFRESH_TOKEN_TYPE = "refresh"  # noqa: S105
+
+REQUIRED_CLAIMS = ("sub", "business_unit", "organization")
+
 # x-app-auth token scheme (shown as "XAppAuth" in Swagger Authorize)
 app_auth_scheme = APIKeyHeader(
     name="x-app-auth",
@@ -34,6 +42,12 @@ app_auth_scheme = APIKeyHeader(
 # `x-app-auth` header above is kept as a fallback during the migration
 # window so any older/cached clients continue to work; see verify_token().
 SESSION_COOKIE_NAME = "colt_session"  # noqa: S105
+
+# Refresh token cookie. Scoped to the refresh endpoint only: the browser then
+# never attaches this long-lived credential to ordinary API traffic, so a
+# logging or proxy mishap on a translate call cannot leak a whole session.
+REFRESH_COOKIE_NAME = "colt_refresh"  # noqa: S105
+REFRESH_COOKIE_PATH = "/api/v1/auth"
 
 
 class AuthenticatedUser(BaseModel):
@@ -56,26 +70,59 @@ def _jwt_secret() -> str:
     )
 
 
-def create_access_token(
-    claims: dict[str, Any], expires_delta: timedelta | None = None
-) -> str:
-    """Create an HS256 signed JWT access token."""
+def _encode(claims: dict[str, Any], token_type: str, expires_delta: timedelta) -> str:
+    """Sign a JWT of `token_type` carrying `claims`."""
     now = datetime.now(UTC)
-    expires = now + (
-        expires_delta
-        if expires_delta is not None
-        else timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    expires = now + expires_delta
     payload = {
         **claims,
+        "typ": token_type,
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
     }
     return jwt.encode(payload, _jwt_secret(), algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_and_verify_token(token: str) -> dict[str, Any]:
-    """Decode and verify JWT token, including required claims."""
+def create_access_token(
+    claims: dict[str, Any], expires_delta: timedelta | None = None
+) -> str:
+    """Create an HS256 signed JWT access token."""
+    return _encode(
+        claims,
+        ACCESS_TOKEN_TYPE,
+        expires_delta
+        if expires_delta is not None
+        else timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def create_refresh_token(
+    claims: dict[str, Any], expires_delta: timedelta | None = None
+) -> str:
+    """Create an HS256 signed JWT refresh token.
+
+    Carries the same identity/cost-attribution claims as the access token so
+    /auth/refresh can re-mint one without a second trip through IAP.
+    """
+    return _encode(
+        claims,
+        REFRESH_TOKEN_TYPE,
+        expires_delta
+        if expires_delta is not None
+        else timedelta(minutes=settings.JWT_REFRESH_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def _unauthorized(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _decode(token: str) -> dict[str, Any]:
+    """Verify signature/expiry and the claims every token kind must carry."""
     try:
         payload = jwt.decode(
             token,
@@ -83,21 +130,33 @@ def decode_and_verify_token(token: str) -> dict[str, Any]:
             algorithms=[settings.JWT_ALGORITHM],
         )
     except InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+        raise _unauthorized("Invalid or expired token") from exc
 
-    required_claims = ("sub", "business_unit", "organization")
-    missing = [claim for claim in required_claims if not payload.get(claim)]
+    missing = [claim for claim in REQUIRED_CLAIMS if not payload.get(claim)]
     if missing:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Missing required token claims: {', '.join(missing)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _unauthorized(f"Missing required token claims: {', '.join(missing)}")
 
+    return payload
+
+
+def decode_and_verify_token(token: str) -> dict[str, Any]:
+    """Decode and verify an access token, including required claims."""
+    payload = _decode(token)
+    # Tokens minted before `typ` existed have no such claim and are still
+    # valid access tokens; only an explicit refresh token is turned away, so
+    # the long-lived credential can never stand in for the short-lived one.
+    if payload.get("typ") == REFRESH_TOKEN_TYPE:
+        raise _unauthorized("Refresh token cannot be used as an access token")
+    return payload
+
+
+def decode_and_verify_refresh_token(token: str) -> dict[str, Any]:
+    """Decode and verify a refresh token, including required claims."""
+    payload = _decode(token)
+    # Strict the other way round: an access token (or a legacy token with no
+    # `typ`) must not buy a fresh session.
+    if payload.get("typ") != REFRESH_TOKEN_TYPE:
+        raise _unauthorized("Not a refresh token")
     return payload
 
 

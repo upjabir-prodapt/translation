@@ -3,6 +3,8 @@ from datetime import timedelta
 import pytest
 from fastapi import HTTPException
 from src.api.core.security import create_access_token
+from src.api.core.security import create_refresh_token
+from src.api.core.security import decode_and_verify_refresh_token
 from src.api.core.security import decode_and_verify_token
 
 
@@ -34,3 +36,34 @@ class TestSecurity:
     def test_create_token_custom_expiry(self):
         token = create_access_token({"sub": "u"}, expires_delta=timedelta(seconds=1))
         assert token is not None
+
+
+class TestRefreshTokens:
+    CLAIMS = {  # noqa: RUF012
+        "sub": "user@test.com",
+        "business_unit": "bu1",
+        "organization": "org1",
+    }
+
+    def test_create_and_verify_refresh_token(self):
+        payload = decode_and_verify_refresh_token(create_refresh_token(self.CLAIMS))
+        assert payload["sub"] == "user@test.com"
+        assert payload["typ"] == "refresh"
+
+    def test_refresh_token_rejected_as_access_token(self):
+        with pytest.raises(HTTPException) as exc:
+            decode_and_verify_token(create_refresh_token(self.CLAIMS))
+        assert exc.value.status_code == 401
+        assert "cannot be used as an access token" in exc.value.detail
+
+    def test_access_token_rejected_as_refresh_token(self):
+        with pytest.raises(HTTPException) as exc:
+            decode_and_verify_refresh_token(create_access_token(self.CLAIMS))
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "Not a refresh token"
+
+    def test_expired_refresh_token_rejected(self):
+        token = create_refresh_token(self.CLAIMS, expires_delta=timedelta(seconds=-1))
+        with pytest.raises(HTTPException) as exc:
+            decode_and_verify_refresh_token(token)
+        assert exc.value.status_code == 401

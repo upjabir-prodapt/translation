@@ -342,6 +342,10 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
+    # Absolute cap on a refresh-token session. The UI silently renews its
+    # access token against /auth/refresh until this window closes, at which
+    # point the user is sent back through IAP for a fresh identity assertion.
+    JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     IAP_AUDIENCE: str = ""
     HUB_IAP_AUDIENCE: str = ""
     # Entra security group required for Translation entitlement (checked against IAP JWT `groups` claim).

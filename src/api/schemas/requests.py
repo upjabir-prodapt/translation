@@ -227,6 +227,24 @@ class AuthTokenRequest(BaseModel):
     organization: str = Field(..., min_length=1, description="Organization name")
 
 
+class RefreshTokenRequest(BaseModel):
+    """Request payload for POST /auth/refresh.
+
+    `refresh_token` is optional: browser clients leave it out and let the
+    httpOnly `colt_refresh` cookie carry the credential, while non-browser
+    callers (mobile, scripts, Swagger) pass it explicitly in the body.
+    """
+
+    refresh_token: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Refresh token from POST /auth/token. Omit it to use the "
+            "httpOnly colt_refresh cookie instead."
+        ),
+    )
+
+
 class TranslateRequest(BaseModel):
     """Request model for document translation."""
 

@@ -59,6 +59,16 @@ class AuthTokenResponse(BaseModel):
     token_type: str = Field("bearer", description="Token type")
     expires_in: int = Field(..., description="Access token lifetime in seconds")
     email: str = Field(..., description="Verified user email from IAP identity")
+    refresh_token: str = Field(
+        ..., description="JWT refresh token for POST /auth/refresh"
+    )
+    refresh_expires_in: int = Field(
+        ...,
+        description=(
+            "Seconds left on the refresh token. Counts down across refreshes: "
+            "it is an absolute session cap, not a sliding window."
+        ),
+    )
 
 
 class WhoamiResponse(BaseModel):
