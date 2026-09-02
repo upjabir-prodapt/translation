@@ -21,5 +21,7 @@ class ReviewsHandler:
     ) -> ReviewSubmitResponse:
         return await self.review_service.create_review(job_id, request, user.email)
 
-    async def get_reviews(self, job_id: str) -> ReviewListResponse:
-        return await self.review_service.get_reviews(job_id)
+    async def get_reviews(
+        self, job_id: str, user: AuthenticatedUser
+    ) -> ReviewListResponse:
+        return await self.review_service.get_reviews(job_id, user.email)

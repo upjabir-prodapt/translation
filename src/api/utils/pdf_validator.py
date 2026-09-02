@@ -18,7 +18,10 @@ class PDFValidator:
         if not content:
             raise ValidationError("Document is empty", "content")
 
-        if len(content) >= settings.MAX_FILE_SIZE:
+        # UAT EC-05 (D-05): inclusive limit -- a file of exactly
+        # MAX_FILE_SIZE bytes must be accepted; only the first byte past
+        # the limit fails. Matches DocumentValidator._size_check.
+        if len(content) > settings.MAX_FILE_SIZE:
             max_mb = settings.MAX_FILE_SIZE / (1024 * 1024)
             raise ValidationError(f"File size exceeds {max_mb:.0f}MB limit", "size")
 
@@ -107,9 +110,12 @@ class PDFValidator:
     async def validate_pdf_file(file: UploadFile) -> tuple[bytes, dict]:
         """Validate uploaded PDF file and return content with metadata."""
         # Read file content (limit from settings)
-        content = await file.read(settings.MAX_FILE_SIZE)
+        # Read one byte past the limit so an at-limit file can be told
+        # apart from an oversized one (UAT EC-05, D-05) -- reading exactly
+        # MAX_FILE_SIZE bytes made every at-limit upload look oversized.
+        content = await file.read(settings.MAX_FILE_SIZE + 1)
 
-        if len(content) == settings.MAX_FILE_SIZE:
+        if len(content) > settings.MAX_FILE_SIZE:
             max_mb = settings.MAX_FILE_SIZE / (1024 * 1024)
             raise ValidationError(f"File size exceeds {max_mb:.0f}MB limit", "size")
 

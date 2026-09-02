@@ -626,6 +626,12 @@ class PipelineOrchestrator:
                     "enable_dlp": enable_dlp,
                     "enable_judge": enable_judge,
                     "auto_extract_glossary": True,
+                    # UAT EC-01/EC-08: the domain glossary used to be
+                    # write-only on the DOCX path -- terms were merged into
+                    # it after a job and never read back for the next one,
+                    # so an approved rendering (or a do-not-translate brand
+                    # name) had no effect on DOCX or TXT output.
+                    "glossaries": glossaries,
                     # Plain-text jobs are unwrapped back to .txt after
                     # translation (see docx_path_to_txt_bytes below); a DOCX
                     # cover page would leak formatted disclaimer paragraphs

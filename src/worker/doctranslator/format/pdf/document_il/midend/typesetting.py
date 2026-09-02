@@ -945,6 +945,7 @@ class Typesetting:
         initial_scale: float = 1.0,
         use_english_line_break: bool = True,
         apply_layout: bool = False,
+        layout_error_logged: bool = False,
     ) -> tuple[float, list[TypesettingUnit] | None]:
         """查找最优缩放因子并可选择性地执行布局
 
@@ -955,6 +956,9 @@ class Typesetting:
             initial_scale: 初始缩放因子
             use_english_line_break: 是否使用英文换行规则
             apply_layout: 是否应用布局到 paragraph（True 时执行实际排版）
+            layout_error_logged: whether a layout error has already been
+                reported for this paragraph; carried across the
+                use_english_line_break retry so one paragraph reports once
 
         Returns:
             tuple[float, list[TypesettingUnit] | None]: (最终缩放因子，排版后的单元列表或 None)
@@ -999,9 +1003,17 @@ class Typesetting:
                                 page.pdf_form.append(form)
                         final_typeset_units = typeset_units
                     return scale, final_typeset_units
-            except Exception:
+            except Exception as exc:
                 # 如果布局检查出错，继续尝试下一个缩放因子
-                pass
+                # Only report the first failure per paragraph: the loop retries
+                # ~20 scales and would otherwise emit the same trace 20 times.
+                if not layout_error_logged:
+                    layout_error_logged = True
+                    logger.warning(
+                        f"Typesetting layout attempt failed for paragraph "
+                        f"{paragraph.debug_id} at scale {scale:.2f}; trying a "
+                        f"smaller scale. Error: {type(exc).__name__}: {exc}",
+                    )
 
             # 添加与原 retypeset 一致的逻辑检查
             if not hasattr(paragraph, "debug_id") or not paragraph.debug_id:
@@ -1069,10 +1081,39 @@ class Typesetting:
                 initial_scale,
                 use_english_line_break=False,
                 apply_layout=apply_layout,
+                layout_error_logged=layout_error_logged,
             )
+
+        # Nothing fit, even at min_scale and with line-break rules relaxed.
+        # When apply_layout is set this is the moment the paragraph's text is
+        # lost: no composition was written, so the renderer will later find no
+        # characters and drop the paragraph. Report it here, where the box and
+        # the text that would not fit are both still known -- the renderer's
+        # own error arrives too late to explain why.
+        if apply_layout:
+            self._log_typesetting_give_up(paragraph, box)
 
         # 最后返回最小缩放因子
         return min_scale, final_typeset_units
+
+    @staticmethod
+    def _log_typesetting_give_up(
+        paragraph: il_version_1.PdfParagraph, box: Box
+    ) -> None:
+        """Report a paragraph whose text could not be laid out at any scale."""
+        text = paragraph.unicode or ""
+        preview = text if len(text) <= 120 else f"{text[:120]}..."
+        logger.error(
+            "Typesetting could not fit paragraph %s into its box at any scale "
+            "down to the minimum; the paragraph will render with no text. "
+            "box=%.1fx%.1fpt, text_length=%d, layout_label=%s, text=%r",
+            paragraph.debug_id,
+            box.x2 - box.x,
+            box.y2 - box.y,
+            len(text),
+            paragraph.layout_label,
+            preview,
+        )
 
     def _get_optimal_scale(
         self,

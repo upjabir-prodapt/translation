@@ -161,6 +161,12 @@ class TestValidateTxtBytes:
                 DocumentValidator.validate_txt_bytes(b"123456", "big.txt")
 
     def test_whitespace_only_txt_rejected(self):
-        """B.5.3: a .txt containing only whitespace has no translatable text."""
-        with pytest.raises(ValidationError, match="no translatable text"):
+        """B.5.3: a .txt containing only whitespace has no translatable text.
+
+        UAT EC-05 (D-06): the message must not borrow the DOCX "images
+        only" wording -- there is no image and no document when a user
+        submits a space or a tab in the text box.
+        """
+        with pytest.raises(ValidationError, match="no text to translate") as exc:
             DocumentValidator.validate_txt_bytes(b"   \n\t  \n", "blank.txt")
+        assert "images only" not in str(exc.value)

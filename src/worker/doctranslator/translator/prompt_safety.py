@@ -72,6 +72,23 @@ _LEAK_MARKERS: tuple[str, ...] = (
 )
 
 
+def find_leak_marker(output_text: str) -> str | None:
+    """Return the first system-prompt marker present in `output_text`.
+
+    UAT EC-01 (D-10): the guard below fired twice on ordinary content and
+    the log said only that "a marker" matched, so which marker -- and
+    therefore whether it was a real leak or a phrase collision -- could not
+    be established after the fact, and the event was not reproducible on
+    demand. Callers log the marker name (never the document text, which may
+    contain the very PII the pipeline exists to protect) so the next
+    occurrence is diagnosable rather than a mystery.
+    """
+    if not output_text:
+        return None
+    lowered = output_text.lower()
+    return next((marker for marker in _LEAK_MARKERS if marker.lower() in lowered), None)
+
+
 def looks_like_prompt_leak(output_text: str) -> bool:
     """Return True if `output_text` echoes a system-prompt/config marker.
 
@@ -82,7 +99,4 @@ def looks_like_prompt_leak(output_text: str) -> bool:
     partially succeeded and the model echoed something it was told, rather
     than translating it as data.
     """
-    if not output_text:
-        return False
-    lowered = output_text.lower()
-    return any(marker.lower() in lowered for marker in _LEAK_MARKERS)
+    return find_leak_marker(output_text) is not None

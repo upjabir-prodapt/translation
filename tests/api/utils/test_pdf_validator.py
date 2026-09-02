@@ -224,11 +224,25 @@ class TestPDFValidator:
 
         with patch("src.api.utils.pdf_validator.settings") as mock_settings:
             mock_settings.MAX_FILE_SIZE = 10
-            # UploadFile.read(n) returns exactly n bytes when file is >= MAX_FILE_SIZE
+            # The validator reads MAX_FILE_SIZE + 1 bytes precisely so an
+            # oversized upload can be told apart from an at-limit one
+            # (UAT EC-05, D-05).
             file = MagicMock()
-            file.read = AsyncMock(return_value=b"x" * 10)
+            file.read = AsyncMock(return_value=b"x" * 11)
             file.filename = "big.pdf"
             with pytest.raises(ValidationError, match="File size exceeds"):
+                await PDFValidator.validate_pdf_file(file)
+
+    @pytest.mark.asyncio
+    async def test_validate_pdf_file_at_exact_limit_passes_the_size_check(self):
+        from unittest.mock import AsyncMock
+
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            mock_settings.MAX_FILE_SIZE = 10
+            file = MagicMock()
+            file.read = AsyncMock(return_value=b"x" * 10)
+            file.filename = "at_limit.pdf"
+            with pytest.raises(ValidationError, match="not a valid PDF"):
                 await PDFValidator.validate_pdf_file(file)
 
     @pytest.mark.asyncio
@@ -323,9 +337,21 @@ class TestPDFValidator:
         assert metadata["producer"] == "PDFium"
         assert metadata["page_count"] == 10
 
-    def test_validate_pdf_bytes_at_exact_size_limit(self):
-        """Content exactly at MAX_FILE_SIZE should raise (>= check)."""
+    def test_validate_pdf_bytes_at_exact_size_limit_passes_the_size_check(self):
+        """UAT EC-05 (D-05): the documented limit is inclusive.
+
+        Content of exactly MAX_FILE_SIZE bytes must clear the size check --
+        it used to be refused with a message claiming it *exceeded* a limit
+        it merely equalled. It still fails on the next check (this payload
+        is not a PDF), which is what proves the size gate let it through.
+        """
+        with patch("src.api.utils.pdf_validator.settings") as mock_settings:
+            mock_settings.MAX_FILE_SIZE = 5
+            with pytest.raises(ValidationError, match="not a valid PDF"):
+                PDFValidator.validate_pdf_bytes(b"12345", "test.pdf")
+
+    def test_validate_pdf_bytes_one_byte_over_limit_is_rejected(self):
         with patch("src.api.utils.pdf_validator.settings") as mock_settings:
             mock_settings.MAX_FILE_SIZE = 5
             with pytest.raises(ValidationError, match="File size exceeds"):
-                PDFValidator.validate_pdf_bytes(b"12345", "test.pdf")
+                PDFValidator.validate_pdf_bytes(b"123456", "test.pdf")

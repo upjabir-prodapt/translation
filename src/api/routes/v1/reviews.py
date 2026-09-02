@@ -40,7 +40,12 @@ async def create_review(
 )
 async def get_reviews(
     job_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user_context)],
     handler: Annotated[ReviewsHandler, Depends(get_reviews_handler)] = None,  # noqa: B008
 ):
-    """Fetch all reviews for a translation job."""
-    return await handler.get_reviews(job_id)
+    """Fetch all reviews for a translation job.
+
+    Only the job's owner may read its reviews; another user's job returns
+    404 rather than 403 so this endpoint cannot enumerate job IDs.
+    """
+    return await handler.get_reviews(job_id, user)

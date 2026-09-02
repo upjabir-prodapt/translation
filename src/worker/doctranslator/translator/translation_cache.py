@@ -30,7 +30,11 @@ logger = logging.getLogger(__name__)
 
 # Bump this when the prompt templates change materially so stale cached
 # translations produced by an old prompt are not served under the new one.
-PROMPT_VERSION = "v1"
+# v2: verbatim identifier/number rules added to every prompt, and a
+# binding-terminology block added to the DOCX batch prompt (UAT
+# EC-01/EC-08 fixes) -- entries cached under v1 were produced by a
+# materially different prompt.
+PROMPT_VERSION = "v2"
 
 _client: Any = None
 _cache_enabled: bool | None = None
@@ -108,6 +112,7 @@ def build_cache_key(
     lang_out: str,
     text: str,
     domain: str | None = None,
+    terminology: str | None = None,
 ) -> str:
     """Return a stable, namespaced cache key for one (engine, params, text)
     combination.
@@ -128,6 +133,12 @@ def build_cache_key(
     ]
     if domain and str(domain).strip():
         parts.append(str(domain).strip().lower())
+    if terminology and str(terminology).strip():
+        # The pinned glossary/do-not-translate list changes the prompt, so
+        # it has to change the key too -- otherwise a document translated
+        # under one approved glossary would be served from a cache entry
+        # produced under a different one (UAT EC-01/EC-08 fixes).
+        parts.append(str(terminology))
     parts.append(text)
     payload = "|".join(parts)
     digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()

@@ -11,6 +11,7 @@ Gemini/Claude translator classes, zero new LLM-calling code.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections import Counter
@@ -31,8 +32,9 @@ from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
 from src.worker.doctranslator.format.pdf.translation_config import get_token_multiplier
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
-from src.worker.doctranslator.translator.prompt_safety import looks_like_prompt_leak
+from src.worker.doctranslator.translator.prompt_safety import find_leak_marker
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
+from src.worker.doctranslator.translator.prompts import VERBATIM_RULES
 from src.worker.doctranslator.translator.translation_cache import build_cache_key
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
@@ -50,6 +52,9 @@ _TRIM_REPEAT_PATTERN = re.compile(r"[. 。…，]{20,}")
 # placeholder tokens, markup tags or punctuation. Mirrors the PDF pipeline's
 # is_pure_numeric_paragraph() / is_placeholder_only_paragraph() helpers.
 _NUMERIC_ONLY_PATTERN = re.compile(r"[-+]?[\d\s.,:%/()\[\]-]+")
+# Any letter in any script -- used to tell a short *word* (translatable)
+# from a short fragment of punctuation or digits (not).
+_HAS_LETTER_PATTERN = re.compile(r"[^\W\d_]", re.UNICODE)
 _PLACEHOLDER_ONLY_PATTERN = re.compile(
     r"(?:\s|[<{\[(]/?[a-zA-Z0-9_.-]*[>}\])]|__DLP_TOKEN_\d+__|%[sd]|[^\w\s])+"
 )
@@ -120,6 +125,20 @@ def _split_oversized_text(text: str, max_tokens: int, calc_token_count) -> list[
     return final_chunks or [text]
 
 
+# A leading clause/list number: "2.1 ", "12. ", "3.4.5) ". Set aside when
+# deciding whether two paragraphs are the same clause -- see
+# `DocxParagraphTranslator._extract_repeated_units`.
+_CLAUSE_LABEL_PATTERN = re.compile(r"^\s*\d+(?:\.\d+)*[.)]?\s+")
+
+
+def _split_clause_label(text: str) -> tuple[str, str]:
+    """Return `(leading_clause_label, remaining_text)`; label may be ""."""
+    match = _CLAUSE_LABEL_PATTERN.match(text or "")
+    if not match:
+        return "", text or ""
+    return match.group(0), (text or "")[match.end() :]
+
+
 def _unescape_json_string(value: str) -> str:
     try:
         return orjson.loads(f'"{value}"')
@@ -148,10 +167,88 @@ def _partial_parse_truncated_batch(raw_text: str) -> list[dict[str, Any]]:
     return items
 
 
+def build_binding_terminology_block(
+    glossary_terms: list[tuple[str, str]] | None,
+    lang_out: str,
+    *,
+    do_not_translate: list[str] | None = None,
+    max_terms: int = 120,
+) -> str:
+    """Render agreed source->target term pairs as a binding prompt section.
+
+    UAT EC-08 (D-03): every batch is an independent LLM call, so nothing
+    tied one batch's choice of wording to another's. Across a 20-page
+    agreement that produced two different renderings of the same defined
+    term ("le Fournisseur" and "le Prestataire") and two different
+    renderings of clauses that are byte-identical in the source -- which
+    the edge-case pack rates a major defect for legal content even when
+    each rendering is defensible on its own. Giving every batch the same
+    resolved term list is what makes the choice document-wide instead of
+    batch-local.
+
+    `do_not_translate` holds terms the business has declared untranslatable
+    (UAT EC-01, D-04) -- a brand, product or acronym written the same way in
+    every language. Only an *approved glossary* may declare these: an
+    identity pair coming back from automatic term extraction means the
+    extractor had no translation to offer, not that the word is protected,
+    and treating one as protected told the model to leave ordinary words
+    like "Owner" and "Pending" in English (UAT S-03).
+
+    Returns "" when there is nothing to pin, so the prompt is unchanged
+    for callers that supply no terms.
+    """
+    if not glossary_terms and not do_not_translate:
+        return ""
+    renderings: dict[str, str] = {}
+    for source_term, target_term in glossary_terms or []:
+        source_term = (source_term or "").strip()
+        target_term = (target_term or "").strip()
+        if not source_term or not target_term or source_term == target_term:
+            continue
+        # First rendering of a term wins, so the block itself is internally
+        # consistent even when a term arrives twice.
+        renderings.setdefault(source_term, target_term)
+        if len(renderings) >= max_terms:
+            break
+
+    keep_verbatim: dict[str, None] = {}
+    for term in do_not_translate or []:
+        term = (term or "").strip()
+        if term:
+            keep_verbatim.setdefault(term, None)
+
+    if not renderings and not keep_verbatim:
+        return ""
+
+    sections = ["## Binding Terminology\n"]
+    if renderings:
+        # Sorted so the same term set always produces the same prompt --
+        # an unordered block made otherwise identical submissions of the
+        # same document differ (UAT S-02).
+        lines = "\n".join(f"- {src} -> {renderings[src]}" for src in sorted(renderings))
+        sections.append(
+            f"These {lang_out} renderings are already fixed for this document. "
+            "Use them exactly, at every occurrence, inflecting only as the "
+            "grammar of the sentence requires. Never substitute a synonym.\n"
+            f"{lines}\n"
+        )
+    if keep_verbatim:
+        lines = "\n".join(f"- {src}" for src in sorted(keep_verbatim))
+        sections.append(
+            "Copy these exactly as written -- same spelling, spacing, "
+            "hyphenation and case. Never translate, transliterate, expand or "
+            "reformat them:\n"
+            f"{lines}\n"
+        )
+    return "\n".join(sections) + "\n"
+
+
 def _build_prompt(
     batch: list[TranslatableUnit],
     lang_out: str,
     domain: str | None = None,
+    glossary_terms: list[tuple[str, str]] | None = None,
+    do_not_translate: list[str] | None = None,
 ) -> str:
     json_input = [
         {"id": unit.unit_id, "input": unit.text, "layout_label": unit.label}
@@ -163,20 +260,29 @@ def _build_prompt(
     domain_desc = f" in {profile.display_name}" if profile else ""
     domain_block = get_domain_prompt_block(domain)
     domain_section = f"{domain_block}\n\n" if domain_block else ""
+    terminology_section = build_binding_terminology_block(
+        glossary_terms, lang_out, do_not_translate=do_not_translate
+    )
 
     return (
         f"You are a professional {lang_out} native translator who specializes{domain_desc} "
         f"and fluently translates text into {lang_out}.\n\n"
         f"{domain_section}"
+        f"{terminology_section}"
         "## Structure Rules\n"
         "1. Keep the same number of items as the input.\n"
         "2. Treat each input item as an independent, fixed unit.\n"
         "3. Translate ALL human-readable content into "
-        f"{lang_out}.\n\n"
+        f"{lang_out}.\n"
+        "4. Use one stable rendering per term across every item in this "
+        "batch; never vary the wording of a sentence you have already "
+        "translated in this same batch.\n\n"
         "## Do NOT Modify\n"
         "- Placeholders: `{v1}`, `{name}`, `%s`, `%d`, `[[...]]` -- keep exactly unchanged.\n"
         "- Data-masking tokens matching __DLP_TOKEN_NNNN__ -- copy verbatim.\n"
-        "- JSON keys or structure.\n\n"
+        "- JSON keys or structure.\n"
+        f"{VERBATIM_RULES}"
+        "\n"
         "## Output Format\n"
         "Return a JSON array of the same length. For each item, keep the same "
         '"id" and add "output" with the translated text only. No extra text, '
@@ -195,10 +301,21 @@ class DocxParagraphTranslator:
         translate_engine: BaseTranslator,
         lang_out: str,
         domain: str | None = None,
+        glossary_terms: list[tuple[str, str]] | None = None,
+        do_not_translate: list[str] | None = None,
     ):
         self.translate_engine = translate_engine
         self.lang_out = lang_out
         self.domain = domain or getattr(translate_engine, "domain", None)
+        # Source->target pairs pinned into every batch prompt so terminology
+        # is decided once for the whole document rather than per batch
+        # (UAT EC-08, D-03). See build_binding_terminology_block().
+        self.glossary_terms = glossary_terms or []
+        # Terms the business has declared untranslatable (UAT EC-01, D-04).
+        # Only an approved glossary may populate this -- never automatic
+        # term extraction, whose identity pairs are guesses (UAT S-03).
+        self.do_not_translate = do_not_translate or []
+        self._terminology_digest: str | None = None
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         except Exception:
@@ -291,7 +408,18 @@ class DocxParagraphTranslator:
         text = (unit.text or "").strip()
         if not text:
             return True
-        if len(text) < int(settings.LLM_TRANSLATION_MIN_TEXT_LENGTH):
+        if len(text) < int(
+            settings.LLM_TRANSLATION_MIN_TEXT_LENGTH
+        ) and not _HAS_LETTER_PATTERN.search(text):
+            # UAT S-03 (D-09): the length guard used to apply to *any* short
+            # string, so a one-word status cell ("Live", 4 chars) was passed
+            # through untranslated in an otherwise French table. The guard
+            # exists to stop a ~3,400-char prompt being spent on a fragment
+            # with nothing to translate, which is a property of short text
+            # carrying no letters -- not of short words. Short units are
+            # batched with their neighbours anyway, so translating them costs
+            # a handful of tokens, and the numeric/placeholder filters below
+            # still catch the cases the guard was really aimed at.
             return True
         if _NUMERIC_ONLY_PATTERN.fullmatch(text):
             return True
@@ -335,16 +463,22 @@ class DocxParagraphTranslator:
             )
             return True
 
-        if looks_like_prompt_leak(output_text):
+        leak_marker = find_leak_marker(output_text)
+        if leak_marker is not None:
             # implementation_plan.md D.4.2: defense-in-depth output guard --
             # a genuine translation of arbitrary document content should
             # never contain our own system-prompt markers verbatim. Treated
             # exactly like any other validation failure: falls back to
             # single-unit retry rather than ever being written to the
             # translated document.
+            #
+            # UAT EC-01 (D-10): the marker that matched is named so a
+            # false positive can be told apart from a real leak after the
+            # fact. The document text itself is never logged.
             logger.warning(
                 "DOCX translation validation failed (prompt_leak): output echoes "
-                "a system-prompt marker, possible injection attempt or leak"
+                "the system-prompt marker %r, possible injection attempt or leak",
+                leak_marker,
             )
             return True
 
@@ -459,7 +593,13 @@ class DocxParagraphTranslator:
         validation and decides what still needs a singleton retry. Raises on
         transport/parse failure so the caller can defer the whole group.
         """
-        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
+        prompt = _build_prompt(
+            batch,
+            self.lang_out,
+            domain=self.domain,
+            glossary_terms=self.glossary_terms,
+            do_not_translate=self.do_not_translate,
+        )
         raw = self.translate_engine.llm_translate(
             prompt,
             response_schema=BatchTranslationResponse,
@@ -514,7 +654,13 @@ class DocxParagraphTranslator:
 
     def _translate_batch(self, batch: list[TranslatableUnit]) -> dict[int, str]:
         """Translate one batch; returns {unit_id: translated_text}."""
-        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
+        prompt = _build_prompt(
+            batch,
+            self.lang_out,
+            domain=self.domain,
+            glossary_terms=self.glossary_terms,
+            do_not_translate=self.do_not_translate,
+        )
         results: dict[int, str] = {}
         try:
             llm_output = self.translate_engine.llm_translate(
@@ -609,6 +755,19 @@ class DocxParagraphTranslator:
 
         return results
 
+    def _terminology_fingerprint(self) -> str | None:
+        """Stable digest of the terminology pinned into this run's prompts."""
+        if self._terminology_digest is None:
+            block = build_binding_terminology_block(
+                self.glossary_terms,
+                self.lang_out,
+                do_not_translate=self.do_not_translate,
+            )
+            self._terminology_digest = (
+                hashlib.sha256(block.encode("utf-8")).hexdigest() if block else ""
+            )
+        return self._terminology_digest or None
+
     def _unit_cache_key(self, unit: TranslatableUnit) -> str | None:
         engine = self.translate_engine
         if not unit.text:
@@ -619,6 +778,8 @@ class DocxParagraphTranslator:
             lang_in=str(getattr(engine, "lang_in", "")),
             lang_out=self.lang_out,
             text=unit.text,
+            domain=self.domain,
+            terminology=self._terminology_fingerprint(),
         )
 
     def _split_cache_hits(
@@ -739,6 +900,78 @@ class DocxParagraphTranslator:
                 results.pop(chunk_id, "") for chunk_id in chunk_ids
             ).strip()
 
+    def _extract_repeated_units(
+        self, units: list[TranslatableUnit]
+    ) -> tuple[list[TranslatableUnit], dict[int, tuple[int, str, str]]]:
+        """Split `units` into the ones to translate and the ones to copy.
+
+        UAT EC-08 (D-03): batches are independent LLM calls, so a clause that
+        appears once per section of a long agreement was translated
+        independently each time and came back worded differently -- "le
+        Fournisseur doit fournir les Services" in one section, "le Fournisseur
+        fournira les Services" in the next. Both are correct French; shipping
+        both in one contract is not.
+
+        Two units repeat when their text matches once a leading clause
+        number is set aside ("2.1 Subject to clause 12, ..." and "3.1
+        Subject to clause 12, ..."), which is how numbered agreements
+        actually repeat text. Only the first of each group is translated;
+        the rest reuse that translation with their own clause number
+        restored. This is ordinary translation-memory behaviour, and it
+        also removes the duplicate LLM calls.
+
+        Returns `(units_to_translate, {duplicate_id: (source_id, own_label,
+        representative_label)})`.
+        """
+        representatives: dict[str, tuple[int, str]] = {}
+        to_translate: list[TranslatableUnit] = []
+        repeats: dict[int, tuple[int, str, str]] = {}
+
+        for unit in units:
+            label, body = _split_clause_label(unit.text)
+            key = " ".join(body.split())
+            if not key:
+                to_translate.append(unit)
+                continue
+            existing = representatives.get(key)
+            if existing is None:
+                representatives[key] = (unit.unit_id, label)
+                to_translate.append(unit)
+                continue
+            source_id, source_label = existing
+            repeats[unit.unit_id] = (source_id, label, source_label)
+
+        if repeats:
+            logger.info(
+                "DOCX repeated-clause memo: %d unit(s) reuse %d earlier "
+                "translation(s) verbatim",
+                len(repeats),
+                len({source_id for source_id, _, _ in repeats.values()}),
+            )
+        return to_translate, repeats
+
+    @staticmethod
+    def _apply_repeated_units(
+        results: dict[int, str], repeats: dict[int, tuple[int, str, str]]
+    ) -> None:
+        """Fill in every repeated unit from the translation of its twin."""
+        for unit_id, (source_id, own_label, source_label) in repeats.items():
+            translated = results.get(source_id)
+            if translated is None:
+                continue
+            if own_label == source_label:
+                results[unit_id] = translated
+                continue
+            # Swap the representative's clause number for this unit's own.
+            # If the model did not keep a leading number (it is instructed
+            # to, but this is a copy path, not a guarantee), prepend rather
+            # than corrupt the sentence.
+            translated_label, translated_body = _split_clause_label(translated)
+            if translated_label:
+                results[unit_id] = f"{own_label}{translated_body}"
+            else:
+                results[unit_id] = f"{own_label}{translated}"
+
     def translate_all(self, units: list[TranslatableUnit]) -> dict[int, str]:
         """Translate every unit; returns {unit_id: translated_text}.
 
@@ -773,6 +1006,12 @@ class DocxParagraphTranslator:
                 dict(self.language_skipped_by_language),
             )
 
+        # UAT EC-08 (D-03): translate each distinct clause once and reuse the
+        # result, so a clause that repeats through a long agreement cannot
+        # come back worded differently each time it lands in a different
+        # batch.
+        translatable, repeats = self._extract_repeated_units(translatable)
+
         # D.3.3: pre-split any oversized paragraph BEFORE batching/fallback --
         # both send the whole paragraph text as one LLM call and would hit
         # the same truncation failure mode a giant single-paragraph document
@@ -791,6 +1030,7 @@ class DocxParagraphTranslator:
             )
         if not batches:
             self._rejoin_oversized_results(results, chunk_map)
+            self._apply_repeated_units(results, repeats)
             self._log_completion(len(cache_hits), batch_count=0)
             return results
 
@@ -804,6 +1044,7 @@ class DocxParagraphTranslator:
                 results.update(batch_results)
 
         self._rejoin_oversized_results(results, chunk_map)
+        self._apply_repeated_units(results, repeats)
         self._log_completion(len(cache_hits), batch_count=len(batches))
         return results
 

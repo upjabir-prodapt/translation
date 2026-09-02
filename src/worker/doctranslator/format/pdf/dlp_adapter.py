@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 from src.worker.doctranslator.format.pdf.document_il import il_version_1
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpService
+from src.worker.services.dlp_tokens import build_token_map
+from src.worker.services.dlp_tokens import restore_tokens
+from src.worker.services.dlp_tokens import strip_leaked_tokens_from_text
 
 logger = logging.getLogger(__name__)
-
-_DLP_TOKEN_RE = re.compile(r"__DLP_TOKEN_\d{4,}__")
 
 
 @dataclass(slots=True)
@@ -82,14 +82,20 @@ def apply_dlp_to_document(
     )
 
 
-def _replace_in_str(text: str, token_map: dict[str, str]) -> tuple[str, int]:
-    """Replace all tokens in a string; return (result, count_replaced)."""
-    count = 0
-    for token, original in token_map.items():
-        if token in text:
-            count += text.count(token)
-            text = text.replace(token, original)
-    return text, count
+def _iter_text_fields(docs: il_version_1.Document):
+    """Yield every `(owner, attribute)` pair in the IL holding token-bearing text.
+
+    Both the paragraph-level `unicode` and the per-composition translated
+    `unicode` must be visited: the former is what DLP masked and what the
+    translator overwrites, the latter is what typesetting actually renders.
+    """
+    for paragraph in _iter_paragraphs(docs):
+        if isinstance(paragraph.unicode, str) and paragraph.unicode:
+            yield paragraph, "unicode"
+        for composition in paragraph.pdf_paragraph_composition:
+            ssuc = composition.pdf_same_style_unicode_characters
+            if ssuc is not None and isinstance(ssuc.unicode, str) and ssuc.unicode:
+                yield ssuc, "unicode"
 
 
 def unmask_document_with_tokens(
@@ -100,27 +106,16 @@ def unmask_document_with_tokens(
     """Restore original values by replacing DLP tokens in paragraph text."""
     if not token_rows:
         return 0
-    token_map = {
-        str(row.get("token")): str(row.get("original_value"))
-        for row in token_rows
-        if row.get("token") and row.get("original_value")
-    }
+    token_map = build_token_map(token_rows)
     if not token_map:
         return 0
 
     replacements = 0
-    for paragraph in _iter_paragraphs(docs):
-        if isinstance(paragraph.unicode, str) and paragraph.unicode:
-            restored, count = _replace_in_str(paragraph.unicode, token_map)
-            paragraph.unicode = restored
+    for owner, attr in _iter_text_fields(docs):
+        restored, count = restore_tokens(getattr(owner, attr), token_map)
+        if count:
+            setattr(owner, attr, restored)
             replacements += count
-
-        for composition in paragraph.pdf_paragraph_composition:
-            ssuc = composition.pdf_same_style_unicode_characters
-            if ssuc is not None and isinstance(ssuc.unicode, str) and ssuc.unicode:
-                restored, count = _replace_in_str(ssuc.unicode, token_map)
-                ssuc.unicode = restored
-                replacements += count
 
     return replacements
 
@@ -133,31 +128,18 @@ def strip_leaked_tokens(docs: il_version_1.Document) -> int:
     this as a pipeline fault even though the output is now token-free.
     """
     leaked = 0
-
-    def _strip(text: str) -> tuple[str, int]:
-        found = _DLP_TOKEN_RE.findall(text)
-        if not found:
-            return text, 0
-        for token in found:
+    for owner, attr in _iter_text_fields(docs):
+        cleaned, leaked_tokens = strip_leaked_tokens_from_text(getattr(owner, attr))
+        if not leaked_tokens:
+            continue
+        for token in leaked_tokens:
             logger.critical(
                 "DLP token leaked into translated output and was stripped: token=%r — "
                 "the original sensitive value could not be restored. "
                 "Check that dlp_token_rows is populated and the LLM did not alter the token.",
                 token,
             )
-        return _DLP_TOKEN_RE.sub("", text), len(found)
-
-    for paragraph in _iter_paragraphs(docs):
-        if isinstance(paragraph.unicode, str) and paragraph.unicode:
-            cleaned, count = _strip(paragraph.unicode)
-            paragraph.unicode = cleaned
-            leaked += count
-
-        for composition in paragraph.pdf_paragraph_composition:
-            ssuc = composition.pdf_same_style_unicode_characters
-            if ssuc is not None and isinstance(ssuc.unicode, str) and ssuc.unicode:
-                cleaned, count = _strip(ssuc.unicode)
-                ssuc.unicode = cleaned
-                leaked += count
+        setattr(owner, attr, cleaned)
+        leaked += len(leaked_tokens)
 
     return leaked

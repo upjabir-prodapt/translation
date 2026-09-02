@@ -241,6 +241,12 @@ class Settings(BaseSettings):
     LLM_MAX_CONTEXT_LENGTH: int
     LLM_MAX_OUTPUT_TOKENS: int
     LLM_TEMPERATURE: float
+    # Run automatic term extraction BEFORE translation and pin the result
+    # into every batch prompt, so one long document resolves each defined
+    # term once instead of per batch (UAT EC-08, D-03). Costs one extra
+    # round trip before translation starts; set false to restore the older
+    # concurrent extract-and-translate behaviour.
+    TERM_CONSISTENCY_PREPASS_ENABLED: bool = True
     LLM_TRANSLATION_MIN_TEXT_LENGTH: int
     LLM_DISABLE_SAME_TEXT_FALLBACK: bool
 
