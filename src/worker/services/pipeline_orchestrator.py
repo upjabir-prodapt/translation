@@ -27,6 +27,9 @@ from src.config.constants import settings
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
+from src.config.translation_routing import get_language_display_name
+from src.config.translation_routing import normalize_domain
+from src.config.translation_routing import normalize_language
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
 from src.repository.repository_exception import BigQueryError
@@ -39,7 +42,9 @@ from src.worker.doctranslator.format.txt.txt_docx_bridge import txt_bytes_to_doc
 from src.worker.services.assembly_service import AssemblyService
 from src.worker.services.docx_job_processor import DocxJobProcessor
 from src.worker.services.glossary_service import GlossaryService
+from src.worker.services.input_consistency_service import classify_document_domain
 from src.worker.services.intent_router_service import IntentRouterService
+from src.worker.services.language_detection_core import aggregate_languages
 from src.worker.services.language_detection_core import get_supported_languages
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
@@ -78,6 +83,32 @@ def _user_facing_error_message(exc: Exception) -> str:
     if isinstance(exc, ScannedPDFError):
         return _NO_TEXT_LAYER_MESSAGE
     return str(exc)
+
+
+def _declared_language(value: str | None) -> str | None:
+    """Return the source language the user actually declared, else None.
+
+    `None` means "auto-detect": either the field was omitted, or it held
+    the sentinel "auto". Both mean there is nothing to check the detected
+    language against.
+    """
+    cleaned = str(value or "").strip()
+    if not cleaned or cleaned.lower() == "auto":
+        return None
+    return cleaned
+
+
+def _language_for_user(code: str) -> str:
+    """Human-readable language name for an end-user error message.
+
+    `get_language_display_name` title-cases codes it has no name for
+    ("nl" -> "Nl"), which reads like a typo mid-sentence, so codes it
+    cannot name are described instead of displayed.
+    """
+    display = get_language_display_name(code)
+    if display.strip().lower() == str(code).strip().lower():
+        return f"a different language (detected as '{code}')"
+    return display
 
 
 def _extract_model_version(model_id: str) -> str | None:
@@ -356,9 +387,12 @@ class PipelineOrchestrator:
         variant since LanguageDetectionService's default path is pymupdf/PDF
         specific.
 
-        Returns `(local_path, source_lang, language_distribution)` --
-        the distribution is empty when the source language was explicit
-        (implementation_plan.md Phase C.5.1).
+        Returns `(local_path, source_lang, language_distribution)`.
+        `source_lang` is the declared language when the user gave one and
+        the detected one otherwise; the distribution is now always
+        populated (see `_detect_source_language`) so the caller can check
+        the declared language against the document, and is empty only when
+        detection found nothing to go on.
         """
         del job_id
         await self.storage.download_file(blob_path, local_input_path)
@@ -366,16 +400,62 @@ class PipelineOrchestrator:
         if source_doc.get("format") == "txt":
             local_input_path = self._convert_txt_to_docx(local_input_path)
 
-        source_lang = requested_source_lang
-        language_distribution: Counter[str] = Counter()
-        if not source_lang or source_lang == "auto":
-            source_lang, language_distribution = (
-                self.language_detector.detect_with_distribution(
-                    local_input_path,
-                    is_docx=source_doc.get("format") in ("docx", "txt"),
-                )
-            )
+        detected_lang, language_distribution = self._detect_source_language(
+            local_input_path,
+            is_docx=source_doc.get("format") in ("docx", "txt"),
+            requested_source_lang=requested_source_lang,
+        )
+        source_lang = _declared_language(requested_source_lang) or detected_lang
         return local_input_path, source_lang, language_distribution
+
+    def _detect_source_language(
+        self,
+        input_path: Path,
+        *,
+        is_docx: bool,
+        requested_source_lang: str | None,
+    ) -> tuple[str | None, Counter[str]]:
+        """Detect the source language -- always, even when one was declared.
+
+        Detection used to run only when the source language was omitted or
+        "auto". The UI never omits it (it posts a concrete language, and
+        the API rejects the literal "auto" since it is not a key in
+        language_mapper.json), so in practice detection never ran for real
+        traffic and a document in the wrong language was translated blindly.
+
+        It now always runs, so `_execute_pipeline` can compare what the user
+        declared against what the document actually contains.
+
+        Detection failure stays fatal only on the auto path, where there is
+        no declared language to fall back on. Both detectors raise when no
+        confidently detectable text is found -- and the PDF path raises the
+        *scanned PDF* wording specifically -- so without this fallback a
+        short-but-valid document (a one-page memo) that translates fine
+        today would start failing with a misleading error purely because it
+        is too short to fingerprint.
+
+        The fallback catches `Exception`, not just the `ValueError` the
+        detectors raise deliberately: pymupdf and python-docx also raise
+        their own parse/IO errors on documents they dislike. Once the user
+        has told us the language, detection is only a cross-check, and a
+        cross-check that could not run must never be the thing that fails
+        a job which would otherwise translate.
+        """
+        try:
+            return self.language_detector.detect_with_distribution(
+                input_path, is_docx=is_docx
+            )
+        except Exception:
+            if _declared_language(requested_source_lang) is None:
+                raise
+            logger.info(
+                "Could not detect a source language for %s; keeping the declared "
+                "language '%s' and skipping the language mismatch check.",
+                input_path.name,
+                requested_source_lang,
+                exc_info=True,
+            )
+            return None, Counter()
 
     async def _prepare_input_shared(
         self,
@@ -398,7 +478,9 @@ class PipelineOrchestrator:
         typesetting, etc) never touches the shared file.
 
         Returns `(local_path, source_lang, language_distribution)` -- see
-        Phase C.5.1.
+        `_prepare_input_solo`. Detection is part of the shared work, so the
+        sibling jobs of a multi-target batch pay for it once and are
+        checked against one identical language distribution.
         """
         cache = get_shared_document_prep_cache()
         blob_path = self._extract_blob_path(source_doc["gcs_uri"])
@@ -416,15 +498,11 @@ class PipelineOrchestrator:
             if source_doc.get("format") == "txt":
                 shared_path = self._convert_txt_to_docx(shared_path)
 
-            detected_lang: str | None = None
-            distribution: Counter[str] = Counter()
-            if not requested_source_lang or requested_source_lang == "auto":
-                detected_lang, distribution = (
-                    self.language_detector.detect_with_distribution(
-                        shared_path,
-                        is_docx=source_doc.get("format") in ("docx", "txt"),
-                    )
-                )
+            detected_lang, distribution = self._detect_source_language(
+                shared_path,
+                is_docx=source_doc.get("format") in ("docx", "txt"),
+                requested_source_lang=requested_source_lang,
+            )
 
             return PreparedDocument(
                 local_path=shared_path,
@@ -465,12 +543,152 @@ class PipelineOrchestrator:
         job_local_path = workspace_input_dir / prepared.local_path.name
         await asyncio.to_thread(shutil.copy2, prepared.local_path, job_local_path)
 
-        source_lang = requested_source_lang
-        language_distribution = Counter()
-        if not source_lang or source_lang == "auto":
-            source_lang = prepared.detected_source_language
-            language_distribution = prepared.detected_language_distribution
+        language_distribution = prepared.detected_language_distribution
+        source_lang = (
+            _declared_language(requested_source_lang)
+            or prepared.detected_source_language
+        )
         return job_local_path, source_lang, language_distribution
+
+    def _assert_language_matches(
+        self,
+        *,
+        job_id: str,
+        declared_source_lang: str | None,
+        language_distribution: Counter[str],
+    ) -> None:
+        """Fail the job when the declared source language is not in the document.
+
+        A no-op when nothing was declared (the user asked for auto-detect,
+        so there is no claim to contradict), when detection produced no
+        evidence, or when the check is disabled.
+
+        Fires only when the declared language is effectively *absent* from
+        the document AND some other language clearly dominates -- not
+        merely when the declared language lost a plurality vote. That
+        distinction is what separates "you picked the wrong language" from
+        "this document is bilingual", and the latter must not fail.
+        """
+        if not settings.LANGUAGE_MISMATCH_CHECK_ENABLED:
+            return
+        if declared_source_lang is None or not language_distribution:
+            return
+
+        total_chars = sum(language_distribution.values())
+        if total_chars <= 0:
+            return
+
+        try:
+            declared_code = normalize_language(declared_source_lang)
+        except ValueError:
+            # Not a language_mapper.json alias. The API validator rejects
+            # these, so this is a direct-to-worker submission; there is
+            # nothing meaningful to compare the detection against.
+            return
+
+        dominant_code, dominant_chars = language_distribution.most_common(1)[0]
+        if dominant_code == declared_code:
+            return
+
+        declared_share = language_distribution.get(declared_code, 0) / total_chars
+        dominant_share = dominant_chars / total_chars
+        if declared_share >= float(settings.LANGUAGE_MISMATCH_MAX_DECLARED_SHARE):
+            return
+        if dominant_share < float(settings.LANGUAGE_MISMATCH_MIN_DOMINANT_SHARE):
+            return
+
+        logger.warning(
+            "Job %s: source language mismatch -- declared '%s' (%.1f%% of "
+            "detected text), dominant '%s' (%.1f%%). Distribution: %s",
+            job_id,
+            declared_code,
+            declared_share * 100,
+            dominant_code,
+            dominant_share * 100,
+            dict(language_distribution),
+        )
+        raise ValueError(
+            f"You selected {_language_for_user(declared_code)} as the source "
+            f"language, but this document appears to be written in "
+            f"{_language_for_user(dominant_code)}. Please correct the source "
+            "language, or choose Auto-detect, and submit again."
+        )
+
+    async def _assert_domain_matches(
+        self,
+        *,
+        job_id: str,
+        domain: str,
+        local_input_path: Path,
+        is_docx: bool,
+        source_lang: str | None,
+        enable_dlp: bool,
+        source_hash: str,
+    ) -> None:
+        """Fail the job when the declared domain contradicts the document.
+
+        Only a *confident* contradiction fails. Business domains genuinely
+        overlap -- an HR policy is full of contractual language, a finance
+        document is full of regulatory language -- so a low-confidence
+        disagreement is logged and allowed through. The confidence floor,
+        not the on/off flag, is the real false-positive control here.
+
+        A classifier that could not answer at all (no extractable text, DLP
+        masking unavailable, the model never responding) returns None and is
+        treated as "no opinion", never as a mismatch: that is a measurement
+        failure and has nothing to do with the user's input.
+        """
+        if not settings.DOMAIN_MISMATCH_CHECK_ENABLED:
+            return
+        try:
+            declared_domain = normalize_domain(domain)
+        except ValueError:
+            return
+
+        classification = await classify_document_domain(
+            job_id=job_id,
+            path=local_input_path,
+            is_docx=is_docx,
+            source_language=source_lang,
+            enable_dlp=enable_dlp,
+            source_hash=source_hash,
+        )
+        if classification is None or classification.domain == declared_domain:
+            return
+
+        min_confidence = float(settings.DOMAIN_CLASSIFIER_MIN_CONFIDENCE)
+        if classification.confidence < min_confidence:
+            logger.info(
+                "Job %s: document classified as '%s' but declared '%s'; "
+                "confidence %.2f is below the %.2f floor, allowing the job "
+                "through. Reason: %s",
+                job_id,
+                classification.domain,
+                declared_domain,
+                classification.confidence,
+                min_confidence,
+                classification.reason,
+            )
+            return
+
+        logger.warning(
+            "Job %s: domain mismatch -- declared '%s', classified '%s' "
+            "(confidence %.2f). Reason: %s",
+            job_id,
+            declared_domain,
+            classification.domain,
+            classification.confidence,
+            classification.reason,
+        )
+        # Model-authored text lands in BigQuery's error_message and is shown
+        # to the user, so it is length-bounded here.
+        reason = " ".join(str(classification.reason).split())[:300]
+        raise ValueError(
+            f"You selected '{declared_domain}' as the document domain, but "
+            f"this document appears to be a '{classification.domain}' "
+            f"document. {reason} Please select the correct domain and submit "
+            "again."
+        )
 
     async def _execute_pipeline(
         self, job_id: str, job_data: dict[str, Any], pipeline_span
@@ -537,6 +755,23 @@ class PipelineOrchestrator:
 
             target_lang = translation_config["target_language"]
             domain = translation_config["domain"]
+            declared_source_lang = _declared_language(requested_source_lang)
+            detected_source_lang = aggregate_languages(language_distribution)
+
+            # `source_hash` is a hash of the file's bytes alone, so the
+            # shared prep cache can be reused by an unrelated submission of
+            # the same document with a *different* source-language setting.
+            # An auto-detect job reusing prep done for a job that declared
+            # its language, where detection then found nothing, is the one
+            # path that leaves no language at all -- fail with the wording
+            # the detector itself uses rather than letting None flow into
+            # routing and the job record.
+            if not source_lang:
+                raise ValueError(
+                    "Unable to detect a source language: no sufficiently "
+                    "long, confidently detectable text was found. Please "
+                    "choose the source language explicitly."
+                )
 
             # C.5.4: guard auto-detected source == target. The explicit
             # case is already blocked at the API schema layer
@@ -544,7 +779,7 @@ class PipelineOrchestrator:
             # but "auto" bypasses that validator entirely since the real
             # source language is unknown until this point.
             if (
-                (not requested_source_lang or requested_source_lang == "auto")
+                declared_source_lang is None
                 and source_lang
                 and source_lang == target_lang
             ):
@@ -558,14 +793,39 @@ class PipelineOrchestrator:
             # language falls outside the configured support set --
             # select_model_list() silently falls back to the default
             # Gemini model in this case, which is worth surfacing in logs.
-            if language_distribution and source_lang not in get_supported_languages():
+            # Keyed on the *detected* language, not the routing language:
+            # detection now runs even when a language was declared, and a
+            # declared value is a mapper alias ("English") rather than a
+            # canonical code, so testing it here would warn spuriously.
+            if (
+                detected_source_lang
+                and detected_source_lang not in get_supported_languages()
+            ):
                 logger.warning(
                     "Job %s: detected dominant source language '%s' is outside "
                     "the configured language set; model routing will fall back "
                     "to the default model.",
                     job_id,
-                    source_lang,
+                    detected_source_lang,
                 )
+
+            # Guard 1: the declared source language contradicts the
+            # document. Detection runs on every job now, so this is the
+            # first point at which the two can be compared.
+            #
+            # The test is deliberately NOT `detected != declared`.
+            # aggregate_languages() returns a bare `most_common(1)` winner
+            # with no dominance margin, so that test fires on a 51/49 split
+            # -- i.e. on genuinely bilingual documents in which the declared
+            # language really is present. A job only fails when the declared
+            # language is effectively ABSENT and some other language clearly
+            # dominates. See LANGUAGE_MISMATCH_* in constants.py.
+            current_stage = "language_consistency_check"
+            self._assert_language_matches(
+                job_id=job_id,
+                declared_source_lang=declared_source_lang,
+                language_distribution=language_distribution,
+            )
             processing_options = job_data.get("processing_options") or {}
             enable_dlp = bool(
                 processing_options.get(
@@ -576,6 +836,23 @@ class PipelineOrchestrator:
                     ),
                 )
             )
+            # Guard 2: the declared domain contradicts the document (an HR
+            # policy submitted as `legal`). Runs after `enable_dlp` is
+            # resolved because the text sampled for classification is sent
+            # to Vertex and must respect the same masking the translation
+            # path applies. Cached per source_hash inside the service, so a
+            # multi-target batch classifies the document once.
+            current_stage = "domain_consistency_check"
+            await self._assert_domain_matches(
+                job_id=job_id,
+                domain=domain,
+                local_input_path=local_input_path,
+                is_docx=source_doc.get("format") in ("docx", "txt"),
+                source_lang=source_lang,
+                enable_dlp=enable_dlp,
+                source_hash=source_hash,
+            )
+
             enable_judge = bool(settings.QUALITY_JUDGE_ENABLED)
             intent = self.intent_router.build_intent(domain, source_lang, target_lang)
             model_chain = self.intent_router.get_model_chain(
