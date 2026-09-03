@@ -253,6 +253,43 @@ class Settings(BaseSettings):
     GEMINI_MODEL_REGION: str = ""
 
     # -----------------------------
+    # Input consistency guards (source language / domain)
+    # -----------------------------
+    # Two pre-translation guards that fail a job before any translation
+    # Guard 1 -- declared source language vs. detected source language.
+
+    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
+    # A mismatch is only raised when the declared language is essentially
+    # ABSENT from the document, not merely when it lost the plurality vote.
+    # Fires when:   declared share < MAX_DECLARED_SHARE
+    #         and   dominant share >= MIN_DOMINANT_SHARE
+    #
+    # Set MAX_DECLARED_SHARE to 1.0 for a strict "any disagreement fails"
+    # policy (expect false positives on mixed-language documents).
+    LANGUAGE_MISMATCH_MAX_DECLARED_SHARE: float = 0.15
+    LANGUAGE_MISMATCH_MIN_DOMINANT_SHARE: float = 0.60
+
+    # Guard 2 -- declared domain vs. LLM-classified document domain
+    # (e.g. an HR policy document submitted as `legal`). Costs one small
+    # LLM call per source document, cached per source_hash so a
+    # multi-target batch pays for it once.
+    DOMAIN_MISMATCH_CHECK_ENABLED: bool = True
+    # Falls back to JUDGE_MODEL when empty.
+    DOMAIN_CLASSIFIER_MODEL: str = ""
+    DOMAIN_CLASSIFIER_REGION: str = ""
+    # Only a confident contradiction fails the job. Domains genuinely
+    # overlap (an HR policy is full of contractual language; a finance
+    # document is full of regulatory language), so this floor -- not the
+    # on/off flag -- is the real false-positive control. Lower it only
+    # after looking at a confusion matrix on real documents.
+    DOMAIN_CLASSIFIER_MIN_CONFIDENCE: float = 0.85
+    # Characters of document text sampled for classification. Sampled
+    # across the whole document rather than the first N chars: a cover
+    # page and letterhead are a poor domain signal.
+    DOMAIN_CLASSIFIER_SAMPLE_CHARS: int = 4000
+    DOMAIN_CLASSIFIER_TIMEOUT_SECONDS: float = 60.0
+
+    # -----------------------------
     # Claude / Anthropic (Vertex AI Model Garden)
     # -----------------------------
 

@@ -9,7 +9,9 @@ for-byte identical results:
 
   1. Downloading the source file from GCS.
   2. Converting DOCX -> PDF (LibreOffice subprocess).
-  3. Auto-detecting the source language (when not explicitly provided).
+  3. Detecting the source language (which now runs on every job, not only
+     when one was not explicitly provided, so that the declared language
+     can be checked against the document).
 
 This module lets sibling jobs (same `source_hash`) that execute concurrently
 *in the same worker process* share that work exactly once, via a reference-
@@ -52,10 +54,19 @@ class PreparedDocument:
     """Result of the shared, language-independent prep phase."""
 
     local_path: Path
+    # The language detection actually found, independent of any language
+    # the user declared. `None` only when detection found nothing it could
+    # confidently identify (possible only when a language *was* declared --
+    # otherwise detection failure is fatal, since nothing can stand in for
+    # it). Callers wanting the language to translate *from* must prefer the
+    # declared one and fall back to this.
     detected_source_language: str | None
     # Full char-weighted language distribution (implementation_plan.md
-    # Phase C.5.1), populated alongside `detected_source_language` when
-    # auto-detection ran. Empty when the source language was explicit.
+    # Phase C.5.1). Detection now runs on every job, not just auto-detect
+    # ones, so this also backs the declared-vs-actual language check in
+    # `PipelineOrchestrator._assert_language_matches`; a mixed-language
+    # document is precisely the case where the winner alone is not enough
+    # to judge a mismatch. Empty when detection found nothing.
     detected_language_distribution: Counter[str] = field(default_factory=Counter)
 
 
