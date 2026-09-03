@@ -253,6 +253,57 @@ class Settings(BaseSettings):
     GEMINI_MODEL_REGION: str = ""
 
     # -----------------------------
+    # Input consistency guards (declared source language / domain)
+    # -----------------------------
+    # Two pre-translation guards that fail a job before any translation is
+    # attempted, when the document contradicts what the submitter declared.
+    # Both are fail-closed: a guard that cannot reach a verdict fails the
+    # job rather than letting an unchecked document through.
+    #
+    # IMPORTANT: a failed job is terminal (src/shared/job_status.py) and the
+    # Cloud Tasks handler returns 200 for it, so there is no automatic retry.
+    # A Vertex/DLP outage therefore fails jobs permanently. These two
+    # *_CHECK_ENABLED flags are the kill switches for that situation and must
+    # stay settable from the environment without a redeploy.
+
+    # Guard 1 -- declared source language vs. detected source language.
+    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
+    # Maximum share of detected characters any NON-dominant language may hold
+    # before the document is rejected as mixed-language. Mixed-language
+    # translation is out of scope, so the default is 0.0: any second detected
+    # language fails the job.
+    #
+    # Detection is per text block with a 0.80 confidence floor, but stray
+    # blocks still happen in practice (party addresses, "force majeure",
+    # tables of names). If monolingual documents are being rejected, raise
+    # this to tolerate that noise -- e.g. 0.10 allows up to 10% of detected
+    # characters in other languages. The full distribution is logged on
+    # every job specifically so this value can be tuned from real data.
+    LANGUAGE_MIXED_MAX_SECONDARY_SHARE: float = 0.0
+
+    # Guard 2 -- declared domain vs. LLM-classified document domain
+    # (e.g. an HR policy submitted as `legal`). Costs one small LLM call per
+    # source document, cached per source_hash so a multi-target batch pays
+    # for it once.
+    DOMAIN_MISMATCH_CHECK_ENABLED: bool = True
+    # Falls back to JUDGE_MODEL when empty. Keeping the default aligned with
+    # the judge means no new pricing_catalog.json entry is required; a
+    # different model needs one or cost resolution will raise.
+    DOMAIN_CLASSIFIER_MODEL: str = ""
+    DOMAIN_CLASSIFIER_REGION: str = ""
+    # Only a confident contradiction fails the job. Domains genuinely overlap
+    # (an HR policy is full of contractual language; a finance document is
+    # full of regulatory language), so this floor -- not the on/off flag --
+    # is the real false-positive control. Lower it only after looking at a
+    # confusion matrix on real documents.
+    DOMAIN_CLASSIFIER_MIN_CONFIDENCE: float = 0.70
+    # Characters of document text sampled for classification. Sampled across
+    # the whole document rather than the first N chars: a cover page and
+    # letterhead are a poor domain signal.
+    DOMAIN_CLASSIFIER_SAMPLE_CHARS: int = 4000
+    DOMAIN_CLASSIFIER_TIMEOUT_SECONDS: float = 60.0
+
+    # -----------------------------
     # Claude / Anthropic (Vertex AI Model Garden)
     # -----------------------------
 

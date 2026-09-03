@@ -39,7 +39,7 @@ async def submit_translation(
     domain: Annotated[str, Form(...)],
     response: Response,
     target_languages: Annotated[list[str], Form(...)],
-    source_language: Annotated[str | None, Form()] = None,
+    source_language: Annotated[str, Form(...)],
     enable_dlp: Annotated[bool, Form()] = True,
     enable_chunking: Annotated[bool, Form()] = True,
     priority: Annotated[str, Form()] = "standard",
@@ -51,6 +51,11 @@ async def submit_translation(
     """Submit a document for translation via multipart upload and bearer auth.
 
     Accepts one or more target languages and returns HTTP 202 with batch details.
+
+    `source_language`, `target_languages` and `domain` are all required. The
+    worker verifies the declared source language and domain against the
+    document itself and fails the job when they disagree, so there is no
+    auto-detect mode to fall back on.
     """
     content = await file.read()
     if not content:

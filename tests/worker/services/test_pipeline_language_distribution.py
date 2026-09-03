@@ -1,6 +1,10 @@
 """Phase C.5 tests: language-distribution persistence, unsupported-language
-warning, and auto-detected-source-equals-target guard in the pipeline
-orchestrator's `_execute_pipeline`.
+warning, and the source-equals-target guard in the pipeline orchestrator's
+`_execute_pipeline`.
+
+The declared-vs-detected language and domain guards themselves live in
+`test_pipeline_input_consistency.py`; the domain guard is switched off here so
+these tests exercise only the C.5 behaviour they were written for.
 """
 
 from __future__ import annotations
@@ -13,12 +17,13 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.config.constants import settings
 from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 from src.worker.services.temp_workspace_service import TempWorkspaceService
 
 
 def _job_data(
-    job_id: str, *, source_language: str = "auto", target_language: str = "es"
+    job_id: str, *, source_language: str = "de", target_language: str = "es"
 ) -> dict:
     return {
         "source_document": {
@@ -28,7 +33,7 @@ def _job_data(
         "translation_config": {
             "source_language": source_language,
             "target_language": target_language,
-            "domain": "general",
+            "domain": "legal",
         },
         "cost_attribution": {"user_id": "user-1"},
         "processing_options": {"enable_dlp": False},
@@ -84,6 +89,7 @@ def _patched_orchestrator(bigquery, storage, tmp_path: Path, attempt_result: dic
             "src.worker.services.pipeline_orchestrator.JobProcessor",
             lambda progress_tracker: FakeProcessor(progress_tracker, attempt_result),
         ),
+        patch.object(settings, "DOMAIN_MISMATCH_CHECK_ENABLED", False),
         patch.object(
             orchestrator,
             "_compute_accumulated_chunk_costs",
@@ -115,16 +121,25 @@ class TestLanguageDistributionPersistence:
     """C.5.1: the full per-language Counter reaches the BigQuery payload."""
 
     async def test_detected_languages_persisted_to_bigquery(self, pipeline_mocks):
+        """The whole Counter is persisted, not just the winning language.
+
+        `LANGUAGE_MIXED_MAX_SECONDARY_SHARE` is raised here so the job is not
+        rejected as mixed before it can persist anything -- which also
+        exercises that the threshold setting actually loosens the guard.
+        """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
 
         with _patched_orchestrator(
             bigquery, storage, tmp_path, attempt_result
         ) as orchestrator:
-            with patch.object(
-                orchestrator.language_detector,
-                "detect_with_distribution",
-                return_value=("de", Counter({"de": 700, "en": 300})),
+            with (
+                patch.object(settings, "LANGUAGE_MIXED_MAX_SECONDARY_SHARE", 0.5),
+                patch.object(
+                    orchestrator.language_detector,
+                    "detect_with_distribution",
+                    return_value=("de", Counter({"de": 700, "en": 300})),
+                ),
             ):
                 pipeline_span = MagicMock()
                 await orchestrator._execute_pipeline(
@@ -143,12 +158,19 @@ class TestLanguageDistributionPersistence:
 
 
 class TestUnsupportedLanguageWarning:
-    """C.5.3: WARN (not fail) when the dominant detected language is
-    outside the configured language_mapper.json set."""
+    """C.5.3: WARN when the dominant detected language is outside the
+    configured language_mapper.json set."""
 
     async def test_unsupported_dominant_language_logs_warning(
         self, pipeline_mocks, caplog
     ):
+        """The warning still fires, but the job no longer survives it.
+
+        The declared language is validated against language_mapper.json at
+        the API, so it can never be the unsupported one. A detected language
+        outside the set therefore always disagrees with what was declared,
+        and the mismatch guard fails the job right after the warning.
+        """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
 
@@ -172,19 +194,23 @@ class TestUnsupportedLanguageWarning:
             "outside the configured language set" in record.message
             for record in caplog.records
         )
-        completed_calls = [
+        failed_calls = [
             c
             for c in bigquery.patch_translation_job.call_args_list
-            if c[0][1].get("status") == "completed"
+            if c[0][1].get("status") == "failed"
         ]
-        assert len(completed_calls) == 1
+        assert len(failed_calls) == 1
 
 
-class TestAutoDetectedSourceEqualsTargetGuard:
-    """C.5.4: reject when auto-detection resolves to the same language as
-    the requested target."""
+class TestSourceEqualsTargetGuard:
+    """C.5.4: reject when the source language equals the requested target.
 
-    async def test_detected_source_equals_target_fails_job(self, pipeline_mocks):
+    The API blocks this at the schema layer, so the worker-side check is
+    defensive: it covers direct-to-worker submissions and job rows written
+    before the validator existed.
+    """
+
+    async def test_source_equals_target_fails_job(self, pipeline_mocks):
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
 
@@ -199,7 +225,9 @@ class TestAutoDetectedSourceEqualsTargetGuard:
                 pipeline_span = MagicMock()
                 await orchestrator._execute_pipeline(
                     "job-same-lang",
-                    _job_data("job-same-lang", target_language="es"),
+                    _job_data(
+                        "job-same-lang", source_language="es", target_language="es"
+                    ),
                     pipeline_span,
                 )
 
@@ -210,3 +238,31 @@ class TestAutoDetectedSourceEqualsTargetGuard:
         ]
         assert len(failed_calls) == 1
         assert "same as" in failed_calls[0][0][1]["error_message"]
+
+    async def test_missing_source_language_fails_job(self, pipeline_mocks):
+        """A legacy row still carrying the retired "auto" sentinel fails."""
+        bigquery, storage, tmp_path = pipeline_mocks
+        attempt_result = _attempt_result(tmp_path)
+
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, attempt_result
+        ) as orchestrator:
+            with patch.object(
+                orchestrator.language_detector,
+                "detect_with_distribution",
+                return_value=("de", Counter({"de": 500})),
+            ):
+                pipeline_span = MagicMock()
+                await orchestrator._execute_pipeline(
+                    "job-auto-legacy",
+                    _job_data("job-auto-legacy", source_language="auto"),
+                    pipeline_span,
+                )
+
+        failed_calls = [
+            c
+            for c in bigquery.patch_translation_job.call_args_list
+            if c[0][1].get("status") == "failed"
+        ]
+        assert len(failed_calls) == 1
+        assert "No source language" in failed_calls[0][0][1]["error_message"]

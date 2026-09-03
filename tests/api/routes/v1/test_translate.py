@@ -44,8 +44,8 @@ class TestSubmitTranslation:
             "/api/v1/translate",
             data={
                 "target_languages": ["Spanish"],
-                "domain": "commercial",
                 "source_language": "English",
+                "domain": "commercial",
             },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
@@ -54,7 +54,11 @@ class TestSubmitTranslation:
     def test_response_has_job_id(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -65,7 +69,11 @@ class TestSubmitTranslation:
     def test_response_status_is_queued(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -74,7 +82,11 @@ class TestSubmitTranslation:
     def test_response_has_status_url(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -84,7 +96,11 @@ class TestSubmitTranslation:
     def test_missing_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
         )
         assert resp.status_code == 422
 
@@ -99,7 +115,65 @@ class TestSubmitTranslation:
     def test_invalid_domain_returns_422(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "science"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "science",
+            },
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_missing_source_language_returns_422(self, api_client, minimal_pdf_bytes):
+        """Source language is mandatory: auto-detection was removed.
+
+        The worker verifies the declared language against the document, so an
+        omitted value has nothing to verify and must be rejected up front --
+        before any GCS upload, BigQuery row or Cloud Task is created.
+        """
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_blank_source_language_returns_422(self, api_client, minimal_pdf_bytes):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "   ",
+                "domain": "commercial",
+            },
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_missing_domain_returns_422(self, api_client, minimal_pdf_bytes):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"target_languages": ["Spanish"], "source_language": "English"},
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_missing_target_languages_returns_422(self, api_client, minimal_pdf_bytes):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={"source_language": "English", "domain": "commercial"},
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 422
+
+    def test_source_equal_to_target_returns_422(self, api_client, minimal_pdf_bytes):
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "Spanish",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -110,7 +184,11 @@ class TestSubmitTranslation:
         deep inside PDFValidator with a confusing message."""
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={
                 "file": ("archive.zip", minimal_pdf_bytes, "application/zip"),
             },
@@ -122,7 +200,11 @@ class TestSubmitTranslation:
         resp = api_client.post(
             "/api/v1/translate",
             headers={"x-app-auth": "Bearer invalid"},
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 401
@@ -130,7 +212,11 @@ class TestSubmitTranslation:
     def test_empty_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("empty.pdf", b"", "application/pdf")},
         )
         assert resp.status_code == 422
@@ -141,7 +227,11 @@ class TestSubmitTranslation:
         mock_translation_service.submit_translations.reset_mock()
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("empty.pdf", b"", "application/pdf")},
         )
         assert resp.status_code == 422
@@ -151,7 +241,11 @@ class TestSubmitTranslation:
         oversized = b"x" * (50 * 1024 * 1024 + 1)
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("big.pdf", oversized, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -163,7 +257,11 @@ class TestSubmitTranslation:
         oversized = b"x" * (50 * 1024 * 1024 + 1)
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": ["Spanish"], "domain": "commercial"},
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("big.pdf", oversized, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -177,6 +275,7 @@ class TestSubmitTranslation:
             data={
                 "domain": "commercial",
                 "target_languages": ["French", "German"],
+                "source_language": "English",
             },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )

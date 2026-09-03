@@ -44,8 +44,8 @@ class TestSubmitTranslation:
             "/api/v1/translate",
             data={
                 "target_languages": "Spanish",
-                "domain": "commercial",
                 "source_language": "English",
+                "domain": "commercial",
             },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
@@ -54,7 +54,11 @@ class TestSubmitTranslation:
     def test_response_has_batch_id(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": "Spanish", "domain": "commercial"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -64,7 +68,11 @@ class TestSubmitTranslation:
     def test_response_has_jobs_list(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": "Spanish", "domain": "commercial"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -75,7 +83,11 @@ class TestSubmitTranslation:
     def test_job_in_response_has_required_fields(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": "Spanish", "domain": "commercial"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         body = resp.json()
@@ -90,7 +102,11 @@ class TestSubmitTranslation:
     def test_missing_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": "Spanish", "domain": "commercial"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "commercial",
+            },
         )
         assert resp.status_code == 422
 
@@ -105,7 +121,11 @@ class TestSubmitTranslation:
     def test_invalid_domain_returns_422(self, api_client, minimal_pdf_bytes):
         resp = api_client.post(
             "/api/v1/translate",
-            data={"target_languages": "Spanish", "domain": "science"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "science",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 422
@@ -114,7 +134,11 @@ class TestSubmitTranslation:
         resp = api_client.post(
             "/api/v1/translate",
             headers={"x-app-auth": "Bearer invalid"},
-            data={"target_languages": "Spanish", "domain": "commercial"},
+            data={
+                "target_languages": "Spanish",
+                "source_language": "English",
+                "domain": "commercial",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 401

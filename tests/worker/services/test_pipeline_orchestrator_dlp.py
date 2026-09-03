@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from src.config.constants import settings
 from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 from src.worker.services.temp_workspace_service import TempWorkspaceService
 
@@ -89,6 +91,16 @@ async def test_pipeline_orchestrator_passes_enable_dlp_and_persists_il_tokens(
             return_value={"mono_pdf_path": "gs://bucket/output.pdf"}
         )
     )
+    # Detection now runs on every job, and the stub document above is not a
+    # real PDF. Stub the detector to agree with the declared language, and
+    # switch off the domain guard: this test is about DLP wiring only.
+    orchestrator.language_detector = SimpleNamespace(
+        detect_with_distribution=lambda *_args, **_kwargs: (
+            "en",
+            Counter({"en": 500}),
+        )
+    )
+    monkeypatch.setattr(settings, "DOMAIN_MISMATCH_CHECK_ENABLED", False)
 
     await orchestrator.run(
         job_id="job-123",

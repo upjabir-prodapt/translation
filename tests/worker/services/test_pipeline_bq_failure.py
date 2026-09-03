@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.config.constants import settings
 from src.repository.repository_exception import BigQueryError
 from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 from src.worker.services.temp_workspace_service import TempWorkspaceService
@@ -74,11 +76,20 @@ def _patched_orchestrator(bigquery, storage, tmp_path: Path, attempt_result: dic
     orchestrator.assembly_service.upload_output = AsyncMock(
         return_value="gs://bucket/output.pdf"
     )
+    # These tests are about BigQuery failure handling, so the input
+    # consistency guards are neutralised: the detector agrees with the
+    # declared language and the domain guard is off.
+    orchestrator.language_detector = MagicMock()
+    orchestrator.language_detector.detect_with_distribution.return_value = (
+        "en",
+        Counter({"en": 500}),
+    )
     with (
         patch(
             "src.worker.services.pipeline_orchestrator.JobProcessor",
             lambda progress_tracker: FakeProcessor(progress_tracker, attempt_result),
         ),
+        patch.object(settings, "DOMAIN_MISMATCH_CHECK_ENABLED", False),
         patch.object(
             orchestrator,
             "_compute_accumulated_chunk_costs",
@@ -256,6 +267,11 @@ class TestPipelineBigQueryFailure:
         orchestrator.assembly_service.upload_output = AsyncMock(
             return_value="gs://bucket/output.pdf"
         )
+        orchestrator.language_detector = MagicMock()
+        orchestrator.language_detector.detect_with_distribution.return_value = (
+            "en",
+            Counter({"en": 500}),
+        )
 
         with (
             patch(
@@ -264,6 +280,7 @@ class TestPipelineBigQueryFailure:
                     progress_tracker, attempt_result
                 ),
             ),
+            patch.object(settings, "DOMAIN_MISMATCH_CHECK_ENABLED", False),
             patch.object(
                 orchestrator,
                 "_compute_accumulated_chunk_costs",

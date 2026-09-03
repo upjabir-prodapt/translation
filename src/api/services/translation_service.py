@@ -405,16 +405,24 @@ class TranslationService:
                 str(e), field="translation_config.target_language"
             ) from e
 
+        # Source language is mandatory: auto-detection was removed along with
+        # the "auto" sentinel this used to fall back to. The worker compares
+        # this canonical code against the language it detects in the document,
+        # so an absent value would leave nothing to compare against.
         lang_in = request.translation_config.source_language
-        if lang_in:
-            try:
-                lang_in = normalize_language(lang_in)
-            except ValueError as e:
-                raise ValidationError(
-                    str(e), field="translation_config.source_language"
-                ) from e
+        if not lang_in or not str(lang_in).strip():
+            raise ValidationError(
+                "Source language is required",
+                field="translation_config.source_language",
+            )
+        try:
+            lang_in = normalize_language(lang_in)
+        except ValueError as e:
+            raise ValidationError(
+                str(e), field="translation_config.source_language"
+            ) from e
         return {
-            "lang_in": lang_in or "auto",
+            "lang_in": lang_in,
             "lang_out": lang_out,
             "domain": domain,
         }

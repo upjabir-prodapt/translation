@@ -175,7 +175,7 @@ def make_job_doc(
             "gcs_uri": f"gs://test-bucket/translation/{jid}/input/doc.pdf",
             "format": "pdf",
             "page_count": 3,
-            "source_language": "auto",
+            "source_language": "en",
             "original_filename": "doc.pdf",
             "output_filename": "doc_es.pdf",
             "file_size_bytes": 4096,
@@ -195,7 +195,7 @@ def make_job_doc(
         "timestamps": {"submitted_at": now, "completed_at": None},
         "config": {
             "job_id": jid,
-            "lang_in": "auto",
+            "lang_in": "en",
             "lang_out": "es",
             "domain": "commercial",
         },

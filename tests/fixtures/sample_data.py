@@ -64,7 +64,7 @@ TRANSLATE_REQUEST_NO_OPTIONS: dict[str, Any] = {
         "filename": "sample.pdf",
     },
     "translation_config": {
-        "source_language": "auto",
+        "source_language": "en",
         "target_language": "fr",
         "domain": "legal",
     },

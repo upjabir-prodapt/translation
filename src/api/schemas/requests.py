@@ -88,12 +88,14 @@ class TranslationConfigInput(BaseModel):
         "English (en), Spanish (es), Italian (it), French (fr), Japanese (ja), German (de)"
     )
 
-    source_language: str | None = Field(
-        None,
+    source_language: str = Field(
+        ...,
+        min_length=2,
         description=(
-            "Optional source language (full name or code). "
+            "Source language (full name or code). "
             "Supported: English, Spanish, Italian, French, Japanese, German. "
-            "Auto-detected if omitted. Cannot equal target_language."
+            "Required -- auto-detection is not supported. Cannot equal "
+            "target_language."
         ),
     )
     target_language: str = Field(
@@ -142,13 +144,21 @@ class TranslationConfigInput(BaseModel):
 
     @field_validator("source_language")
     @classmethod
-    def validate_source_language(cls, v: str | None) -> str | None:
-        """Validate optional source language input: full name or code only."""
-        if v is None:
-            return None
+    def validate_source_language(cls, v: str) -> str:
+        """Validate the required source language: full name or code only.
+
+        Source language used to be optional, with an omitted value meaning
+        "auto-detect". Auto-detection is no longer supported (mixed-language
+        and wrong-language documents are rejected outright), so a blank or
+        whitespace-only value is now a validation error rather than a
+        silent fallback.
+        """
         cleaned = v.strip()
         if not cleaned:
-            return None
+            raise ValueError(
+                "Source language is required. Supported languages: "
+                f"{cls.SUPPORTED_LANGUAGE_LABELS}"
+            )
         try:
             normalize_language(cleaned)
         except ValueError as e:
@@ -159,12 +169,15 @@ class TranslationConfigInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_source_not_equal_target(self) -> "TranslationConfigInput":
-        """Ensure source language does not equal target language."""
-        if self.source_language is not None:
-            source_normalized = normalize_language(self.source_language)
-            target_normalized = normalize_language(self.target_language)
-            if source_normalized == target_normalized:
-                raise ValueError("Source language cannot equal target language")
+        """Ensure source language does not equal target language.
+
+        Source language is always present now, so this no longer needs the
+        "skip when auto-detecting" branch it used to carry.
+        """
+        source_normalized = normalize_language(self.source_language)
+        target_normalized = normalize_language(self.target_language)
+        if source_normalized == target_normalized:
+            raise ValueError("Source language cannot equal target language")
         return self
 
 

@@ -48,7 +48,7 @@ def valid_request():
             filename="test.pdf",
         ),
         translation_config=TranslationConfigInput(
-            target_language="French", domain="legal"
+            source_language="en", target_language="French", domain="legal"
         ),
         cost_attribution=CostAttributionInput(
             user_id="user1", business_unit="legal-dept", organization="colt"
@@ -195,7 +195,7 @@ class TestTranslationService:
                     filename="test.pdf",
                 ),
                 translation_config=TranslationConfigInput(
-                    target_language=target, domain="legal"
+                    source_language="en", target_language=target, domain="legal"
                 ),
                 cost_attribution=CostAttributionInput(
                     user_id="user1", business_unit="legal", organization="colt"
@@ -234,7 +234,7 @@ class TestSharedSizeLimitEnforcement:
                 format=fmt,
             ),
             translation_config=TranslationConfigInput(
-                target_language="fr", domain="commercial"
+                source_language="en", target_language="fr", domain="commercial"
             ),
             cost_attribution=CostAttributionInput(
                 user_id="user1", business_unit="bu", organization="colt"
@@ -403,7 +403,7 @@ class TestDuplicateSubmissionIdempotency:
                     filename="test.pdf",
                 ),
                 translation_config=TranslationConfigInput(
-                    target_language=target, domain="legal"
+                    source_language="en", target_language=target, domain="legal"
                 ),
                 cost_attribution=CostAttributionInput(
                     user_id="user1", business_unit="legal", organization="colt"
@@ -453,7 +453,7 @@ class TestDuplicateSubmissionIdempotency:
                     filename="test.pdf",
                 ),
                 translation_config=TranslationConfigInput(
-                    target_language="fr", domain="legal"
+                    source_language="en", target_language="fr", domain="legal"
                 ),
                 cost_attribution=CostAttributionInput(
                     user_id="user1", business_unit="legal", organization="colt"
@@ -491,7 +491,7 @@ class TestPriorityRouting:
                 format=fmt,
             ),
             translation_config=TranslationConfigInput(
-                target_language="fr", domain="commercial"
+                source_language="en", target_language="fr", domain="commercial"
             ),
             cost_attribution=CostAttributionInput(
                 user_id="user1", business_unit="bu", organization="colt"

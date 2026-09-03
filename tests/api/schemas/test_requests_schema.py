@@ -124,33 +124,56 @@ class TestTranslationConfigInput:
         ["commercial", "legal", "finance", "hr", "operations"],
     )
     def test_valid_domains(self, domain):
-        cfg = TranslationConfigInput(target_language="es", domain=domain)
+        cfg = TranslationConfigInput(
+            source_language="en", target_language="es", domain=domain
+        )
         assert cfg.domain == domain
 
     def test_domain_oprations_alias(self):
         """Legacy alias 'oprations' maps to 'operations'."""
-        cfg = TranslationConfigInput(target_language="es", domain="oprations")
+        cfg = TranslationConfigInput(
+            source_language="en", target_language="es", domain="oprations"
+        )
         assert cfg.domain == "operations"
 
     def test_domain_case_insensitive(self):
-        cfg = TranslationConfigInput(target_language="es", domain="COMMERCIAL")
+        cfg = TranslationConfigInput(
+            source_language="en", target_language="es", domain="COMMERCIAL"
+        )
         assert cfg.domain == "commercial"
 
     def test_invalid_domain_raises(self):
         with pytest.raises(PydanticValidationError, match="Invalid domain"):
             TranslationConfigInput(target_language="es", domain="science")
 
-    def test_source_language_default_auto(self):
-        cfg = TranslationConfigInput(target_language="es", domain="legal")
-        assert cfg.source_language is None
+    def test_source_language_is_required(self):
+        """Auto-detection was removed: an omitted source language is an error.
+
+        The worker now checks the declared language against the document and
+        rejects mixed-language or wrong-language files, so there is no
+        auto-detect mode for an omitted value to fall back to.
+        """
+        with pytest.raises(PydanticValidationError):
+            TranslationConfigInput(target_language="es", domain="legal")
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_source_language_rejected(self, blank):
+        with pytest.raises(PydanticValidationError):
+            TranslationConfigInput(
+                source_language=blank, target_language="es", domain="legal"
+            )
 
     def test_target_language_stripped(self):
-        cfg = TranslationConfigInput(target_language="  Spanish  ", domain="legal")
+        cfg = TranslationConfigInput(
+            source_language="en", target_language="  Spanish  ", domain="legal"
+        )
         assert cfg.target_language == "Spanish"
 
     @pytest.mark.parametrize("target", ["es", "Spanish", "fr", "Japanese", "zh-cn"])
     def test_various_target_languages(self, target):
-        cfg = TranslationConfigInput(target_language=target, domain="hr")
+        cfg = TranslationConfigInput(
+            source_language="en", target_language=target, domain="hr"
+        )
         assert cfg.target_language == target
 
     def test_target_language_too_short_raises(self):
@@ -174,15 +197,14 @@ class TestTranslationConfigInput:
                 domain="commercial",
             )
 
-    def test_source_language_none_allows_any_target(self):
-        """When source_language is None, any target is allowed."""
-        cfg = TranslationConfigInput(
-            source_language=None,
-            target_language="es",
-            domain="commercial",
-        )
-        assert cfg.source_language is None
-        assert cfg.target_language == "es"
+    def test_explicit_none_source_language_rejected(self):
+        """An explicit null is rejected the same as an omitted value."""
+        with pytest.raises(PydanticValidationError):
+            TranslationConfigInput(
+                source_language=None,
+                target_language="es",
+                domain="commercial",
+            )
 
 
 class TestTranslationTargetsInput:
@@ -259,7 +281,7 @@ class TestTranslateRequest:
         req = TranslateRequest(
             document=DocumentInput(content=VALID_PDF_B64, filename="doc.pdf"),
             translation_config=TranslationConfigInput(
-                target_language="es", domain="commercial"
+                source_language="en", target_language="es", domain="commercial"
             ),
             cost_attribution=CostAttributionInput(
                 user_id="user-1",
@@ -275,7 +297,7 @@ class TestTranslateRequest:
         req = TranslateRequest(
             document=DocumentInput(content=VALID_PDF_B64, filename="doc.pdf"),
             translation_config=TranslationConfigInput(
-                target_language="fr", domain="legal"
+                source_language="en", target_language="fr", domain="legal"
             ),
             cost_attribution=CostAttributionInput(
                 user_id="user-1",

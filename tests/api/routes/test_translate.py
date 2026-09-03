@@ -36,7 +36,11 @@ class TestTranslateRoutes:
 
         file_content = b"%PDF-1.4 test"
         files = {"file": ("test.pdf", io.BytesIO(file_content), "application/pdf")}
-        data = {"target_languages": ["French"], "domain": "legal"}
+        data = {
+            "target_languages": ["French"],
+            "source_language": "English",
+            "domain": "legal",
+        }
 
         response = client.post("/api/v1/translate", files=files, data=data)
         assert response.status_code == 202
