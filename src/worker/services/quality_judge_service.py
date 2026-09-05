@@ -23,6 +23,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from src.config.constants import settings
+from src.config.llm_gateway import gateway_http_options_kwargs
+from src.config.llm_gateway import gateway_vertex_identity_kwargs
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_llm
 
@@ -229,10 +231,12 @@ class GoogleADKJudgeAgent:
             # pipeline, so it is not worth trading accuracy for.
             self._client = genai.Client(
                 vertexai=True,
-                project=settings.GOOGLE_CLOUD_PROJECT,
-                location=self.region,
+                **gateway_vertex_identity_kwargs(
+                    settings.GOOGLE_CLOUD_PROJECT, self.region
+                ),
                 http_options=genai_types.HttpOptions(
-                    timeout=int(float(settings.LLM_JUDGE_TIMEOUT_SECONDS) * 1000)
+                    timeout=int(float(settings.LLM_JUDGE_TIMEOUT_SECONDS) * 1000),
+                    **gateway_http_options_kwargs(),
                 ),
             )
 

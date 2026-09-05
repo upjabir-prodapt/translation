@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-from src.api.core.security import create_access_token
 from src.api.dependencies import get_job_service
 from src.api.dependencies import get_translation_service
 from src.api.main import app
@@ -129,16 +128,19 @@ def api_client(mock_translation_service, mock_job_service):
     app.dependency_overrides[get_translation_service] = lambda: mock_translation_service
     app.dependency_overrides[get_job_service] = lambda: mock_job_service
 
-    token = create_access_token(
-        {
-            "sub": "user@colt.net",
-            "business_unit": "engineering",
-            "organization": "colt",
-        }
-    )
-
     with TestClient(app, raise_server_exceptions=False) as client:
-        client.headers.update({"x-app-auth": f"Bearer {token}"})
+        # IS_LOCAL=true in tests/test.env, so apigee_auth builds the user
+        # context straight from these x-colt-user-* headers (no Google ID
+        # token verification). See src/api/core/apigee_auth.py.
+        client.headers.update(
+            {
+                "x-colt-user-oid": "test-oid-001",
+                "x-colt-user-email": "user@colt.net",
+                "x-colt-user-roles": "Translation.User",
+                "x-colt-user-department": "engineering",
+                "x-colt-user-company": "colt",
+            }
+        )
         yield client
 
     app.dependency_overrides.clear()

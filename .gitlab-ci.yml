@@ -23,10 +23,24 @@ variables:
   # Group CI/CD variables: HTTP_PROXY, HTTPS_PROXY, AZURE_PAT (Azure DevOps Code Read)
   # WIF: WORKLOAD_IDENTITY_PROJECT_NUMBER, WORKLOAD_IDENTITY_POOL, WORKLOAD_IDENTITY_PROVIDER
   #      SERVICE_ACCOUNT, GCP_PROJECT_ID
-  # Per-environment: GCP_REGION, ARTIFACT_REPO, IMAGE_NAME, CLOUD_RUN_SERVICE,
-  #                  CLOUD_RUN_NETWORK, CLOUD_RUN_SUBNET, CLOUD_RUN_SA,
-  #                  APP_CONFIG_SECRET_NAME, APP_CONFIG_SECRET_VERSION,
-  #                  GCS_BUCKET_NAME, ASSETS_MOUNT_PATH, GCS_ASSETS_DIR
+  # Per-environment: GCP_REGION, ARTIFACT_REPO, IMAGE_NAME, CLOUD_RUN_API_SERVICE
+  #                  (e.g. "translation-api"), CLOUD_RUN_WORKER_SERVICE (e.g.
+  #                  "translation-worker") -- no shared CLOUD_RUN_SERVICE base
+  #                  name, always set both explicitly. CLOUD_RUN_NETWORK,
+  #                  CLOUD_RUN_SUBNET, CLOUD_RUN_API_SA, CLOUD_RUN_WORKER_SA
+  #                  (no shared CLOUD_RUN_SA fallback either -- always set both,
+  #                  Terraform provisions translation-api-sa and
+  #                  translation-worker-sa as separate identities),
+  #                  APP_CONFIG_SECRET_NAME, GCS_BUCKET_NAME, ASSETS_MOUNT_PATH,
+  #                  GCS_ASSETS_DIR
+  # Optional, per-environment (shared-dev / gclt-aicoe-dev-st): APP_CONFIG_API_SECRET_VERSION,
+  #           APP_CONFIG_WORKER_SECRET_VERSION (each defaults to "latest"
+  #           independently -- no shared APP_CONFIG_SECRET_VERSION, so the API
+  #           and worker can be pinned to different secret versions). See
+  #           GITLAB_CI_VARIABLES.md for the full list, including the settings
+  #           that live in the /secrets/.env payload instead of here
+  #           (API_PREFIX, APIGEE_RUNTIME_SA_EMAIL, CLOUD_RUN_SERVICE_URL,
+  #           LLM_GATEWAY_*).
   GCLOUD_USER_INSTALL_DIR: "${CI_PROJECT_DIR}/.tools/google-cloud-sdk"
   GCLOUD_ARCHIVE_URL: "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz"
   UV_INSTALL_DIR: "${CI_PROJECT_DIR}/.tools/uv"
@@ -538,12 +552,20 @@ env-scope-check:
   - |
     required_vars="WORKLOAD_IDENTITY_PROJECT_NUMBER WORKLOAD_IDENTITY_POOL WORKLOAD_IDENTITY_PROVIDER \
       SERVICE_ACCOUNT GCP_PROJECT_ID GCP_REGION ARTIFACT_REPO IMAGE_NAME \
-      CLOUD_RUN_NETWORK CLOUD_RUN_SUBNET CLOUD_RUN_SA CLOUD_RUN_SERVICE \
-      APP_CONFIG_SECRET_NAME APP_CONFIG_SECRET_VERSION \
+      CLOUD_RUN_NETWORK CLOUD_RUN_SUBNET \
+      CLOUD_RUN_API_SERVICE CLOUD_RUN_WORKER_SERVICE \
+      CLOUD_RUN_API_SA CLOUD_RUN_WORKER_SA \
+      APP_CONFIG_SECRET_NAME \
       GCS_BUCKET_NAME ASSETS_MOUNT_PATH GCS_ASSETS_DIR"
-    optional_vars="CLOUD_RUN_API_SERVICE CLOUD_RUN_WORKER_SERVICE \
-      APP_CONFIG_API_SECRET_NAME APP_CONFIG_WORKER_SECRET_NAME \
+    optional_vars="APP_CONFIG_API_SECRET_NAME APP_CONFIG_WORKER_SECRET_NAME \
+      APP_CONFIG_API_SECRET_VERSION APP_CONFIG_WORKER_SECRET_VERSION \
       CLOUD_TASKS_QUEUE CLOUD_TASKS_OIDC_SERVICE_ACCOUNT"
+    # NOTE: APIGEE_RUNTIME_SA_EMAIL, CLOUD_RUN_SERVICE_URL, LLM_GATEWAY_* and
+    # API_PREFIX are deliberately NOT checked here. They are application
+    # settings delivered via the /secrets/.env Secret Manager payload
+    # (--set-secrets), not GitLab CI/CD pipeline variables — see
+    # GITLAB_CI_VARIABLES.md. Adding them to this pipeline-variable check
+    # would be exactly the payload/CI-variable confusion that doc warns about.
     missing=0
     for var in $required_vars; do
       if [ -n "$(printenv "$var")" ]; then
@@ -557,7 +579,7 @@ env-scope-check:
       if [ -n "$(printenv "$var")" ]; then
         echo "OK - $var is set (optional)"
       else
-        echo "NOTE - $var not set (deploy uses CLOUD_RUN_SERVICE / APP_CONFIG_SECRET_NAME fallbacks)"
+        echo "NOTE - $var not set (deploy uses APP_CONFIG_SECRET_NAME / latest-version fallbacks)"
       fi
     done
     if [ "$missing" -eq 1 ]; then
@@ -662,11 +684,15 @@ deploy-cloud-run:
     API_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-api:${IMAGE_TAG}"
     WORKER_IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}-worker:${IMAGE_TAG}"
 
-    API_SERVICE="${CLOUD_RUN_API_SERVICE:-${CLOUD_RUN_SERVICE}-api}"
-    WORKER_SERVICE="${CLOUD_RUN_WORKER_SERVICE:-${CLOUD_RUN_SERVICE}-worker}"
+    API_SERVICE="$CLOUD_RUN_API_SERVICE"
+    WORKER_SERVICE="$CLOUD_RUN_WORKER_SERVICE"
     API_SECRET="${APP_CONFIG_API_SECRET_NAME:-${APP_CONFIG_SECRET_NAME}}"
     WORKER_SECRET="${APP_CONFIG_WORKER_SECRET_NAME:-${APP_CONFIG_SECRET_NAME}}"
-    SECRET_VERSION="${APP_CONFIG_SECRET_VERSION:-latest}"
+    # Independent per-role versions -- no shared APP_CONFIG_SECRET_VERSION.
+    # Pin one role to an older secret version (e.g. while testing a payload
+    # change on the worker only) without touching the other.
+    API_SECRET_VERSION="${APP_CONFIG_API_SECRET_VERSION:-latest}"
+    WORKER_SECRET_VERSION="${APP_CONFIG_WORKER_SECRET_VERSION:-latest}"
 
     # /tmp is a RAM-backed tmpfs on Cloud Run, so every working file the
     # translation pipeline writes (input copy, per-attempt IL trees, split
@@ -698,7 +724,7 @@ deploy-cloud-run:
       --project="$GCP_PROJECT_ID" \
       --network="$CLOUD_RUN_NETWORK" \
       --subnet="$CLOUD_RUN_SUBNET" \
-      --service-account="$CLOUD_RUN_SA" \
+      --service-account="$CLOUD_RUN_WORKER_SA" \
       --min-instances=1 \
       --max-instances=30 \
       --concurrency=1 \
@@ -712,7 +738,7 @@ deploy-cloud-run:
       --no-allow-unauthenticated \
       --add-volume "mount-path=${ASSETS_MOUNT_PATH},type=cloud-storage,bucket=${GCS_BUCKET_NAME},readonly=false,mount-options=only-dir=${GCS_ASSETS_DIR}" \
       --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=worker,ASSETS_ROOT=${ASSETS_MOUNT_PATH},TEMP_DIR=${WORKER_TEMP_DIR},CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=${CLOUD_TASKS_OIDC_SERVICE_ACCOUNT},REDIS_HOST=${REDIS_HOST},REDIS_PORT=${REDIS_PORT}" \
-      --set-secrets="/secrets/.env=${WORKER_SECRET}:${SECRET_VERSION}"
+      --set-secrets="/secrets/.env=${WORKER_SECRET}:${WORKER_SECRET_VERSION}"
 
     for attempt in $(seq 1 30); do
       WORKER_URL="$(gcloud run services describe "$WORKER_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --format='value(status.url)' 2>/dev/null || true)"
@@ -740,15 +766,23 @@ deploy-cloud-run:
       --project="$GCP_PROJECT_ID" \
       --network="$CLOUD_RUN_NETWORK" \
       --subnet="$CLOUD_RUN_SUBNET" \
-      --service-account="$CLOUD_RUN_SA" \
+      --service-account="$CLOUD_RUN_API_SA" \
       --min-instances=1 \
       --concurrency=20 \
       --port=8000 \
       --timeout=60 \
       --memory=1Gi \
       --cpu=1 \
+      --no-allow-unauthenticated \
       --set-env-vars="GOOGLE_CLOUD_PROJECT=${GCP_PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GCP_REGION},IS_LOCAL=false,APP_ROLE=api,API_USE_BACKGROUND_PIPELINE=false,TEMP_DIR=/tmp,CLOUD_TASKS_LOCATION=${GCP_REGION},CLOUD_TASKS_QUEUE=${CLOUD_TASKS_QUEUE},CLOUD_TASKS_QUEUE_HIGH=${CLOUD_TASKS_QUEUE_HIGH:-},CLOUD_TASKS_WORKER_URL=${TASKS_URL},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=${CLOUD_TASKS_OIDC_SERVICE_ACCOUNT},CLOUD_TASKS_DISPATCH_DEADLINE_SECONDS=1800" \
-      --set-secrets="/secrets/.env=${API_SECRET}:${SECRET_VERSION}"
+      --set-secrets="/secrets/.env=${API_SECRET}:${API_SECRET_VERSION}"
+      # --no-allow-unauthenticated (D-5 / D5 in the shared-dev plan): only the
+      # Apigee `int` runtime SA and worker-invoker-sa may call this service
+      # directly now that the backend does its own authorization. Do not
+      # deploy this to a real environment until D-1..D-4 (apigee_auth.py,
+      # the rewired dependency, and the deleted old auth surface) are
+      # already live and verified — otherwise this locks out every caller,
+      # including the BFF/Apigee path, before it has been proven to work.
 resolve-dast-target:
   stage: dast
   extends:
@@ -763,7 +797,7 @@ resolve-dast-target:
   script:
     - |
       set -e
-      API_SERVICE="${CLOUD_RUN_API_SERVICE:-${CLOUD_RUN_SERVICE}-api}"
+      API_SERVICE="$CLOUD_RUN_API_SERVICE"
       echo "Resolving deployed URL for: $API_SERVICE (region: $GCP_REGION, project: $GCP_PROJECT_ID)..."
       TARGET_URL="$(gcloud run services describe "$API_SERVICE" \
         --region="$GCP_REGION" \

@@ -292,6 +292,8 @@ def _classify_blocking(sample: str) -> tuple[DomainClassification, float]:
     )
     from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_TEMPERATURE
     from src.worker.doctranslator.translator.instrumentation import prompt_fingerprint
+    from src.config.llm_gateway import gateway_http_options_kwargs
+    from src.config.llm_gateway import gateway_vertex_identity_kwargs
     from src.worker.doctranslator.translator.invoke import invoke_llm
     from src.worker.doctranslator.translator.usage import TokenUsage
     from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
@@ -304,10 +306,10 @@ def _classify_blocking(sample: str) -> tuple[DomainClassification, float]:
     )
     client = genai.Client(
         vertexai=True,
-        project=settings.GOOGLE_CLOUD_PROJECT,
-        location=region,
+        **gateway_vertex_identity_kwargs(settings.GOOGLE_CLOUD_PROJECT, region),
         http_options=genai_types.HttpOptions(
-            timeout=int(float(settings.DOMAIN_CLASSIFIER_TIMEOUT_SECONDS) * 1000)
+            timeout=int(float(settings.DOMAIN_CLASSIFIER_TIMEOUT_SECONDS) * 1000),
+            **gateway_http_options_kwargs(),
         ),
     )
     config = genai_types.GenerateContentConfig(

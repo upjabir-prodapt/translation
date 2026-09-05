@@ -130,19 +130,6 @@ class TestSubmitTranslation:
         )
         assert resp.status_code == 422
 
-    def test_rejects_invalid_token(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            headers={"x-app-auth": "Bearer invalid"},
-            data={
-                "target_languages": "Spanish",
-                "source_language": "English",
-                "domain": "commercial",
-            },
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
-        assert resp.status_code == 401
-
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/translate/{job_id}

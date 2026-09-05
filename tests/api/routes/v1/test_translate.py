@@ -196,19 +196,6 @@ class TestSubmitTranslation:
         assert resp.status_code == 422
         assert "Unsupported file type" in resp.text
 
-    def test_rejects_invalid_token(self, api_client, minimal_pdf_bytes):
-        resp = api_client.post(
-            "/api/v1/translate",
-            headers={"x-app-auth": "Bearer invalid"},
-            data={
-                "target_languages": ["Spanish"],
-                "source_language": "English",
-                "domain": "commercial",
-            },
-            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
-        )
-        assert resp.status_code == 401
-
     def test_empty_file_returns_422(self, api_client):
         resp = api_client.post(
             "/api/v1/translate",

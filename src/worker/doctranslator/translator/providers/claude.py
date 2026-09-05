@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from src.config.constants import settings
+from src.config.llm_gateway import gateway_anthropic_vertex_kwargs
 from src.config.retry import llm_retry
 from src.worker.doctranslator.translator.base import BaseTranslator
 from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_MODEL
@@ -54,11 +55,17 @@ class ClaudeVertexAITranslator(BaseTranslator):
         self.temperature = temperature
         # Match the Gemini provider's client-side deadline so one slow
         # generation cannot occupy a pool worker indefinitely.
-        self.client = AnthropicVertex(
-            project_id=settings.GOOGLE_CLOUD_PROJECT,
-            region=settings.CLAUDE_VERTEX_REGION,
-            timeout=float(settings.LLM_CALL_TIMEOUT_SECONDS),
-        )
+        client_kwargs: dict[str, object] = {
+            "project_id": settings.GOOGLE_CLOUD_PROJECT,
+            "region": settings.CLAUDE_VERTEX_REGION,
+            "timeout": float(settings.LLM_CALL_TIMEOUT_SECONDS),
+        }
+        # Overrides project_id/base_url/default_headers when the gateway is
+        # enabled -- see gateway_anthropic_vertex_kwargs()'s docstring for
+        # why Claude needs the project_id override and the Gemini clients
+        # do not.
+        client_kwargs.update(gateway_anthropic_vertex_kwargs())
+        self.client = AnthropicVertex(**client_kwargs)
         self.token_count = AtomicInteger()
         self.prompt_token_count = AtomicInteger()
         self.completion_token_count = AtomicInteger()

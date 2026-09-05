@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-from src.api.core.security import create_access_token
 from src.api.dependencies import get_review_service
 from src.api.exceptions import JobNotFoundError
 from src.api.exceptions import ReviewNotFoundError
@@ -61,16 +60,19 @@ def mock_review_service():
 def review_client(mock_review_service):
     app.dependency_overrides[get_review_service] = lambda: mock_review_service
 
-    token = create_access_token(
-        {
-            "sub": "user@colt.net",
-            "business_unit": "engineering",
-            "organization": "colt",
-        }
-    )
-
     with TestClient(app, raise_server_exceptions=False) as client:
-        client.headers.update({"x-app-auth": f"Bearer {token}"})
+        # IS_LOCAL=true in tests/test.env, so apigee_auth builds the user
+        # context straight from these x-colt-user-* headers (no Google ID
+        # token verification). See src/api/core/apigee_auth.py.
+        client.headers.update(
+            {
+                "x-colt-user-oid": "test-oid-001",
+                "x-colt-user-email": "user@colt.net",
+                "x-colt-user-roles": "Translation.User",
+                "x-colt-user-department": "engineering",
+                "x-colt-user-company": "colt",
+            }
+        )
         yield client
 
     app.dependency_overrides.pop(get_review_service, None)
@@ -133,14 +135,6 @@ class TestCreateReview:
         # Reset
         mock_review_service.create_review.side_effect = None
         mock_review_service.create_review.return_value = _REVIEW_SUBMIT
-
-    def test_returns_401_without_auth_token(self):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.post(
-                "/api/v1/reviews/test-job-id-001",
-                json={"rating": 3},
-            )
-        assert resp.status_code == 401
 
     def test_comment_is_optional(self, review_client):
         resp = review_client.post(
@@ -218,11 +212,6 @@ class TestGetReviews:
         # Reset
         mock_review_service.get_reviews.side_effect = None
         mock_review_service.get_reviews.return_value = _REVIEW_LIST
-
-    def test_returns_401_without_auth_token(self):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/api/v1/reviews/test-job-id-001")
-        assert resp.status_code == 401
 
     def test_job_id_in_response_matches_request(self, review_client):
         resp = review_client.get("/api/v1/reviews/test-job-id-001")

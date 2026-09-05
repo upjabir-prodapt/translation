@@ -357,6 +357,24 @@ class Settings(BaseSettings):
     LLM_ADAPTIVE_BATCH_MIN_TOKENS: int = 600
     LLM_ADAPTIVE_BATCH_MAX_TOKENS: int = 2500
 
+    # --- LLM gateway (Apigee `llm` env) -----------------------------------
+    # No workload SA in gclt-aicoe-dev-st may hold roles/aiplatform.user
+    # (LLD decision D-30), so this is the only sanctioned path to Vertex AI
+    # from this project. Defaults to disabled -- the `llm` proxy does not
+    # exist yet (GAP-REGISTER R-08); flip on only for a deliberate test.
+    LLM_GATEWAY_ENABLED: bool = False
+    LLM_GATEWAY_BASE_URL: str = ""
+    # Despite the _SECRET suffix (kept to match the shared-dev plan's
+    # naming), this holds the raw Apigee developer-app consumer key value
+    # itself, appended directly into this service's own mounted
+    # /secrets/.env payload -- not a Secret Manager resource name.
+    LLM_GATEWAY_API_KEY_SECRET: str = ""
+    # The central inference project (gclt-aicoe-dev-llm), used only by the
+    # AnthropicVertex (Claude) client -- see src/config/llm_gateway.py's
+    # gateway_anthropic_vertex_kwargs() docstring for why Claude needs this
+    # and the google-genai clients do not.
+    LLM_GATEWAY_VERTEX_PROJECT: str = ""
+
     # Failed units are re-batched in groups of this size before falling back
     # to genuinely one-at-a-time translation.
     LLM_FALLBACK_BATCH_SIZE: int = 10
@@ -433,25 +451,14 @@ class Settings(BaseSettings):
 
     ALLOWED_HOSTS: list[str]
     CORS_ORIGINS: list[str]
-    JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
-    IAP_AUDIENCE: str = ""
-    HUB_IAP_AUDIENCE: str = ""
-    # Entra security group required for Translation entitlement (checked against IAP JWT `groups` claim).
-    TRANSLATION_REQUIRED_GROUP: str = ""
-    # Hard ceiling on a sliding session's total lifetime, measured from the
-    # `auth_time` claim stamped at the original IAP login and preserved
-    # unchanged across every renewal. POST /auth/refresh refuses to mint past
-    # this point, so 8 hours after signing in the user must authenticate with
-    # IAP again regardless of how continuously active they have been.
-    SESSION_ABSOLUTE_MAX_MINUTES: int = 480
-    # When False (rollout default), a token carrying NO `scopes` claim is
-    # accepted for backward compatibility with sessions minted before scopes
-    # existed; a token that *has* `scopes` must still include this service's
-    # own scope. Flip to True once every legacy token has expired -- that is
-    # the step that actually closes the cross-service bypass.
-    REQUIRE_SCOPE_CLAIM: bool = False
+    # Apigee is the sole authority for authentication and authorization (see
+    # apigee_auth.py). Apigee calls this Cloud Run service with a
+    # Google-signed ID token whose audience is this service's own Cloud Run
+    # URL; APIGEE_RUNTIME_SA_EMAIL is the expected `email` claim on that
+    # token. Both are required in cloud (see setup_directories validator
+    # below) -- there is no IAP/JWT/session fallback left in this service.
+    APIGEE_RUNTIME_SA_EMAIL: str = ""
+    CLOUD_RUN_SERVICE_URL: str = ""
 
     # -----------------------------
     # File Limits
@@ -586,13 +593,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def setup_directories(self) -> "Settings":
-        if self.JWT_ALGORITHM.upper() != "HS256":
-            raise ValueError("JWT_ALGORITHM must be HS256")
-        if not self.IS_LOCAL and not self.JWT_SECRET_KEY:
-            raise ValueError("JWT_SECRET_KEY is required when IS_LOCAL is false")
-        # Worker does not use IAP; API and unset role still require it in cloud.
-        if not self.IS_LOCAL and not self.is_worker_role and not self.IAP_AUDIENCE:
-            raise ValueError("IAP_AUDIENCE is required when IS_LOCAL is false")
+        # Worker does not sit behind Apigee; API and unset role still require
+        # these in cloud so apigee_auth.py can verify Apigee's identity token.
+        if not self.IS_LOCAL and not self.is_worker_role and not self.APIGEE_RUNTIME_SA_EMAIL:
+            raise ValueError("APIGEE_RUNTIME_SA_EMAIL is required when IS_LOCAL is false")
+        if not self.IS_LOCAL and not self.is_worker_role and not self.CLOUD_RUN_SERVICE_URL:
+            raise ValueError("CLOUD_RUN_SERVICE_URL is required when IS_LOCAL is false")
 
         # Asset cache dirs are worker-owned (GCS FUSE). Skip when APP_ROLE=api.
         ensure_assets = not self.is_api_role
