@@ -281,6 +281,8 @@ def _classify_blocking(sample: str) -> tuple[DomainClassification, float]:
     from google import genai
     from google.genai import types as genai_types
 
+    from src.config.llm_gateway import gateway_http_options_kwargs
+    from src.config.llm_gateway import gateway_vertex_identity_kwargs
     from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_MODEL
     from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_NAME
     from src.worker.doctranslator.translator.instrumentation import (
@@ -292,8 +294,6 @@ def _classify_blocking(sample: str) -> tuple[DomainClassification, float]:
     )
     from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_TEMPERATURE
     from src.worker.doctranslator.translator.instrumentation import prompt_fingerprint
-    from src.config.llm_gateway import gateway_http_options_kwargs
-    from src.config.llm_gateway import gateway_vertex_identity_kwargs
     from src.worker.doctranslator.translator.invoke import invoke_llm
     from src.worker.doctranslator.translator.usage import TokenUsage
     from src.worker.services.llm_cost_service import get_vertex_llm_cost_service

@@ -595,9 +595,19 @@ class Settings(BaseSettings):
     def setup_directories(self) -> "Settings":
         # Worker does not sit behind Apigee; API and unset role still require
         # these in cloud so apigee_auth.py can verify Apigee's identity token.
-        if not self.IS_LOCAL and not self.is_worker_role and not self.APIGEE_RUNTIME_SA_EMAIL:
-            raise ValueError("APIGEE_RUNTIME_SA_EMAIL is required when IS_LOCAL is false")
-        if not self.IS_LOCAL and not self.is_worker_role and not self.CLOUD_RUN_SERVICE_URL:
+        if (
+            not self.IS_LOCAL
+            and not self.is_worker_role
+            and not self.APIGEE_RUNTIME_SA_EMAIL
+        ):
+            raise ValueError(
+                "APIGEE_RUNTIME_SA_EMAIL is required when IS_LOCAL is false"
+            )
+        if (
+            not self.IS_LOCAL
+            and not self.is_worker_role
+            and not self.CLOUD_RUN_SERVICE_URL
+        ):
             raise ValueError("CLOUD_RUN_SERVICE_URL is required when IS_LOCAL is false")
 
         # Asset cache dirs are worker-owned (GCS FUSE). Skip when APP_ROLE=api.

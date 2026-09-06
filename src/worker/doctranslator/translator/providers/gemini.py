@@ -82,7 +82,9 @@ class GeminiVertexAITranslator(BaseTranslator):
         # `_RETRYABLE_ERROR_SUBSTRINGS`, so `llm_retry` handles them.
         self.client = genai.Client(
             vertexai=True,
-            **gateway_vertex_identity_kwargs(settings.GOOGLE_CLOUD_PROJECT, self.region),
+            **gateway_vertex_identity_kwargs(
+                settings.GOOGLE_CLOUD_PROJECT, self.region
+            ),
             http_options=genai_types.HttpOptions(
                 timeout=int(float(settings.LLM_CALL_TIMEOUT_SECONDS) * 1000),
                 **gateway_http_options_kwargs(),
