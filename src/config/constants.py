@@ -331,6 +331,12 @@ class Settings(BaseSettings):
     LLM_MAX_CONTEXT_LENGTH: int
     LLM_MAX_OUTPUT_TOKENS: int
     LLM_TEMPERATURE: float
+    # Run automatic term extraction BEFORE translation and pin the result
+    # into every batch prompt, so one long document resolves each defined
+    # term once instead of per batch (UAT EC-08, D-03). Costs one extra
+    # round trip before translation starts; set false to restore the older
+    # concurrent extract-and-translate behaviour.
+    TERM_CONSISTENCY_PREPASS_ENABLED: bool = True
     LLM_TRANSLATION_MIN_TEXT_LENGTH: int
     LLM_DISABLE_SAME_TEXT_FALLBACK: bool
 
@@ -516,6 +522,18 @@ class Settings(BaseSettings):
     GCS_RETRY_MAX_SECONDS: int
     GCS_RETRY_MULTIPLIER: int
     LANGUAGE_DETECTION_MAX_CHARS: int
+
+    # Language-detection tuning (see language_detection_core.py). Layer 1
+    # discards text where langdetect is unreliable; layer 2 decides
+    # whether the document is dominated by one language or genuinely
+    # mixed. Defaults are set here so the knobs can be tuned per
+    # environment without a code change.
+    LANGUAGE_DETECTION_MIN_UNIT_CHARS: int = 50
+    LANGUAGE_DETECTION_MIN_UNIT_WORDS: int = 8
+    LANGUAGE_DETECTION_NOISE_SHARE: float = 0.05
+    LANGUAGE_DETECTION_MIN_DOMINANT_SHARE: float = 0.70
+    LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS: int = 500
+
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int
     GOOGLE_DLP_ENABLED: bool
     GOOGLE_DLP_MIN_LIKELIHOOD: str

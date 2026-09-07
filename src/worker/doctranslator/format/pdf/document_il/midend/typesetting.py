@@ -1005,9 +1005,17 @@ class Typesetting:
                         self._commit_layout(paragraph, page, typeset_units, scale)
                         final_typeset_units = typeset_units
                     return scale, final_typeset_units
-            except Exception:
+            except Exception as exc:
                 # 如果布局检查出错，继续尝试下一个缩放因子
-                pass
+                # Only report the first failure per paragraph: the loop retries
+                # ~20 scales and would otherwise emit the same trace 20 times.
+                if not layout_error_logged:
+                    layout_error_logged = True
+                    logger.warning(
+                        f"Typesetting layout attempt failed for paragraph "
+                        f"{paragraph.debug_id} at scale {scale:.2f}; trying a "
+                        f"smaller scale. Error: {type(exc).__name__}: {exc}",
+                    )
 
             # 添加与原 retypeset 一致的逻辑检查
             if not hasattr(paragraph, "debug_id") or not paragraph.debug_id:
@@ -1101,6 +1109,10 @@ class Typesetting:
                 line_skip,
                 use_english_line_break,
             )
+
+        # 所有缩放因子都放不下。默认行为是返回一个空的 composition，
+        # 但这会让该段落在输出 PDF 中被静默丢弃。force 模式下改为以
+        # min_scale 强制排版并提交，接受溢出。
 
         # 最后返回最小缩放因子
         return min_scale, final_typeset_units

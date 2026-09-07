@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 # "translated our own system prompt" result produced by the old behaviour.
 PROMPT_VERSION = "v2"
 
+_client: Any = None
+_cache_enabled: bool | None = None
+
 
 def _get_client():
     """Return the shared worker Redis client (None disables caching).
@@ -58,6 +61,7 @@ def build_cache_key(
     lang_out: str,
     text: str,
     domain: str | None = None,
+    terminology: str | None = None,
 ) -> str:
     """Return a stable, namespaced cache key for one (engine, params, text)
     combination.
@@ -78,6 +82,12 @@ def build_cache_key(
     ]
     if domain and str(domain).strip():
         parts.append(str(domain).strip().lower())
+    if terminology and str(terminology).strip():
+        # The pinned glossary/do-not-translate list changes the prompt, so
+        # it has to change the key too -- otherwise a document translated
+        # under one approved glossary would be served from a cache entry
+        # produced under a different one (UAT EC-01/EC-08 fixes).
+        parts.append(str(terminology))
     parts.append(text)
     payload = "|".join(parts)
     digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()

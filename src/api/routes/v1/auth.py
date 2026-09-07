@@ -141,7 +141,8 @@ async def create_auth_token(
     response: Response,
     identity: Annotated[IapIdentity, Depends(_require_translation_group)],
 ) -> AuthTokenResponse:
-    """Issue JWT using verified IAP identity and user-provided cost attribution.
+    """
+    Issue JWT using verified IAP identity and user-provided cost attribution.
 
     Sets the JWT as an httpOnly session cookie (primary, XSS-resistant
     transport) in addition to returning it in the response body. The body

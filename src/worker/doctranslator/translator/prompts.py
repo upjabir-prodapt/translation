@@ -6,6 +6,29 @@ from src.config.domain_prompts import get_domain_prompt_block
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 
+# Rules that keep identifiers, product names and numeric literals byte-identical
+# through translation. Shared by the batch prompt and the single-unit prompt.
+#
+# UAT EC-01 (D-04): "IP VPN" came back as "IP-VPN", "Dedicated Cloud Access"
+# was translated into Japanese, and "99.99%" was localised to "99,99 %".
+# The edge-case pack's expected result is that all three appear unchanged, so
+# the numeric rule here deliberately overrides target-locale number
+# formatting -- see the UAT report's open point O-1 if the business would
+# rather have locale-correct numerals.
+VERBATIM_RULES = (
+    "- Product, service and network names, and technical acronyms: copy them "
+    "exactly as written, including internal spacing, hyphenation and case "
+    "(e.g. a name written with a space keeps the space, an acronym is never "
+    "expanded or translated).\n"
+    "- Identifiers of every kind: ticket and case references, site and host "
+    "codes, file paths, CLI commands, YAML keys, CIDR blocks, regular "
+    "expressions, URLs and e-mail addresses -- character for character.\n"
+    "- Numeric literals: keep every digit and every separator exactly as in "
+    "the source. Do not swap a decimal point for a comma or vice versa, do "
+    "not change thousands separators, and do not add or remove a space "
+    "before a percent sign.\n"
+)
+
 
 def build_translation_prompt(
     text: str,
@@ -67,11 +90,13 @@ def build_translation_prompt(
         "- Widely recognized trademarks and person names when localization would be wrong; "
         "otherwise follow normal target‑language usage.\n"
         "- If a substring is already correct and natural in the target language (e.g. a lone symbol, "
-        "a code, or a no‑translate token), return it unchanged.\n\n"
+        "a code, or a no‑translate token), return it unchanged.\n"
+        f"{VERBATIM_RULES}"
+        "\n"
         "# Numbers, dates, and units\n"
-        "- Keep mathematical or identifier numbers exact unless the source clearly expects localization.\n"
-        f"- For dates, currencies, and units, use the conventional form for {lang_out} when unambiguous; "
-        "otherwise preserve the source form.\n\n"
+        "- Keep mathematical or identifier numbers exact.\n"
+        f"- Date wording and unit names may take the conventional {lang_out} form, but the digits "
+        "and separators of any numeric literal are copied exactly as written in the source.\n\n"
         "# Quality bar\n"
         f"- Even when you rephrase idiomatically for {lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
         "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "

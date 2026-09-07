@@ -46,46 +46,102 @@ from lxml import etree
 _SKIP_NOTE_TYPES = {"separator", "continuationSeparator", "continuationNotice"}
 
 
-class _HyperlinkRunsProxy:
-    """Duck-typed stand-in for `Paragraph`, scoped to one `w:hyperlink`'s own runs.
+# Run children that carry document structure rather than translatable text.
+# A run holding one of these and no text of its own is a *reference run* --
+# a footnote/endnote/comment mark, a field code, an image, a drawing -- and
+# must survive translation untouched. See `_is_reference_run()`.
+_STRUCTURAL_RUN_CHILDREN = frozenset(
+    qn(tag)
+    for tag in (
+        "w:footnoteReference",
+        "w:endnoteReference",
+        "w:commentReference",
+        "w:footnoteRef",
+        "w:endnoteRef",
+        "w:annotationRef",
+        "w:fldChar",
+        "w:instrText",
+        "w:drawing",
+        "w:pict",
+        "w:object",
+        "w:separator",
+        "w:continuationSeparator",
+        "w:sym",
+    )
+)
 
-    Lets `write_translated_text()` treat a hyperlink's display text exactly
-    like a tiny paragraph -- same "first run keeps formatting, extra runs
-    removed" logic -- via the `.runs` / `.add_run()` contract, without ever
-    touching the `w:hyperlink` element itself or its `r:id` relationship. The
-    link target and its clickability therefore survive untouched
-    (implementation_plan.md D.2.2/D.2.3).
+
+def _is_reference_run(run: Run) -> bool:
+    """True when `run` carries structure (a reference mark, field code or
+    drawing) and no text of its own.
+
+    UAT EC-03 (D-01/D-02): `write_translated_text()` used to delete every run
+    after the first, which silently destroyed exactly these runs. A paragraph
+    carrying a footnote lost its `w:footnoteReference`, so the translated
+    footnote text survived in footnotes.xml with nothing in the body pointing
+    at it; a paragraph opening a table-of-contents field lost its
+    `w:fldChar`/`w:instrText` runs, so the ToC field was dismantled into flat
+    text that Word can no longer refresh or use for navigation.
+
+    A run holding *both* structure and real text (e.g. `w:tab` + `w:t` in a
+    ToC entry's page-number run) is deliberately NOT treated as a reference
+    run: its text is part of the unit that was sent for translation, so the
+    translation already reproduces it and keeping the run would duplicate it.
+    """
+    element = run._element  # noqa: SLF001
+    if any(t.text and t.text.strip() for t in element.findall(qn("w:t"))):
+        return False
+    return any(child.tag in _STRUCTURAL_RUN_CHILDREN for child in element)
+
+
+class _ScopedRunsProxy:
+    """Duck-typed stand-in for `Paragraph`, scoped to one container's own runs.
+
+    Lets `write_translated_text()` treat the runs inside a `w:hyperlink`,
+    `w:ins` or `w:fldSimple` element exactly like a tiny paragraph -- same
+    "first text run keeps its formatting, other text runs removed" logic --
+    via the `.runs` / `.add_run()` contract, without ever touching the
+    container element itself. A hyperlink therefore keeps its `r:id`
+    relationship and stays clickable (implementation_plan.md D.2.2/D.2.3), a
+    tracked insertion keeps its author/date revision metadata, and a field
+    keeps its instruction.
     """
 
-    def __init__(self, hyperlink_element, parent_paragraph: Paragraph) -> None:
-        self._hyperlink = hyperlink_element
+    def __init__(self, container_element, parent_paragraph: Paragraph) -> None:
+        self._container = container_element
         self._parent_paragraph = parent_paragraph
 
     @property
     def runs(self) -> list[Run]:
         return [
-            Run(r, self._parent_paragraph) for r in self._hyperlink.findall(qn("w:r"))
+            Run(r, self._parent_paragraph) for r in self._container.findall(qn("w:r"))
         ]
 
     def add_run(self, text: str) -> Run:
         r_element = OxmlElement("w:r")
-        self._hyperlink.append(r_element)
+        self._container.append(r_element)
         run = Run(r_element, self._parent_paragraph)
         run.text = text
         return run
 
 
+# Retained name: `_HyperlinkRunsProxy` was the original, hyperlink-only
+# version of `_ScopedRunsProxy` and is referenced by existing tests.
+_HyperlinkRunsProxy = _ScopedRunsProxy
+
+
 @dataclass(slots=True)
 class TranslatableUnit:
-    """One paragraph (or hyperlink run) eligible for translation, with a stable id."""
+    """One paragraph (or scoped run group) eligible for translation, with a stable id."""
 
     unit_id: int
-    # `Paragraph` for ordinary units; `_HyperlinkRunsProxy` for "hyperlink"
-    # units. Both expose the `.runs` / `.add_run()` contract that
-    # `write_translated_text()` relies on.
-    paragraph: Paragraph | _HyperlinkRunsProxy
+    # `Paragraph` for ordinary units; `_ScopedRunsProxy` for the runs held
+    # inside a hyperlink, tracked insertion or simple field. Both expose the
+    # `.runs` / `.add_run()` contract that `write_translated_text()` relies on.
+    paragraph: Paragraph | _ScopedRunsProxy
     label: str  # "header" | "footer" | "title" | "text" | "table_cell"
     # | "text_box" | "footnote" | "endnote" | "hyperlink"
+    # | "tracked_insert" | "field_text"
     text: str
 
 
@@ -120,6 +176,39 @@ def _guess_label(paragraph: Paragraph, *, default: str) -> str:
 
 def _paragraph_text(paragraph: Paragraph) -> str:
     return paragraph.text or ""
+
+
+# Elements that hold their own `w:r` runs inside a paragraph. python-docx
+# models none of them, so their text appears in neither `Paragraph.text` nor
+# `Paragraph.runs` -- each therefore becomes its own unit with a
+# `_ScopedRunsProxy` for write-back.
+#
+# `w:del` is deliberately absent: its `w:delText` is content the author has
+# already deleted, is not part of the readable document, and must not be
+# rewritten.
+_SCOPED_RUN_CONTAINERS: tuple[tuple[str, str], ...] = (
+    ("w:hyperlink", "hyperlink"),
+    # UAT EC-03 (D-07): a tracked insertion's text used to be neither
+    # translated nor dropped -- it was carried into the output still in the
+    # source language, making the delivered document silently bilingual.
+    ("w:ins", "tracked_insert"),
+    # UAT EC-03 (D-08): the cached result of a simple field (a table of
+    # contents, a cross-reference, a STYLEREF header) is real visible text
+    # and was previously delivered untranslated. Numeric field results (PAGE,
+    # NUMPAGES) are filtered out later by the translator's numeric pre-filter.
+    ("w:fldSimple", "field_text"),
+)
+
+
+def _scoped_run_containers(paragraph: Paragraph) -> list[tuple[object, str]]:
+    """Return `(element, label)` for every scoped run container in `paragraph`."""
+    found: list[tuple[object, str]] = []
+    for tag, label in _SCOPED_RUN_CONTAINERS:
+        found.extend(
+            (element, label)
+            for element in paragraph._p.findall(qn(tag))  # noqa: SLF001
+        )
+    return found
 
 
 def _iter_txbx_paragraphs(container_element):
@@ -169,13 +258,14 @@ def extract_units(
 
     def _add(paragraph: Paragraph, label: str) -> None:
         nonlocal next_id
-        hyperlinks = paragraph._p.findall(qn("w:hyperlink"))  # noqa: SLF001
-        if hyperlinks:
-            # D.2.2/D.2.3: split the hyperlink's display text out into its
+        containers = _scoped_run_containers(paragraph)
+        if containers:
+            # D.2.2/D.2.3: split each scoped container's text out into its
             # own unit so it can be translated and written back
-            # independently, instead of duplicating it (paragraph.text
-            # folds hyperlink text in, but paragraph.runs/write-back does
-            # not touch the hyperlink element at all).
+            # independently, instead of being duplicated or missed. None of
+            # `w:hyperlink`, `w:ins` or `w:fldSimple` contributes to
+            # `paragraph.text` or `paragraph.runs` in python-docx, so text
+            # inside them is invisible to the ordinary paragraph path.
             own_text = "".join(run.text for run in paragraph.runs)
             if own_text.strip():
                 units.append(
@@ -187,18 +277,18 @@ def extract_units(
                     )
                 )
                 next_id += 1
-            for hyperlink in hyperlinks:
-                hyperlink_text = "".join(
-                    r.text or "" for r in hyperlink.findall(qn("w:r"))
+            for container, container_label in containers:
+                container_text = "".join(
+                    r.text or "" for r in container.findall(qn("w:r"))
                 )
-                if not hyperlink_text.strip():
+                if not container_text.strip():
                     continue
                 units.append(
                     TranslatableUnit(
                         unit_id=next_id,
-                        paragraph=_HyperlinkRunsProxy(hyperlink, paragraph),
-                        label="hyperlink",
-                        text=hyperlink_text,
+                        paragraph=_ScopedRunsProxy(container, paragraph),
+                        label=container_label,
+                        text=container_text,
                     )
                 )
                 next_id += 1
@@ -317,14 +407,20 @@ def flush_note_parts(note_parts: list[NotePartRef]) -> None:
 def write_translated_text(unit: TranslatableUnit, translated_text: str) -> None:
     """Replace a unit's text with the translated string.
 
-    Keeps the unit's FIRST run's formatting (font, bold, italic, size,
-    color, language) and removes any additional runs -- this preserves
+    Keeps the unit's first TEXT run's formatting (font, bold, italic, size,
+    color, language) and removes the other text runs -- this preserves
     paragraph-level fidelity (alignment, list numbering, style, table cell
     membership) but does not preserve character-level mixed formatting
     *within* one paragraph (e.g. a single bold word mid-sentence). This is
     a documented, intentional v1 tradeoff.
 
-    For a "hyperlink" unit (`unit.paragraph` is a `_HyperlinkRunsProxy`),
+    Reference runs -- footnote, endnote and comment marks, field codes
+    (`w:fldChar`/`w:instrText`), drawings and embedded objects -- are left
+    exactly where they are; see `_is_reference_run()` for why deleting them
+    corrupted footnotes and tables of contents (UAT EC-03, D-01/D-02).
+
+    For a scoped unit (`unit.paragraph` is a `_ScopedRunsProxy` over a
+    hyperlink, tracked insertion or simple field),
     only the hyperlink's own inner run(s) are touched -- the `w:hyperlink`
     element and its relationship (i.e. the URL) are never modified, so the
     link keeps working with translated display text
@@ -335,15 +431,15 @@ def write_translated_text(unit: TranslatableUnit, translated_text: str) -> None:
     are never touched -- only run text within this unit is mutated.
     """
     paragraph = unit.paragraph
-    runs = paragraph.runs
-    if not runs:
-        # No runs (rare: e.g. purely field-code paragraph, or an emptied-out
-        # hyperlink) -- add a single run with the translated text.
+    text_runs = [run for run in paragraph.runs if not _is_reference_run(run)]
+    if not text_runs:
+        # No text-bearing run (rare: e.g. a paragraph that is only a field
+        # code or an emptied-out hyperlink) -- add one for the translation.
         paragraph.add_run(translated_text)
         return
 
-    first_run = runs[0]
+    first_run = text_runs[0]
     first_run.text = translated_text
-    for extra_run in runs[1:]:
+    for extra_run in text_runs[1:]:
         extra_run.text = ""
         extra_run._element.getparent().remove(extra_run._element)  # noqa: SLF001

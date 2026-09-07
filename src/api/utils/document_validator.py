@@ -67,10 +67,14 @@ class DocumentValidator:
     def _size_check(content: bytes) -> None:
         """Enforce the 10 MB upload limit shared by every document format.
 
-        Mirrors `PDFValidator.validate_pdf_bytes`'s `>=` check so PDF,
-        DOCX and TXT all reject an at-the-limit file identically.
+        UAT EC-05 (D-05): this used `>=`, so a file of exactly
+        `MAX_FILE_SIZE` bytes was refused with a message claiming it
+        *exceeded* a limit it merely equalled. A documented limit is
+        inclusive -- at-limit input must succeed, and only the first byte
+        past it fails. `PDFValidator` carries the same fix so all three
+        formats agree.
         """
-        if len(content) >= settings.MAX_FILE_SIZE:
+        if len(content) > settings.MAX_FILE_SIZE:
             max_mb = settings.MAX_FILE_SIZE / (1024 * 1024)
             raise ValidationError(f"File size exceeds {max_mb:.0f}MB limit", "size")
 
@@ -173,9 +177,14 @@ class DocumentValidator:
             ) from e
 
         if not decoded.strip():
+            # UAT EC-05 (D-06): whitespace-only input used to borrow the
+            # DOCX "images only" wording, which is nonsense for a text
+            # submission -- there is no image and no document, the user
+            # submitted a space or a tab.
             raise ValidationError(
-                "This document contains no translatable text (images only).",
-                "no_text_layer",
+                "There is no text to translate. Please enter or paste some "
+                "text and try again.",
+                "empty_text",
             )
 
         checksum = hashlib.sha256(content).hexdigest()

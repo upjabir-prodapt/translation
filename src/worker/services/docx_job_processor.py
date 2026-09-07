@@ -47,6 +47,22 @@ from src.worker.services.token_verification_service import verify_protected_toke
 logger = logging.getLogger(__name__)
 
 
+def _glossary_terms(glossaries) -> list[tuple[str, str]]:
+    """Flatten loaded `Glossary` objects into ordered (source, target) pairs.
+
+    An entry whose target equals its source is a do-not-translate term --
+    see `build_binding_terminology_block`.
+    """
+    pairs: list[tuple[str, str]] = []
+    for glossary in glossaries or []:
+        for entry in getattr(glossary, "entries", []) or []:
+            source = str(getattr(entry, "source", "") or "").strip()
+            target = str(getattr(entry, "target", "") or "").strip()
+            if source and target:
+                pairs.append((source, target))
+    return pairs
+
+
 class DocxJobProcessor:
     """Runs the model-attempt loop for native DOCX translation."""
 
@@ -115,6 +131,12 @@ class DocxJobProcessor:
             config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
         )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
+        glossary_terms = _glossary_terms(config.get("glossaries"))
+        if glossary_terms:
+            logger.info(
+                f"[docx] job={job_id} pinning {len(glossary_terms)} approved "
+                "domain-glossary term(s) into every translation batch"
+            )
         enable_judge = bool(
             config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
@@ -177,6 +199,7 @@ class DocxJobProcessor:
                     enable_dlp=enable_dlp,
                     auto_extract_glossary=auto_extract_glossary,
                     extracted_terms=cached_extracted_terms,
+                    glossary_terms=glossary_terms,
                     dlp_result=cached_dlp_result,
                 )
                 if cached_extracted_terms is None and result.extracted_terms:

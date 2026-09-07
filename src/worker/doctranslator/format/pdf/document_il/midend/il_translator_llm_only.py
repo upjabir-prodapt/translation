@@ -46,7 +46,7 @@ from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper impo
 )
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
-from src.worker.doctranslator.translator.prompt_safety import looks_like_prompt_leak
+from src.worker.doctranslator.translator.prompt_safety import find_leak_marker
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
@@ -837,14 +837,22 @@ class ILTranslatorLLMOnly:
         llm_translate_tracker,
     ) -> bool:
         """Check translation quality heuristics. Returns True if should fallback."""
-        if looks_like_prompt_leak(output_unicode):
+        leak_marker = find_leak_marker(output_unicode)
+        if leak_marker is not None:
             # implementation_plan.md D.4.2: defense-in-depth output guard --
             # mirrors the DOCX pipeline's equivalent check in
             # paragraph_translator.py._validate_translation(). Treated
             # exactly like any other quality failure: falls back rather
             # than ever being written into the translated PDF.
-            llm_translate_tracker.set_error_message(PROMPT_LEAK_REASON)
-            logger.warning(PROMPT_LEAK_REASON)
+            #
+            # UAT EC-01 (D-10): the marker is named so a phrase collision
+            # can be told apart from a real leak. The text is never logged.
+            message = (
+                f"Translation result echoes the system-prompt marker {leak_marker!r}, "
+                "possible injection attempt or leak, fallback."
+            )
+            llm_translate_tracker.set_error_message(message)
+            logger.warning(message)
             llm_translate_tracker.set_placeholder_full_match()
             return True
 
