@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.worker.services.language_detection_core import MixedLanguageError
 from src.worker.services.processor_service import JobProcessor
 from src.worker.services.processor_service import _job_runtime_root
 
@@ -175,14 +176,7 @@ class TestJobProcessorCore:
             with pytest.raises(ValueError, match="no extractable text layer"):
                 processor.detect_source_language("dummy.pdf")
 
-    def test_max_distinct_languages_per_page_message_matches_constant(self, processor):
-        """C.3.1/C.6.5: the guard message must render the real constant
-        value, not a hardcoded '2' (the bug: message said "more than 2
-        languages" while the constant was actually 10)."""
-        many_languages = {
-            f"lang{i}": 100
-            for i in range(processor.MAX_DISTINCT_LANGUAGES_PER_PAGE + 1)
-        }
+    def _detect_with_page_counter(self, processor, page_counter: Counter):
         mock_page = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__iter__.return_value = [mock_page]
@@ -194,16 +188,41 @@ class TestJobProcessorCore:
             patch.object(
                 processor,
                 "_detect_page_languages",
-                return_value=(Counter(many_languages), 1000),
+                return_value=(page_counter, sum(page_counter.values())),
             ),
         ):
-            with pytest.raises(
-                ValueError,
-                match=(
-                    f"more than {processor.MAX_DISTINCT_LANGUAGES_PER_PAGE} languages"
-                ),
-            ):
-                processor.detect_source_language("dummy.pdf")
+            return processor.detect_source_language("dummy.pdf")
+
+    def test_many_incidental_languages_do_not_reject_monolingual_document(
+        self, processor
+    ):
+        """The distinct-language count no longer decides anything.
+
+        This is the real-world regression: a monolingual English
+        brochure whose pages contain all-caps headings and proper-noun
+        runs registers a dozen residual languages, each a rounding error
+        by character share. It must translate as English, not fail.
+        """
+        page_counter = Counter({"en": 5000})
+        page_counter.update({f"lang{i}": 100 for i in range(12)})
+
+        assert self._detect_with_page_counter(processor, page_counter) == "en"
+
+    def test_genuinely_mixed_document_is_rejected(self, processor):
+        """A document actually split between two languages still fails:
+        neither one covers MIN_DOMINANT_LANGUAGE_SHARE of the text, so
+        translating it from a single source language would silently
+        mistranslate roughly half of it."""
+        with pytest.raises(MixedLanguageError, match="mixed-language"):
+            self._detect_with_page_counter(processor, Counter({"en": 5000, "fr": 4500}))
+
+    def test_dominant_language_with_real_minority_content_is_accepted(self, processor):
+        """A clear majority language wins even with a substantial (but
+        minority) second language -- 80/20 translates as `en`."""
+        assert (
+            self._detect_with_page_counter(processor, Counter({"en": 8000, "fr": 2000}))
+            == "en"
+        )
 
     def test_detect_source_language_with_distribution_returns_full_counter(
         self, processor
