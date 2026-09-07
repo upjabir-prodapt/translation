@@ -416,6 +416,18 @@ class Settings(BaseSettings):
     GCS_RETRY_MAX_SECONDS: int
     GCS_RETRY_MULTIPLIER: int
     LANGUAGE_DETECTION_MAX_CHARS: int
+
+    # Language-detection tuning (see language_detection_core.py). Layer 1
+    # discards text where langdetect is unreliable; layer 2 decides
+    # whether the document is dominated by one language or genuinely
+    # mixed. Defaults are set here so the knobs can be tuned per
+    # environment without a code change.
+    LANGUAGE_DETECTION_MIN_UNIT_CHARS: int = 50
+    LANGUAGE_DETECTION_MIN_UNIT_WORDS: int = 8
+    LANGUAGE_DETECTION_NOISE_SHARE: float = 0.05
+    LANGUAGE_DETECTION_MIN_DOMINANT_SHARE: float = 0.70
+    LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS: int = 500
+
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int
     GOOGLE_DLP_ENABLED: bool
     GOOGLE_DLP_MIN_LIKELIHOOD: str
