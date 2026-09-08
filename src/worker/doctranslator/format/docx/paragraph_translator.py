@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
 from typing import Any
@@ -25,6 +26,7 @@ import tiktoken
 from src.config.constants import settings
 from src.config.domain_prompts import get_domain_prompt_block
 from src.config.domain_prompts import get_domain_prompt_profile
+from src.config.language_prompts import build_secondary_language_block
 from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
@@ -152,7 +154,16 @@ def _build_prompt(
     batch: list[TranslatableUnit],
     lang_out: str,
     domain: str | None = None,
+    lang_in: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> str:
+    """Build the DOCX batch translation prompt.
+
+    `lang_in` is used only to render the mixed-language block: this prompt
+    otherwise names no source language at all, which is exactly why a
+    minority-language paragraph used to be translated as though it were
+    written in the dominant language.
+    """
     json_input = [
         {"id": unit.unit_id, "input": unit.text, "layout_label": unit.label}
         for unit in batch
@@ -163,10 +174,17 @@ def _build_prompt(
     domain_desc = f" in {profile.display_name}" if profile else ""
     domain_block = get_domain_prompt_block(domain)
     domain_section = f"{domain_block}\n\n" if domain_block else ""
+    secondary_block = build_secondary_language_block(
+        secondary_languages or (),
+        primary_language=lang_in or "",
+        target_language=lang_out,
+    )
+    secondary_section = f"{secondary_block}\n" if secondary_block else ""
 
     return (
         f"You are a professional {lang_out} native translator who specializes{domain_desc} "
         f"and fluently translates text into {lang_out}.\n\n"
+        f"{secondary_section}"
         f"{domain_section}"
         "## Structure Rules\n"
         "1. Keep the same number of items as the input.\n"
@@ -199,6 +217,13 @@ class DocxParagraphTranslator:
         self.translate_engine = translate_engine
         self.lang_out = lang_out
         self.domain = domain or getattr(translate_engine, "domain", None)
+        # Same route as `domain` above: read off the engine, which
+        # `create_translator` populated from the job config. Avoids
+        # threading two more arguments through `translate_docx`.
+        self.lang_in = getattr(translate_engine, "lang_in", None)
+        self.secondary_languages = list(
+            getattr(translate_engine, "secondary_languages", None) or []
+        )
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         except Exception:
@@ -459,7 +484,13 @@ class DocxParagraphTranslator:
         validation and decides what still needs a singleton retry. Raises on
         transport/parse failure so the caller can defer the whole group.
         """
-        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
+        prompt = _build_prompt(
+            batch,
+            self.lang_out,
+            domain=self.domain,
+            lang_in=self.lang_in,
+            secondary_languages=self.secondary_languages,
+        )
         raw = self.translate_engine.llm_translate(
             prompt,
             response_schema=BatchTranslationResponse,
@@ -514,7 +545,13 @@ class DocxParagraphTranslator:
 
     def _translate_batch(self, batch: list[TranslatableUnit]) -> dict[int, str]:
         """Translate one batch; returns {unit_id: translated_text}."""
-        prompt = _build_prompt(batch, self.lang_out, domain=self.domain)
+        prompt = _build_prompt(
+            batch,
+            self.lang_out,
+            domain=self.domain,
+            lang_in=self.lang_in,
+            secondary_languages=self.secondary_languages,
+        )
         results: dict[int, str] = {}
         try:
             llm_output = self.translate_engine.llm_translate(
@@ -619,6 +656,11 @@ class DocxParagraphTranslator:
             lang_in=str(getattr(engine, "lang_in", "")),
             lang_out=self.lang_out,
             text=unit.text,
+            # The mixed-language block is part of the prompt, so a unit
+            # translated without it must not be served to a job that has
+            # it. Empty on a monolingual document, which leaves this key
+            # byte-identical to what it was.
+            secondary_languages=self.secondary_languages,
         )
 
     def _split_cache_hits(

@@ -104,6 +104,14 @@ class DocxJobProcessor:
         lang_in = config["lang_in"]
         lang_out = config["lang_out"]
         domain = config.get("domain", "")
+        # Minority languages detection found. Carried on the translator
+        # rather than threaded through translate_docx(): the DOCX prompt
+        # builder already reads `domain` off the engine when not given one
+        # explicitly, so this follows the same route.
+        secondary_languages = [
+            (str(code), float(share))
+            for code, share in (config.get("secondary_languages") or [])
+        ]
         model_list: list[ModelRoute] | list[str] = config.get("model_list", [])
         if not model_list:
             raise ValueError("model_list is required for DOCX translation")
@@ -157,6 +165,7 @@ class DocxJobProcessor:
                     qps=settings.TRANSLATION_MAX_QPS,
                     region=selected_region,
                     domain=domain,
+                    secondary_languages=secondary_languages,
                 )
                 # translate_docx() is fully synchronous and CPU/network bound
                 # (python-docx parsing plus many blocking LLM calls). Calling

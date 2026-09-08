@@ -4,17 +4,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from src.worker.services.language_detection_core import aggregate_languages
-from src.worker.services.language_detection_core import detect_language_for_text
-from src.worker.services.language_detection_core import is_detectable_text
+from src.worker.services.language_detection_core import count_unit_languages
+from src.worker.services.language_detection_core import detect_language_of_joined_text
+from src.worker.services.language_detection_core import resolve_dominant_language
 from src.worker.services.processor_service import JobProcessor
 from src.worker.services.progress_tracker import ProgressTracker
-
-# DOCX/TXT have no fixed "page" concept the way a PDF does (text
-# reflows), so the per-page MAX_DISTINCT_LANGUAGES_PER_PAGE guard's
-# closest equivalent here is applied across the whole document's
-# aggregated language set (implementation_plan.md Phase C.2.2).
-MAX_DISTINCT_LANGUAGES_PER_DOCUMENT = 10
 
 
 class _NoopUpdater:
@@ -25,7 +19,7 @@ class _NoopUpdater:
 
 
 class LanguageDetectionService:
-    """Detect source language using langdetect-backed processor."""
+    """Detect source language using the lingua-backed processor."""
 
     def __init__(self):
         tracker = ProgressTracker(updater=_NoopUpdater(), job_id="detector")
@@ -69,47 +63,34 @@ class LanguageDetectionService:
         implementation_plan.md Phase C.2.1: brings DOCX/TXT detection to
         parity with the PDF pipeline's per-block, confidence-floored,
         char-weighted aggregation. Previously this ran a single
-        `detect_langs()` call over the whole concatenated document with
+        detection call over the whole concatenated document with
         **no confidence floor at all** -- the root cause of the EC-09
         defect (short/ambiguous text like "Information" or "OK" got a
         confident-looking but unreliable guess accepted outright).
 
         Returns `(dominant_language, full_language_counter)` -- see
         Phase C.5.1.
+
+        The old "more than N distinct languages" guard is gone; a
+        document is now rejected only when no single language dominates
+        its text, decided by the shared `resolve_dominant_language()` so
+        DOCX/TXT and PDF apply one rule (see language_detection_core.py).
         """
-        language_counter: Counter[str] = Counter()
-        processed_chars = 0
-        max_chars = self._processor.MAX_DETECTION_CHARS
-        for text in texts:
-            normalized = " ".join(text.split())
-            if not is_detectable_text(normalized):
-                continue
-            detected = detect_language_for_text(normalized)
-            if detected is None:
-                continue
-            language_counter[detected] += len(normalized)
-            processed_chars += len(normalized)
-            if processed_chars >= max_chars:
-                break
+        normalized_units = [" ".join(text.split()) for text in texts]
+        language_counter, _ = count_unit_languages(
+            normalized_units, max_chars=self._processor.MAX_DETECTION_CHARS
+        )
+        if not language_counter:
+            # Every unit was too short or too name-heavy to trust on its
+            # own -- common for form-like DOCX and bullet-only decks.
+            # Retry across the concatenated text before giving up.
+            language_counter = detect_language_of_joined_text(normalized_units)
 
-        if len(language_counter) > MAX_DISTINCT_LANGUAGES_PER_DOCUMENT:
-            detected = ", ".join(sorted(language_counter))
-            raise ValueError(
-                f"Detected more than {MAX_DISTINCT_LANGUAGES_PER_DOCUMENT} "
-                f"languages in {source_label}: {detected}"
-            )
-
-        winner = aggregate_languages(language_counter)
-        if winner is None:
-            # C.2.3: same class of user-facing message as the PDF
-            # pipeline's no-text-layer rejection -- ask the user to
-            # choose explicitly rather than silently mistranslating a
-            # confident-looking but low-quality guess (EC-09).
-            raise ValueError(
-                f"Unable to detect a source language: no sufficiently long, "
-                f"confidently detectable text was found in {source_label}. "
-                "Please choose the source language explicitly."
-            )
+        # Raises MixedLanguageError for a genuinely multilingual
+        # document, or ValueError asking the caller to choose the source
+        # language explicitly when nothing detectable was found (C.2.3 /
+        # EC-09).
+        winner = resolve_dominant_language(language_counter, source_label=source_label)
         return winner, language_counter
 
     def _detect_docx(self, input_path: Path) -> str:

@@ -423,6 +423,7 @@ class TranslationConfig:
         ocr_workaround: bool = False,
         custom_system_prompt: str | None = None,
         domain: str | None = None,
+        secondary_languages: list[tuple[str, float]] | None = None,
         add_formula_placehold_hint: bool = False,
         glossaries: list[Glossary] | None = None,
         pool_max_workers: int | None = None,
@@ -524,6 +525,11 @@ class TranslationConfig:
         self.show_char_box = show_char_box
         self.custom_system_prompt = custom_system_prompt
         self.domain = domain
+        # Minority languages detection found in this document, as
+        # (code, share) pairs, rendered into the PDF translation prompts
+        # so the model translates each segment from the language it is
+        # actually written in (see config/language_prompts.py).
+        self.secondary_languages = list(secondary_languages or [])
         self.add_formula_placehold_hint = add_formula_placehold_hint
         self.auto_enable_ocr_workaround = auto_enable_ocr_workaround
         self._init_feature_flags(

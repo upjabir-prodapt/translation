@@ -512,6 +512,35 @@ class Settings(BaseSettings):
     GCS_RETRY_MAX_SECONDS: int
     GCS_RETRY_MULTIPLIER: int
     LANGUAGE_DETECTION_MAX_CHARS: int
+
+    # Language-detection tuning (see language_detection_core.py). Layer 1
+    # discards text that carries no reliable language signal; layer 2 decides
+    # whether the document is dominated by one language or genuinely
+    # mixed. Defaults are set here so the knobs can be tuned per
+    # environment without a code change.
+    LANGUAGE_DETECTION_MIN_UNIT_CHARS: int = 50
+    LANGUAGE_DETECTION_MIN_UNIT_WORDS: int = 8
+    LANGUAGE_DETECTION_NOISE_SHARE: float = 0.05
+    LANGUAGE_DETECTION_MIN_DOMINANT_SHARE: float = 0.70
+    LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS: int = 500
+
+    # Secondary-language prompt hint (see language_prompts.py). When the
+    # document is not purely monolingual, the minority languages detection
+    # found are named in the translation prompt and the model is told to
+    # translate each segment from whichever of them it is actually written
+    # in, instead of translating every segment from the dominant language.
+    #
+    # Only reachable on jobs that survive the mixed-language guard: with
+    # LANGUAGE_MISMATCH_CHECK_ENABLED=true and
+    # LANGUAGE_MIXED_MAX_SECONDARY_SHARE=0.0 (the defaults), such a
+    # document is rejected before translation and this never renders.
+    MIXED_LANGUAGE_PROMPT_HINT_ENABLED: bool = True
+    # Far below LANGUAGE_DETECTION_NOISE_SHARE on purpose: the languages
+    # this hint exists to rescue are the ones the mixed-language decision
+    # treats as incidental (a real English cover page measured 1.8%).
+    MIXED_LANGUAGE_PROMPT_MIN_SHARE: float = 0.005
+    MIXED_LANGUAGE_PROMPT_MAX_LANGUAGES: int = 4
+
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int
     GOOGLE_DLP_ENABLED: bool
     GOOGLE_DLP_MIN_LIKELIHOOD: str

@@ -24,6 +24,7 @@ from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode
 
 from src.config.constants import settings
+from src.config.language_prompts import select_secondary_languages
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
@@ -517,6 +518,47 @@ class PipelineOrchestrator:
             prepared.detected_language_distribution,
         )
 
+    def _secondary_prompt_languages(
+        self,
+        *,
+        job_id: str,
+        language_distribution: Counter[str],
+        source_lang: str,
+        target_lang: str,
+    ) -> list[tuple[str, float]]:
+        """Minority languages to name in the translation prompt.
+
+        The document is translated from one source language, so any segment
+        written in another language would otherwise be translated from the
+        wrong one. Naming those languages in the prompt lets the model
+        translate each segment from whichever it is actually in -- a
+        prompt-level fix, with no per-segment routing or re-detection (see
+        language_prompts.py).
+
+        Returns `[]` when the hint is switched off, when detection produced
+        nothing, or when the document is monolingual, in which case every
+        prompt below is left exactly as it was.
+        """
+        if not settings.MIXED_LANGUAGE_PROMPT_HINT_ENABLED:
+            return []
+
+        secondary = select_secondary_languages(
+            language_distribution,
+            primary_language=source_lang,
+            target_language=target_lang,
+            min_share=float(settings.MIXED_LANGUAGE_PROMPT_MIN_SHARE),
+            max_languages=int(settings.MIXED_LANGUAGE_PROMPT_MAX_LANGUAGES),
+        )
+        if secondary:
+            logger.info(
+                "Job %s: prompting for %d secondary language(s) alongside '%s': %s",
+                job_id,
+                len(secondary),
+                source_lang,
+                {code: round(share, 4) for code, share in secondary},
+            )
+        return secondary
+
     def _assert_language_matches(
         self,
         *,
@@ -952,6 +994,19 @@ class PipelineOrchestrator:
             is_docx = source_doc.get("format") == "docx" or is_txt
 
             current_stage = "translate"
+            # Minority languages worth naming in the translation prompt, so
+            # the model translates those segments from the language they are
+            # actually in rather than from the dominant one. Keyed on
+            # `source_lang` (the declared, routed language) rather than the
+            # detected dominant, so the exclusion matches what the prompt
+            # will actually call the primary language.
+            secondary_languages = self._secondary_prompt_languages(
+                job_id=job_id,
+                language_distribution=language_distribution,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+
             if is_docx:
                 # Native DOCX translation: direct OOXML manipulation, no PDF
                 # conversion, no LibreOffice subprocess -- see
@@ -966,6 +1021,7 @@ class PipelineOrchestrator:
                     "lang_in": source_lang,
                     "lang_out": target_lang,
                     "domain": domain,
+                    "secondary_languages": secondary_languages,
                     "model_list": model_chain,
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
                     "enable_dlp": enable_dlp,
@@ -994,6 +1050,7 @@ class PipelineOrchestrator:
                     "lang_in": source_lang,
                     "lang_out": target_lang,
                     "domain": domain,
+                    "secondary_languages": secondary_languages,
                     "intent": intent,
                     "model_list": model_chain,
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
