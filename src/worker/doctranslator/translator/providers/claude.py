@@ -65,9 +65,7 @@ class ClaudeVertexAITranslator(BaseTranslator):
         self.cache_hit_prompt_token_count = AtomicInteger()
 
     def prompt(self, text: str) -> str:
-        return build_translation_prompt(
-            text, self.lang_in, self.lang_out, domain=self.domain
-        )
+        return build_translation_prompt(text, self.lang_out, domain=self.domain)
 
     def _build_tool_schema(self, response_schema) -> dict:
         return {

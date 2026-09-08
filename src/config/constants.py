@@ -266,20 +266,52 @@ class Settings(BaseSettings):
     # *_CHECK_ENABLED flags are the kill switches for that situation and must
     # stay settable from the environment without a redeploy.
 
-    # Guard 1 -- declared source language vs. detected source language.
-    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
-    # Maximum share of detected characters any NON-dominant language may hold
-    # before the document is rejected as mixed-language. Mixed-language
-    # translation is out of scope, so the default is 0.0: any second detected
-    # language fails the job.
+    # Guard 1 -- the document must (a) be predominantly in the declared
+    # source language and (b) hold enough translatable content overall.
     #
-    # Detection is per text block with a 0.80 confidence floor, but stray
-    # blocks still happen in practice (party addresses, "force majeure",
-    # tables of names). If monolingual documents are being rejected, raise
-    # this to tolerate that noise -- e.g. 0.10 allows up to 10% of detected
-    # characters in other languages. The full distribution is logged on
-    # every job specifically so this value can be tuned from real data.
-    LANGUAGE_MIXED_MAX_SECONDARY_SHARE: float = 0.0
+    # Two checks, one switch. Users select exactly one source language per
+    # job, drawn from language_mapper.json; the document is expected to
+    # actually be written in it, so the dominant *significant* (noise-
+    # filtered) detected language must match the declared one, or the job
+    # fails naming both languages. Separately -- regardless of which
+    # language is dominant -- enough of the document overall must be in
+    # *some* language this service can translate at all
+    # (LANGUAGE_SUPPORTED_MIN_COVERAGE); mixed-language documents are
+    # otherwise translated as-is, and content within the tolerated gap is
+    # passed through untranslated by SKIP_UNSUPPORTED_LANGUAGE_UNITS rather
+    # than mistranslated. `source_language` also selects the model and forms
+    # part of the Redis cache key.
+    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
+    # Minimum share of ALL detected characters (the raw distribution, not
+    # noise-filtered -- see supported_language_share()'s docstring) that must
+    # be held by languages this service can translate (language_mapper.json).
+    # Below this the job fails, naming the unsupported languages and their
+    # percentages.
+    #
+    # 0.90 tolerates up to a tenth of the document being in a language we
+    # cannot translate. It must be computed on the raw distribution, not the
+    # noise-filtered one: several distinct unsupported languages each below
+    # LANGUAGE_DETECTION_NOISE_SHARE could otherwise sum to a large
+    # untranslatable share while every individual one evades the noise
+    # floor. Measured on the three fixtures in docs/test_docs/, all three
+    # score a perfect 1.000 raw coverage under the current
+    # LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE (0.15) -- that confidence gate
+    # already suppresses per-block detection noise before it ever reaches
+    # this calculation, so 0.90 has wide margin on real documents. The full
+    # distribution and the computed coverage are logged on every job, pass
+    # or fail, so this can be retuned from real data without a code change.
+    LANGUAGE_SUPPORTED_MIN_COVERAGE: float = 0.90
+    # Languages holding less than this share of detected characters are
+    # dropped before the *dominant-language* decision (Guard 1's declared-vs-
+    # detected check) and before the CJK-batch-sizing / glossary-scoping
+    # language list are derived -- NOT before coverage is computed (see
+    # LANGUAGE_SUPPORTED_MIN_COVERAGE / supported_language_share()). Without
+    # this floor, a single stray one-block detection artefact could flip
+    # which language is judged "dominant" for an otherwise clearly
+    # monolingual document. If every language falls below the floor the full
+    # distribution is used instead, so a genuinely fragmented document is
+    # still judged on all of its content rather than on nothing.
+    LANGUAGE_DETECTION_NOISE_SHARE: float = 0.05
 
     # Guard 2 -- declared domain vs. LLM-classified document domain
     # (e.g. an HR policy submitted as `legal`). Costs one small LLM call per
@@ -372,8 +404,9 @@ class Settings(BaseSettings):
     LLM_MAX_INFLIGHT_CALLS: int = 16
 
     # Skip (pass through unchanged, never send to the LLM) any DOCX/PDF
-    # unit confidently (>= language_detection_core.MIN_DETECTION_CONFIDENCE)
-    # detected in a language outside the configured set
+    # unit confidently detected (per
+    # LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE) in a language outside
+    # the configured set
     # (language_mapper.json), or already confidently in the target
     # language (implementation_plan.md Phase C.4). Default True; can be
     # turned off without a redeploy if it ever needs to be disabled.
@@ -512,6 +545,42 @@ class Settings(BaseSettings):
     GCS_RETRY_MAX_SECONDS: int
     GCS_RETRY_MULTIPLIER: int
     LANGUAGE_DETECTION_MAX_CHARS: int
+    # lingua's confidence floor: the minimum *relative* margin required
+    # between its best and second-best guess before it will name a language
+    # at all (below it, `detect_language_of()` returns None and the block is
+    # excluded from the distribution). Promoted from a module constant so it
+    # is tunable from the environment like every other detection knob.
+    #
+    # Calibrated over docs/test_docs/: on long prose the value is irrelevant
+    # (0.00 and 0.40 give identical results), so all it controls is how many
+    # short, ambiguous PDF blocks are discarded. On the Colt company-profile
+    # PDF -- the document whose bare city-name lists and ALL-CAPS slogans used
+    # to be tagged Catalan/Tagalog/French -- every false positive is gone by
+    # 0.15, while 0.20 buys no additional accuracy and discards a further ~4%
+    # of candidate characters. Those discarded characters are not free: a
+    # block with no detected language cannot be skipped by the
+    # already-in-target-language check, so it is sent to the LLM instead.
+    # Hence 0.15 rather than 0.20.
+    #
+    # NOTE: the detector built from this value is memoized
+    # (`language_detection_core._build_detector()`, keyed on the value
+    # itself, not called with no arguments) so a change here self-invalidates
+    # the cache on the very next detection call -- no `.cache_clear()` needed.
+    LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE: float = 0.15
+    # Minimum character length a text block/unit must reach before it is
+    # even offered to the detector. Promoted from a module constant
+    # (`language_detection_core.MIN_DETECTION_TEXT_LENGTH`) so it is tunable
+    # from the environment like the other detection knobs, alongside
+    # LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE -- together they are the two
+    # "is this block worth trusting" floors: length first (cheap, no model
+    # call), then lingua's own confidence gap.
+    MIN_DETECTION_TEXT_LENGTH: int = 20
+    # Minimum alphabetic-character count a block must also reach (in
+    # addition to MIN_DETECTION_TEXT_LENGTH) -- guards against a block that
+    # is long enough but mostly digits/punctuation (a table of figures, a
+    # reference number list), which lingua cannot classify meaningfully.
+    # Promoted from `language_detection_core.MIN_DETECTION_ALPHA_CHARS`.
+    MIN_DETECTION_ALPHA_CHARS: int = 5
     GOOGLE_DLP_MAX_CHARS_PER_REQUEST: int
     GOOGLE_DLP_ENABLED: bool
     GOOGLE_DLP_MIN_LIKELIHOOD: str

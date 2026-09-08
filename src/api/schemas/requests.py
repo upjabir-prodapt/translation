@@ -84,8 +84,13 @@ class TranslationConfigInput(BaseModel):
         "hr",
         "operations",
     }
+    # Chinese used to be missing from this list even though
+    # language_mapper.json resolves it and get_supported_languages() (which
+    # drives the worker's per-unit skip logic) has always included it -- the
+    # label was simply out of date with the mapper.
     SUPPORTED_LANGUAGE_LABELS: ClassVar[str] = (
-        "English (en), Spanish (es), Italian (it), French (fr), Japanese (ja), German (de)"
+        "English (en), Spanish (es), Italian (it), French (fr), "
+        "Japanese (ja), German (de), Chinese (zh)"
     )
 
     source_language: str = Field(
@@ -93,9 +98,16 @@ class TranslationConfigInput(BaseModel):
         min_length=2,
         description=(
             "Source language (full name or code). "
-            "Supported: English, Spanish, Italian, French, Japanese, German. "
-            "Required -- auto-detection is not supported. Cannot equal "
-            "target_language."
+            "Supported: English, Spanish, Italian, French, Japanese, German, "
+            "Chinese. Required -- auto-detection is not supported. Cannot "
+            "equal target_language. "
+            "This selects the translation model and forms part of the "
+            "translation cache key; it is NOT a rejection criterion. The "
+            "document is not rejected for being written in a different "
+            "language, nor for containing several languages: whatever it "
+            "contains is translated into target_language. A job is only "
+            "rejected when most of the document is in a language this "
+            "service cannot translate at all."
         ),
     )
     target_language: str = Field(
@@ -103,7 +115,8 @@ class TranslationConfigInput(BaseModel):
         min_length=2,
         description=(
             "Target language (full name or code). "
-            "Supported: English, Spanish, Italian, French, Japanese, German."
+            "Supported: English, Spanish, Italian, French, Japanese, German, "
+            "Chinese."
         ),
     )
     domain: str = Field(
@@ -148,10 +161,14 @@ class TranslationConfigInput(BaseModel):
         """Validate the required source language: full name or code only.
 
         Source language used to be optional, with an omitted value meaning
-        "auto-detect". Auto-detection is no longer supported (mixed-language
-        and wrong-language documents are rejected outright), so a blank or
-        whitespace-only value is now a validation error rather than a
-        silent fallback.
+        "auto-detect". It is now required because the worker routes on it
+        (model selection and the translation cache key) and has nothing to
+        fall back to, so a blank or whitespace-only value is a validation
+        error rather than a silent fallback.
+
+        Note this is *not* a content check. The worker does not compare the
+        declared value against the document's detected language, and does
+        not reject mixed-language documents.
         """
         cleaned = v.strip()
         if not cleaned:

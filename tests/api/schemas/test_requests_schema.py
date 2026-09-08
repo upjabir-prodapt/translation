@@ -149,9 +149,11 @@ class TestTranslationConfigInput:
     def test_source_language_is_required(self):
         """Auto-detection was removed: an omitted source language is an error.
 
-        The worker now checks the declared language against the document and
-        rejects mixed-language or wrong-language files, so there is no
-        auto-detect mode for an omitted value to fall back to.
+        The worker routes on the declared value (model selection and the
+        translation cache key), so there is no auto-detect mode for an
+        omitted value to fall back to. It is not a content check: the worker
+        does not compare it against the document or reject mixed-language
+        files.
         """
         with pytest.raises(PydanticValidationError):
             TranslationConfigInput(target_language="es", domain="legal")

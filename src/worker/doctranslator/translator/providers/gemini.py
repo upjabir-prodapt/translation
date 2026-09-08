@@ -92,9 +92,7 @@ class GeminiVertexAITranslator(BaseTranslator):
         self.cache_hit_prompt_token_count = AtomicInteger()
 
     def prompt(self, text: str) -> str:
-        return build_translation_prompt(
-            text, self.lang_in, self.lang_out, domain=self.domain
-        )
+        return build_translation_prompt(text, self.lang_out, domain=self.domain)
 
     def _build_thinking_config(self) -> genai_types.ThinkingConfig | None:
         """Resolve the reasoning budget for this model.
@@ -124,8 +122,29 @@ class GeminiVertexAITranslator(BaseTranslator):
         expect (`{"items": [...]}` / `{"terms": [...]}`) so
         paragraph_translator.py/term_extractor.py/il_translator_llm_only.py
         need no changes to their existing json-parsing logic.
+
+        Accessing `response.parsed` is not risk-free: it is the SDK
+        constructing/validating our pydantic schema from the model's raw
+        JSON, and a single field the model failed to populate (e.g. a
+        `TermExtractionResponse` item missing the required `src_lang`) makes
+        that construction raise instead of returning `None`. `getattr(...,
+        default)` only swallows a genuine `AttributeError` from attribute
+        lookup, not an exception raised by the property getter itself, so
+        that failure was previously left to propagate out of this method and
+        abort the whole batch/thread it was called from. Wrapping the access
+        lets one malformed item fall through to the `response.text`
+        re-parse below instead.
         """
-        parsed = getattr(response, "parsed", None)
+        try:
+            parsed = getattr(response, "parsed", None)
+        except Exception:
+            logger.warning(
+                "Gemini response.parsed construction failed (likely a "
+                "required field missing from the model's structured output); "
+                "falling back to response.text.",
+                exc_info=True,
+            )
+            parsed = None
         if parsed is not None:
             if isinstance(parsed, TranslationResponse):
                 return parsed.translated_text

@@ -271,14 +271,7 @@ class BaseTranslator(ABC):
             f"{batch_items_str}",
         )
         if cache_key is not None and out.strip():
-            get_translation_cache().set(
-                cache_key,
-                out,
-                provider=str(self.provider),
-                model=str(getattr(self, "model", "")),
-                lang_in=self.lang_in,
-                lang_out=self.lang_out,
-            )
+            get_translation_cache().set(cache_key, out)
         return out
 
     def __str__(self):

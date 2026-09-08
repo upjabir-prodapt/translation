@@ -13,6 +13,7 @@ comparison and rationale.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from dataclasses import field
@@ -27,6 +28,7 @@ from src.worker.doctranslator.format.docx.term_extractor import DocxTermExtracto
 from src.worker.doctranslator.format.docx.units import extract_units
 from src.worker.doctranslator.format.docx.units import flush_note_parts
 from src.worker.doctranslator.format.docx.units import write_translated_text
+from src.worker.doctranslator.glossary import ExtractedGlossaryTerm
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpResult
@@ -44,7 +46,7 @@ class DocxTranslationResult:
     translated_text: str
     dlp_provider: DlpProvider | None
     dlp_token_rows: list[dict]
-    extracted_terms: list[tuple[str, str]]
+    extracted_terms: list[ExtractedGlossaryTerm]
     dlp_result: DlpResult | None = None
     #: Aligned (source, translation) unit pairs, in document order.
     #: The quality judge chunks on pairs so source and target cannot drift
@@ -67,8 +69,9 @@ def translate_docx(
     domain: str | None = None,
     enable_dlp: bool = True,
     auto_extract_glossary: bool = True,
-    extracted_terms: list[tuple[str, str]] | None = None,
+    extracted_terms: list[ExtractedGlossaryTerm] | None = None,
     dlp_result: DlpResult | None = None,
+    detected_languages: Iterable[str] | None = None,
 ) -> DocxTranslationResult:
     """Translate a DOCX document in place (writing to `output_path`).
 
@@ -76,6 +79,11 @@ def translate_docx(
     (for quality judging) and any auto-extracted glossary terms (for the
     caller to persist into the shared domain glossary only after the whole
     job/attempt succeeds).
+
+    `detected_languages` is the significant part of the document's detected
+    language distribution. It only affects batch sizing (see
+    `get_token_multiplier`): a mixed document can contain CJK even when
+    neither declared language is CJK, and tiktoken under-counts CJK tokens.
     """
     document = Document(str(input_path))
     units, note_parts = extract_units(document)
@@ -113,7 +121,9 @@ def translate_docx(
     # Automatic term extraction and paragraph translation are run
     # concurrently on first attempt; on retry attempts, previously extracted
     # candidate terms can be passed in directly to avoid duplicate LLM calls.
-    paragraph_translator = DocxParagraphTranslator(translator, lang_out, domain=domain)
+    paragraph_translator = DocxParagraphTranslator(
+        translator, lang_out, domain=domain, detected_languages=detected_languages
+    )
 
     if extracted_terms is not None:
         logger.info(
@@ -121,7 +131,9 @@ def translate_docx(
         )
         translations = paragraph_translator.translate_all(units)
     elif auto_extract_glossary and units:
-        term_extractor = DocxTermExtractor(translator, lang_out, domain=domain)
+        term_extractor = DocxTermExtractor(
+            translator, lang_out, domain=domain, detected_languages=detected_languages
+        )
         with ThreadPoolExecutor(max_workers=2) as executor:
             term_future = executor.submit(term_extractor.extract, units)
             translate_future = executor.submit(

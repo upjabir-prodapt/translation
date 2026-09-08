@@ -54,7 +54,6 @@ from src.worker.doctranslator.translator.translator import BatchTranslationRespo
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
 )
-from src.worker.services.language_detection_core import MIN_DETECTION_TEXT_LENGTH
 from src.worker.services.language_detection_core import detect_language_for_text
 from src.worker.services.language_detection_core import get_supported_languages
 
@@ -625,11 +624,11 @@ class ILTranslatorLLMOnly:
         """PDF equivalent of the DOCX pipeline's language-based skip
         (implementation_plan.md Phase C.4.3), gated by
         `settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS` and applied only above
-        `MIN_DETECTION_TEXT_LENGTH` (C.4.4/C.4.5) so a short paragraph is
-        never skipped on a coin-flip single-unit detection."""
+        `settings.MIN_DETECTION_TEXT_LENGTH` (C.4.4/C.4.5) so a short
+        paragraph is never skipped on a coin-flip single-unit detection."""
         if not settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS:
             return False
-        if not text or len(text) < MIN_DETECTION_TEXT_LENGTH:
+        if not text or len(text) < settings.MIN_DETECTION_TEXT_LENGTH:
             return False
         detected = detect_language_for_text(text)
         if detected is None:

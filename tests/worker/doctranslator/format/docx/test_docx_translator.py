@@ -8,6 +8,7 @@ from unittest.mock import patch
 from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from src.worker.doctranslator.format.docx.docx_translator import translate_docx
+from src.worker.doctranslator.glossary import ExtractedGlossaryTerm
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpResult
 
@@ -39,7 +40,9 @@ def test_translate_docx_reuses_extracted_terms(tmp_path: Path):
     doc.save(str(input_file))
 
     translator = _FakeTranslator()
-    pre_extracted = [("Hello", "Bonjour")]
+    pre_extracted = [
+        ExtractedGlossaryTerm(source="Hello", target="Bonjour", source_language="en")
+    ]
 
     with patch(
         "src.worker.doctranslator.format.docx.docx_translator.DocxTermExtractor"

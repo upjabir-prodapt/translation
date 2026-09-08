@@ -45,7 +45,11 @@ from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.input_consistency_service import DomainCheckUnavailableError
 from src.worker.services.input_consistency_service import classify_document_domain
 from src.worker.services.intent_router_service import IntentRouterService
+from src.worker.services.language_detection_core import aggregate_languages
 from src.worker.services.language_detection_core import get_supported_languages
+from src.worker.services.language_detection_core import language_shares
+from src.worker.services.language_detection_core import significant_languages
+from src.worker.services.language_detection_core import supported_language_share
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.processor_service import JobProcessor
@@ -110,6 +114,30 @@ def _language_for_user(code: str) -> str:
     if display.strip().lower() == str(code).strip().lower():
         return f"a different language (detected as '{code}')"
     return display
+
+
+def _summarize_unsupported_languages(
+    shares: dict[str, float], *, top_n: int = 5
+) -> str:
+    """Render an unsupported-language share breakdown for a user-facing message.
+
+    Coverage is now computed on the raw (non-noise-filtered) distribution,
+    so a document can carry many small unsupported fragments. Listing every
+    one of them would make the rejection message unreadable, so only the
+    `top_n` largest are named explicitly; anything past that is folded into
+    a single "+N more" tail with its combined share.
+    """
+    ordered = sorted(shares.items(), key=lambda item: item[1], reverse=True)
+    shown = ordered[:top_n]
+    summary = ", ".join(
+        f"{_language_for_user(code)} {share * 100:.0f}%" for code, share in shown
+    )
+    remainder = ordered[top_n:]
+    if remainder:
+        remainder_share = sum(share for _, share in remainder)
+        tail = f"+{len(remainder)} more language(s) ({remainder_share * 100:.0f}%)"
+        summary = f"{summary}, {tail}" if summary else tail
+    return summary
 
 
 def _extract_model_version(model_id: str) -> str | None:
@@ -389,8 +417,9 @@ class PipelineOrchestrator:
 
         Returns `(local_path, detected_source_lang, language_distribution)`.
         The language returned is the one *detected in the document*, never
-        the one the user declared -- `_execute_pipeline` routes on the
-        declared language and uses this only to check it.
+        the one the user declared. `_execute_pipeline` routes on the declared
+        language and uses the distribution for the supported-language
+        coverage gate and CJK-aware batch sizing -- it never compares the two.
         """
         del job_id
         await self.storage.download_file(blob_path, local_input_path)
@@ -411,17 +440,18 @@ class PipelineOrchestrator:
 
         Detection used to run only when the source language was omitted or
         "auto". The API now requires a concrete source language, so under the
-        old gate detection would never have run at all and a document in the
-        wrong language would be translated blindly. It now runs
-        unconditionally so `_execute_pipeline` can compare what the user
-        declared against what the document actually contains.
+        old gate detection would never have run at all. It runs
+        unconditionally because the distribution -- not the declared value --
+        drives the supported-language coverage gate, the CJK-aware batch
+        sizing, and the per-unit skip decisions.
 
         Failures deliberately propagate. A document whose language cannot be
         determined cannot be checked, and an unverifiable document fails
         rather than being translated unchecked. Both detectors raise when no
-        confidently detectable text is found, and the PDF path raises the
-        scanned-PDF wording specifically, so the message the user sees
-        already explains the real problem.
+        confidently detectable text is found, and each distinguishes "no text
+        worth classifying" from "text present but never classifiable", so the
+        message the user sees explains the real problem rather than telling
+        the owner of a text-rich PDF that it is scanned.
         """
         return self.language_detector.detect_with_distribution(
             input_path, is_docx=is_docx
@@ -517,139 +547,162 @@ class PipelineOrchestrator:
             prepared.detected_language_distribution,
         )
 
-    def _assert_language_matches(
+    def _assert_language_supported(
         self,
         *,
         job_id: str,
         declared_source_lang: str,
         language_distribution: Counter[str],
-    ) -> None:
-        """Fail the job unless the document is monolingual in the declared language.
+    ) -> Counter[str]:
+        """Fail the job unless the document matches its declared source
+        language and enough of it is in a translatable language.
 
-        Two separate rejections, checked in this order:
+        Two independent checks, both gated by the single
+        `LANGUAGE_MISMATCH_CHECK_ENABLED` kill switch:
 
-        1. **Mixed language.** Mixed-language translation is out of scope, so
-           a document containing more than one language is rejected outright
-           regardless of what was declared.
-        2. **Wrong language.** The single language present must be the one
-           the user declared.
+        1. **Coverage.** The combined share of *all* detected characters
+           (languages) held by codes in `language_mapper.json` must reach
+           `LANGUAGE_SUPPORTED_MIN_COVERAGE` (default 0.90). This is
+           computed on the *raw* distribution, not the noise-filtered one:
+           untranslatable content fragmented across many small per-block
+           detections must still count against the budget, or a document
+           made of ten different 9%-share unsupported languages would score
+           as if it were clean. Content inside the tolerated gap is passed
+           through unchanged by `SKIP_UNSUPPORTED_LANGUAGE_UNITS`, never
+           mistranslated.
+        2. **Declared vs. dominant.** The document's dominant *significant*
+           (noise-filtered -- see `significant_languages()`) detected
+           language must equal the declared `source_language`. Exactly one
+           source language is selected per job; a document dominated by a
+           different language was very likely submitted under the wrong
+           declaration and is rejected rather than silently translated
+           under the wrong label.
 
-        The mixed check runs first deliberately. Reporting the mismatch first
-        on a document that is *both* mixed and mis-declared would tell the
-        user to resubmit as German, only for that resubmission to fail again
-        as mixed -- a two-step dead end.
+        Coverage is checked first: a document that is mostly in a language
+        nobody can translate should be told that, not told it doesn't match
+        the declared source.
 
-        `LANGUAGE_MIXED_MAX_SECONDARY_SHARE` defaults to 0.0, i.e. any second
-        detected language fails. It exists because detection is per text
-        block and stray blocks do occur in real documents; raise it to
-        tolerate that noise without a code change.
+        The full distribution and computed coverage are logged on every
+        job, pass or fail, which is what makes a shadow rollout possible:
+        run with `LANGUAGE_MISMATCH_CHECK_ENABLED=false`, read the real
+        numbers, tune the thresholds, then switch it on.
 
-        The distribution is logged even when the guard is switched off, which
-        is what makes a shadow rollout possible: run with
-        `LANGUAGE_MISMATCH_CHECK_ENABLED=false`, read how often real documents
-        would have been rejected, then tune the threshold and switch it on.
+        Returns the noise-filtered ("significant") language `Counter` so
+        the caller does not need to recompute it.
         """
         enabled = bool(settings.LANGUAGE_MISMATCH_CHECK_ENABLED)
-
-        total_chars = sum(language_distribution.values())
-        if not language_distribution or total_chars <= 0:
-            logger.warning(
-                "Job %s: language detection produced no evidence; the declared "
-                "language '%s' cannot be verified.",
-                job_id,
-                declared_source_lang,
-            )
-            if not enabled:
-                return
-            # An unverifiable document is failed rather than translated
-            # unchecked.
-            raise ValueError(
-                "Unable to detect a source language: no sufficiently long, "
-                "confidently detectable text was found. This document cannot "
-                "be checked against the source language you selected."
-            )
-
-        shares = {
-            code: count / total_chars for code, count in language_distribution.items()
-        }
-        dominant_code, dominant_chars = language_distribution.most_common(1)[0]
-        dominant_share = dominant_chars / total_chars
 
         try:
             declared_code = normalize_language(declared_source_lang)
         except ValueError:
-            # Not a language_mapper.json alias. The API validator rejects
-            # these, so this is a direct-to-worker submission whose declared
-            # language cannot be compared against anything.
+            # Not a language_mapper.json alias. The API validates this
+            # before a job can be created, so reaching here means a
+            # direct-to-worker submission. Nothing below can be checked
+            # meaningfully against an unroutable declared language, so this
+            # always returns immediately -- previously it fell through and
+            # still ran the full coverage computation even when the guard
+            # was disabled.
             logger.warning(
-                "Job %s: declared source language '%s' is not a known language;"
-                " detected distribution was %s.",
+                "Job %s: declared source language '%s' is not a known "
+                "language; detected distribution was %s.",
                 job_id,
                 declared_source_lang,
                 dict(language_distribution),
             )
+            if enabled:
+                raise ValueError(
+                    f"Unsupported source language '{declared_source_lang}'."
+                ) from None
+            return Counter()
+
+        total_chars = sum(language_distribution.values())
+        if not language_distribution or total_chars <= 0:
+            # Genuinely reachable now. Both detectors raise on an empty
+            # distribution before returning, so this used to be effectively
+            # dead code; it is kept because the shared-prep cache and any
+            # future caller can hand back a distribution this function did
+            # not produce, and because failing closed on no evidence is the
+            # right default.
+            logger.warning(
+                "Job %s: language detection produced no evidence (declared "
+                "'%s'); nothing can be verified about this document.",
+                job_id,
+                declared_code,
+            )
             if not enabled:
-                return
+                return Counter()
             raise ValueError(
-                f"Unsupported source language '{declared_source_lang}'."
-            ) from None
+                "No passage in this document was long or distinctive enough "
+                "to identify its language, so it cannot be checked before "
+                "translation. Please supply a document with more continuous "
+                "prose."
+            )
+
+        significant = significant_languages(language_distribution)
+        raw_shares = language_shares(language_distribution)
+        sig_shares = language_shares(significant)
+        supported = get_supported_languages()
+        coverage = supported_language_share(language_distribution)
+        dominant = aggregate_languages(significant)
+        min_coverage = float(settings.LANGUAGE_SUPPORTED_MIN_COVERAGE)
+        unsupported_raw_shares = {
+            code: share for code, share in raw_shares.items() if code not in supported
+        }
 
         logger.info(
-            "Job %s: detected language distribution %s (dominant '%s' at "
-            "%.1f%%), declared '%s'",
+            "Job %s: detected language distribution %s; significant %s; "
+            "dominant '%s'; declared '%s'; supported-language coverage "
+            "%.3f (threshold %.2f)%s",
             job_id,
-            {code: round(share, 4) for code, share in shares.items()},
-            dominant_code,
-            dominant_share * 100,
+            {code: round(share, 4) for code, share in raw_shares.items()},
+            {code: round(share, 4) for code, share in sig_shares.items()},
+            dominant,
             declared_code,
+            coverage,
+            min_coverage,
+            "" if enabled else " (guard disabled)",
         )
 
-        max_secondary = float(settings.LANGUAGE_MIXED_MAX_SECONDARY_SHARE)
-        secondary = {
-            code: share
-            for code, share in shares.items()
-            if code != dominant_code and share > max_secondary
-        }
-        if secondary:
-            detected_summary = ", ".join(
-                f"{_language_for_user(code)} {share * 100:.0f}%"
-                for code, share in sorted(
-                    shares.items(), key=lambda item: item[1], reverse=True
-                )
+        if coverage < min_coverage:
+            unsupported_summary = _summarize_unsupported_languages(
+                unsupported_raw_shares
             )
             logger.warning(
-                "Job %s: mixed-language document%s -- distribution %s",
+                "Job %s: supported-language coverage %.3f below threshold "
+                "%.2f%s -- unsupported content: %s",
                 job_id,
-                " rejected" if enabled else " detected (guard disabled)",
-                dict(language_distribution),
-            )
-            if not enabled:
-                return
-            raise ValueError(
-                "This document contains more than one language "
-                f"({detected_summary}). Translating mixed-language documents "
-                "is not supported. Please submit a document written in a "
-                "single language."
-            )
-
-        if dominant_code != declared_code:
-            logger.warning(
-                "Job %s: source language mismatch%s -- declared '%s', document "
-                "is '%s' (%.1f%% of detected text)",
-                job_id,
+                coverage,
+                min_coverage,
                 "" if enabled else " (guard disabled)",
+                unsupported_summary or "none identified",
+            )
+            if enabled:
+                raise ValueError(
+                    "Most of this document is written in a language this "
+                    f"service cannot translate ({unsupported_summary}). "
+                    f"Only {coverage * 100:.0f}% of it is in a supported "
+                    "language. Supported languages are: "
+                    f"{', '.join(sorted(_language_for_user(code) for code in supported))}."
+                )
+
+        if dominant is not None and dominant != declared_code:
+            logger.warning(
+                "Job %s: declared source language '%s' does not match the "
+                "document's dominant detected language '%s'%s.",
+                job_id,
                 declared_code,
-                dominant_code,
-                dominant_share * 100,
+                dominant,
+                "" if enabled else " (guard disabled)",
             )
-            if not enabled:
-                return
-            raise ValueError(
-                f"You selected {_language_for_user(declared_code)} as the "
-                "source language, but this document is written in "
-                f"{_language_for_user(dominant_code)}. Please correct the "
-                "source language and submit again."
-            )
+            if enabled:
+                raise ValueError(
+                    f"You selected {_language_for_user(declared_code)} as "
+                    "the source language, but this document appears to be "
+                    f"written in {_language_for_user(dominant)}. Please "
+                    "select the correct source language and submit again."
+                )
+
+        return significant
 
     async def _assert_domain_matches(
         self,
@@ -819,7 +872,12 @@ class PipelineOrchestrator:
             domain = translation_config["domain"]
 
             # Everything downstream routes on the language the user
-            # *declared*; the detected one exists only to check that claim.
+            # *declared* (model selection, cache key, cover page). The
+            # detected distribution is used to check that claim -- Guard 1
+            # below fails the job if the dominant detected language
+            # disagrees -- and, separately, to scope CJK batch sizing and
+            # glossary language filtering to what the document actually
+            # contains.
             source_lang = _declared_language(requested_source_lang)
 
             # Defensive: the API requires a concrete source language and
@@ -859,12 +917,15 @@ class PipelineOrchestrator:
                     detected_source_lang,
                 )
 
-            # Guard 1: the document must actually be written in the declared
-            # language, and must be monolingual. Detection runs on every job
-            # now, so this is the first point at which the two can be
-            # compared.
+            # Guard 1: the document must be (a) predominantly in the
+            # declared source language and (b) enough of it must be in a
+            # language this service can translate at all -- see
+            # `_assert_language_supported`. Its noise-filtered "significant"
+            # language Counter is reused below for `detected_languages`
+            # instead of being recomputed from `language_distribution` a
+            # second time.
             current_stage = "language_consistency_check"
-            self._assert_language_matches(
+            significant_language_distribution = self._assert_language_supported(
                 job_id=job_id,
                 declared_source_lang=source_lang,
                 language_distribution=language_distribution,
@@ -943,9 +1004,32 @@ class PipelineOrchestrator:
                     exc_info=True,
                 )
 
+            # Reuses the noise-filtered Counter `_assert_language_supported`
+            # already computed, rather than re-deriving it from
+            # `language_distribution` a second time. Used for (before both
+            # the glossary load and batch sizing below):
+            #  - Batch sizing keys off what the document actually contains,
+            #    not only the declared pair: a mixed en->de document that is
+            #    a third Japanese still needs the CJK token multiplier, or
+            #    tiktoken's under-count of CJK produces oversized batches
+            #    and truncated output.
+            #  - The glossary load uses it to only pull in per-language term
+            #    buckets relevant to this document (see load_domain_glossary's
+            #    `source_languages` docstring).
+            detected_languages = sorted(significant_language_distribution)
+
             glossaries = self.glossary_service.load_domain_glossary(
                 domain=domain,
                 target_language_name=target_lang,
+                # `None` (no filtering, every bucket included) rather than
+                # an empty list when detection produced no evidence at all
+                # (only reachable with LANGUAGE_MISMATCH_CHECK_ENABLED=false
+                # -- the guard otherwise fails the job first). An empty list
+                # would filter out every bucket and silently zero out
+                # glossary consistency for a document we simply couldn't
+                # read, which isn't a more correct outcome than the
+                # historical unfiltered behaviour.
+                source_languages=detected_languages or None,
             )
 
             is_txt = source_doc.get("format") == "txt"
@@ -971,6 +1055,7 @@ class PipelineOrchestrator:
                     "enable_dlp": enable_dlp,
                     "enable_judge": enable_judge,
                     "auto_extract_glossary": True,
+                    "detected_languages": detected_languages,
                     # Plain-text jobs are unwrapped back to .txt after
                     # translation (see docx_path_to_txt_bytes below); a DOCX
                     # cover page would leak formatted disclaimer paragraphs
@@ -1002,6 +1087,7 @@ class PipelineOrchestrator:
                     "no_dual": True,
                     "enable_dlp": enable_dlp,
                     "enable_judge": enable_judge,
+                    "detected_languages": detected_languages,
                 }
                 attempt_result = await processor.translate(processor_config)
                 if not attempt_result:

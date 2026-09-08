@@ -36,7 +36,23 @@ logger = logging.getLogger(__name__)
 # key is derived from the *inner* text, which did not change, so without this
 # bump every previously-seen paragraph would keep being served the poisoned
 # "translated our own system prompt" result produced by the old behaviour.
-PROMPT_VERSION = "v2"
+#
+# v3: `build_translation_prompt()` stopped asserting "from {lang_in}" and now
+# states the source language only as a hint, so mixed-language documents are
+# translated in full instead of having non-{lang_in} passages returned
+# unchanged. Only the `do_translate` path needs this bump: it caches on the
+# raw document text, so a changed prompt is invisible to the key. The batch
+# path (`do_llm_translate`, build_prompt=False) passes the built prompt *as*
+# `text` and therefore self-invalidates when its template changes.
+#
+# v4: `build_translation_prompt()` dropped the `lang_in` parameter entirely
+# -- the source language is no longer mentioned in the prompt at all (see
+# its docstring; `PipelineOrchestrator._assert_language_supported` now
+# guarantees the document matches its declared source language before
+# translation begins, making the in-prompt hint both unnecessary and a
+# residual mixed-language risk). Same reasoning as v3 for why only this
+# bump (not a `do_llm_translate`-side change) is required.
+PROMPT_VERSION = "v4"
 
 
 def _get_client():
@@ -155,16 +171,14 @@ class TranslationCache:
         hit_rate = round(hits / total, 4) if total else 0.0
         return {"cache_hits": hits, "cache_misses": misses, "cache_hit_rate": hit_rate}
 
-    def set(
-        self,
-        cache_key: str,
-        translation: str,
-        *,
-        provider: str,
-        model: str,
-        lang_in: str,
-        lang_out: str,
-    ) -> None:
+    def set(self, cache_key: str, translation: str) -> None:
+        """Write one cache entry.
+
+        `cache_key` already encodes provider/model/lang_in/lang_out/domain
+        (see `build_cache_key`); this used to also accept those same
+        values as keyword arguments, but the method body never read them --
+        dead parameters every caller had to keep passing for no effect.
+        """
         client = _get_client()
         if client is None:
             return

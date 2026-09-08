@@ -62,10 +62,11 @@ class PreparedDocument:
     # exists this is always a real detected language.
     detected_source_language: str
     # Full char-weighted language distribution (implementation_plan.md
-    # Phase C.5.1). Detection now runs on every job, so this also backs the
-    # declared-vs-actual language check in
-    # `PipelineOrchestrator._assert_language_matches`; the winner alone is
-    # not enough to tell a wrong-language document from a mixed-language one.
+    # Phase C.5.1). Detection runs on every job, so this also backs
+    # `PipelineOrchestrator._assert_language_supported` and the CJK-aware
+    # batch sizing. The winner alone is not enough for either: coverage is a
+    # share across all detected languages, and a document can contain CJK
+    # without CJK winning.
     detected_language_distribution: Counter[str] = field(default_factory=Counter)
 
 

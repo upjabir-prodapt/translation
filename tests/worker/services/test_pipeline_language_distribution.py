@@ -123,9 +123,9 @@ class TestLanguageDistributionPersistence:
     async def test_detected_languages_persisted_to_bigquery(self, pipeline_mocks):
         """The whole Counter is persisted, not just the winning language.
 
-        `LANGUAGE_MIXED_MAX_SECONDARY_SHARE` is raised here so the job is not
-        rejected as mixed before it can persist anything -- which also
-        exercises that the threshold setting actually loosens the guard.
+        A mixed de/en document needs no threshold tweak any more: both
+        languages are supported, so coverage is 1.0 and the job runs to the
+        point where it persists the distribution.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
@@ -134,7 +134,6 @@ class TestLanguageDistributionPersistence:
             bigquery, storage, tmp_path, attempt_result
         ) as orchestrator:
             with (
-                patch.object(settings, "LANGUAGE_MIXED_MAX_SECONDARY_SHARE", 0.5),
                 patch.object(
                     orchestrator.language_detector,
                     "detect_with_distribution",
@@ -157,6 +156,66 @@ class TestLanguageDistributionPersistence:
         assert persisted == {"de": 700, "en": 300}
 
 
+class TestGlossaryScopedToDetectedLanguages:
+    """The domain glossary load is scoped to the document's own detected,
+    noise-filtered languages -- see GlossaryService.load_domain_glossary's
+    `source_languages` docstring for why this matters: glossary matching
+    is a plain literal-string lookup with no language awareness, so an
+    unscoped load could apply a term extracted from one document's foreign
+    passage to an unrelated document that merely happens to contain the
+    same literal string.
+    """
+
+    async def test_detected_languages_are_passed_as_the_glossary_filter(
+        self, pipeline_mocks
+    ):
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with patch.object(
+                orchestrator.language_detector,
+                "detect_with_distribution",
+                return_value=("de", Counter({"de": 700, "en": 300})),
+            ):
+                await orchestrator._execute_pipeline(
+                    "job-glossary-scope", _job_data("job-glossary-scope"), MagicMock()
+                )
+
+        orchestrator.glossary_service.load_domain_glossary.assert_called_once()
+        call_kwargs = (
+            orchestrator.glossary_service.load_domain_glossary.call_args.kwargs
+        )
+        assert call_kwargs["source_languages"] == ["de", "en"]
+
+    async def test_empty_distribution_falls_back_to_no_filter(self, pipeline_mocks):
+        """An empty distribution (only reachable with the language guard
+        disabled) passes None, not an empty list -- an empty list would
+        exclude every bucket and zero out glossary consistency for a
+        document we simply couldn't read, which is not a more correct
+        outcome than the historical unfiltered behaviour."""
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                patch.object(settings, "LANGUAGE_MISMATCH_CHECK_ENABLED", False),
+                patch.object(
+                    orchestrator.language_detector,
+                    "detect_with_distribution",
+                    return_value=("de", Counter()),
+                ),
+            ):
+                await orchestrator._execute_pipeline(
+                    "job-glossary-empty", _job_data("job-glossary-empty"), MagicMock()
+                )
+
+        call_kwargs = (
+            orchestrator.glossary_service.load_domain_glossary.call_args.kwargs
+        )
+        assert call_kwargs["source_languages"] is None
+
+
 class TestUnsupportedLanguageWarning:
     """C.5.3: WARN when the dominant detected language is outside the
     configured language_mapper.json set."""
@@ -164,12 +223,17 @@ class TestUnsupportedLanguageWarning:
     async def test_unsupported_dominant_language_logs_warning(
         self, pipeline_mocks, caplog
     ):
-        """The warning still fires, but the job no longer survives it.
+        """The routing-fallback warning fires, and the job separately fails.
 
-        The declared language is validated against language_mapper.json at
-        the API, so it can never be the unsupported one. A detected language
-        outside the set therefore always disagrees with what was declared,
-        and the mismatch guard fails the job right after the warning.
+        This WARN (`select_model_list` falling back to the default model)
+        is independent of `_assert_language_supported`'s own checks. The
+        job fails here because a wholly-`nl` document has 0% coverage in a
+        translatable language (Guard 1's coverage check, which runs before
+        its declared-vs-dominant comparison) -- not because the declared
+        value ("de") mismatches the dominant detected one ("nl"), even
+        though that would also fail it; coverage is checked first
+        specifically so an untranslatable document is told that, rather
+        than told it doesn't match its declared source.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
