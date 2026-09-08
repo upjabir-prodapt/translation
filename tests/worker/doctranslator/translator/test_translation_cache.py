@@ -195,14 +195,7 @@ class TestTranslationCacheRedisBackend:
         mock_redis_cls.return_value = mock_client
 
         cache = TranslationCache()
-        cache.set(
-            "some-key",
-            "bonjour le monde",
-            provider="gemini_vertexai",
-            model="gemini-2.5-flash",
-            lang_in="en",
-            lang_out="fr",
-        )
+        cache.set("some-key", "bonjour le monde")
 
         mock_client.set.assert_called_once_with(
             "some-key", "bonjour le monde", ex=604800
@@ -223,14 +216,7 @@ class TestTranslationCacheFailOpen:
         cache = TranslationCache()
         assert cache.get("any-key") is None
         # set() must be a silent no-op, never raise.
-        cache.set(
-            "any-key",
-            "value",
-            provider="p",
-            model="m",
-            lang_in="en",
-            lang_out="fr",
-        )
+        cache.set("any-key", "value")
 
     @patch("redis.Redis")
     @patch("redis.ConnectionPool")
@@ -256,14 +242,7 @@ class TestTranslationCacheFailOpen:
 
         # Subsequent calls should not attempt to reconnect (fails closed for
         # the lifetime of the process) and never raise.
-        cache.set(
-            "any-key",
-            "value",
-            provider="p",
-            model="m",
-            lang_in="en",
-            lang_out="fr",
-        )
+        cache.set("any-key", "value")
         assert mock_redis_cls.call_count == 1
 
     @patch("redis.Redis")
@@ -305,11 +284,4 @@ class TestTranslationCacheFailOpen:
 
         cache = TranslationCache()
         # Must not raise.
-        cache.set(
-            "any-key",
-            "value",
-            provider="p",
-            model="m",
-            lang_in="en",
-            lang_out="fr",
-        )
+        cache.set("any-key", "value")

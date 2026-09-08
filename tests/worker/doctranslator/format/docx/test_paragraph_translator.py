@@ -360,6 +360,16 @@ class TestCacheGranularity:
         assert results == {0: "cached-value"}
         assert engine.calls == []
 
+    def test_cache_key_is_scoped_by_domain(self):
+        """Regression: `_unit_cache_key` used to omit `domain`, unlike
+        `BaseTranslator._cache_key_for`, so a legal-domain and an HR-domain
+        translation of the identical paragraph text collided on the same
+        Redis key and could serve each other's output."""
+        unit = _unit(0, "notice period")
+        legal = DocxParagraphTranslator(_FakeEngine("x"), "de", domain="legal")
+        hr = DocxParagraphTranslator(_FakeEngine("x"), "de", domain="hr")
+        assert legal._unit_cache_key(unit) != hr._unit_cache_key(unit)
+
 
 class TestCjkAwareBatchSizing:
     """B1: DOCX batch sizing should scale with the same CJK token multiplier
@@ -402,6 +412,29 @@ class TestCjkAwareBatchSizing:
         assert translator._token_multiplier == pytest.approx(0.5)
         batches = translator._batch_units(self._short_units(25))
         assert [len(b) for b in batches] == [21, 4]
+
+    def test_detected_cjk_content_shrinks_batches_for_a_non_cjk_pair(self):
+        """A mixed en->fr document that actually contains Japanese.
+
+        Declared languages alone would give the default multiplier here.
+        tiktoken's gpt-4o encoding under-counts CJK, so the batch would
+        overrun the model's real context and come back truncated -- a
+        failure mode only reachable once mixed documents are accepted.
+        """
+        translator = DocxParagraphTranslator(
+            _FakeEngine("[]"), "fr", detected_languages=["en", "ja"]
+        )
+        assert translator._token_multiplier == pytest.approx(0.5)
+        batches = translator._batch_units(self._short_units(25))
+        assert [len(b) for b in batches] == [21, 4]
+
+    def test_detected_non_cjk_content_leaves_the_default_multiplier(self):
+        translator = DocxParagraphTranslator(
+            _FakeEngine("[]"), "fr", detected_languages=["en", "de", "es"]
+        )
+        assert translator._token_multiplier == pytest.approx(1.0)
+        batches = translator._batch_units(self._short_units(45))
+        assert [len(b) for b in batches] == [41, 4]
 
 
 class TestTruncatedBatchFallback:

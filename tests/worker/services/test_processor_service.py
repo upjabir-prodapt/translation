@@ -141,23 +141,24 @@ class TestJobProcessorCore:
     def test_detect_language_for_text_low_confidence(self, processor):
         """C.1.1: `_detect_language_for_text` now delegates to the shared
         `language_detection_core.detect_language_for_text`, so the
-        underlying `detect_langs` call is patched there instead of on
-        `processor_service` directly."""
-        mock_candidate = MagicMock()
-        mock_candidate.lang = "en"
-        mock_candidate.prob = 0.1  # Below default threshold
+        underlying lingua detector is patched there instead of on
+        `processor_service` directly. lingua itself returns None when the
+        top two candidates are within `MIN_RELATIVE_DISTANCE` of each
+        other -- that must propagate as "no confident language"."""
+        mock_detector = MagicMock()
+        mock_detector.detect_language_of.return_value = None
         with patch(
-            "src.worker.services.language_detection_core.detect_langs",
-            return_value=[mock_candidate],
+            "src.worker.services.language_detection_core._get_detector",
+            return_value=mock_detector,
         ):
             assert processor._detect_language_for_text("some text") is None
 
     def test_detect_language_for_text_exception(self, processor):
-        from langdetect import LangDetectException
-
+        mock_detector = MagicMock()
+        mock_detector.detect_language_of.side_effect = RuntimeError("boom")
         with patch(
-            "src.worker.services.language_detection_core.detect_langs",
-            side_effect=LangDetectException(0, "Error"),
+            "src.worker.services.language_detection_core._get_detector",
+            return_value=mock_detector,
         ):
             assert processor._detect_language_for_text("some text") is None
 
@@ -175,14 +176,16 @@ class TestJobProcessorCore:
             with pytest.raises(ValueError, match="no extractable text layer"):
                 processor.detect_source_language("dummy.pdf")
 
-    def test_max_distinct_languages_per_page_message_matches_constant(self, processor):
-        """C.3.1/C.6.5: the guard message must render the real constant
-        value, not a hardcoded '2' (the bug: message said "more than 2
-        languages" while the constant was actually 10)."""
-        many_languages = {
-            f"lang{i}": 100
-            for i in range(processor.MAX_DISTINCT_LANGUAGES_PER_PAGE + 1)
-        }
+    def test_many_distinct_languages_on_a_page_are_accepted(self, processor):
+        """The MAX_DISTINCT_LANGUAGES_PER_PAGE count guard is gone.
+
+        Counting distinct languages measured how noisy per-block detection
+        was, not how multilingual the document was. Twenty one-block
+        "languages" now flow through to the share-based coverage gate, which
+        drops them as sub-noise-share artefacts instead of failing the job.
+        """
+        many_languages = {f"lang{i}": 100 for i in range(20)}
+        many_languages["en"] = 100000
         mock_page = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__iter__.return_value = [mock_page]
@@ -197,11 +200,39 @@ class TestJobProcessorCore:
                 return_value=(Counter(many_languages), 1000),
             ),
         ):
+            winner, distribution = processor.detect_source_language_with_distribution(
+                "dummy.pdf"
+            )
+        assert winner == "en"
+        assert len(distribution) == 21
+
+    def test_text_present_but_unclassifiable_is_not_reported_as_scanned(
+        self, processor
+    ):
+        """Task 4: an empty distribution is two different failures.
+
+        Under lingua's relative-distance floor a text-rich PDF whose blocks
+        are all ambiguous legitimately produces no languages. Telling that
+        user their PDF is "scanned or image-only" would send them to re-scan
+        a perfectly good text PDF.
+        """
+        mock_page = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.__iter__.return_value = [mock_page]
+        with (
+            patch(
+                "src.worker.services.processor_service.pymupdf.open",
+                return_value=MagicMock(__enter__=lambda _: mock_doc),
+            ),
+            patch.object(
+                processor,
+                "_detect_page_languages",
+                # No languages, but 1000 candidate characters were seen.
+                return_value=(Counter(), 1000),
+            ),
+        ):
             with pytest.raises(
-                ValueError,
-                match=(
-                    f"more than {processor.MAX_DISTINCT_LANGUAGES_PER_PAGE} languages"
-                ),
+                ValueError, match="no passage was long or distinctive enough"
             ):
                 processor.detect_source_language("dummy.pdf")
 

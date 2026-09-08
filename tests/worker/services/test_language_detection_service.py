@@ -46,15 +46,43 @@ class TestDetectDocx:
 
     def test_short_ambiguous_paragraphs_raise_explicit_error(self, service, tmp_path):
         """C.6.3/EC-09: short/ambiguous text never produces a silent
-        confident-looking wrong guess -- it raises asking the caller to
-        choose the source language explicitly."""
+        confident-looking wrong guess -- it raises.
+
+        These paragraphs are all below `is_detectable_text`'s floor, so no
+        candidate characters are accumulated and this is the "nothing worth
+        classifying" branch, not the "nothing classifiable" one.
+        """
         docx_path = _make_docx(tmp_path, ["Information", "Total", "OK", "2026"])
-        with pytest.raises(ValueError, match="choose the source language"):
+        with pytest.raises(ValueError, match="no sufficiently long text was found"):
             service.detect(docx_path, is_docx=True)
+
+    def test_long_but_unclassifiable_text_reports_the_other_error(
+        self, service, tmp_path
+    ):
+        """Text present and long enough, but no language identifiable.
+
+        Reported differently from "no text at all" so the user is not told
+        to supply readable text they already supplied. Detection is stubbed
+        because producing genuinely long-yet-undetermined prose is not
+        reliably reproducible across lingua versions.
+        """
+        long_text = (
+            "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
+            "eiusmod tempor incididunt ut labore et dolore magna aliqua."
+        )
+        docx_path = _make_docx(tmp_path, [long_text, long_text])
+        with patch(
+            "src.worker.services.language_detection_service.detect_language_for_text",
+            return_value=None,
+        ):
+            with pytest.raises(
+                ValueError, match="no passage was long or distinctive enough"
+            ):
+                service.detect(docx_path, is_docx=True)
 
     def test_empty_docx_raises_explicit_error(self, service, tmp_path):
         docx_path = _make_docx(tmp_path, [""])
-        with pytest.raises(ValueError, match="choose the source language"):
+        with pytest.raises(ValueError, match="no sufficiently long text was found"):
             service.detect(docx_path, is_docx=True)
 
 
@@ -73,14 +101,21 @@ class TestDetectTxt:
     def test_whitespace_only_raises_explicit_error(self, service, tmp_path):
         txt_path = tmp_path / "blank.txt"
         txt_path.write_text("   \n\t  \n", encoding="utf-8")
-        with pytest.raises(ValueError, match="choose the source language"):
+        with pytest.raises(ValueError, match="no sufficiently long text was found"):
             service.detect(txt_path, is_txt=True)
 
 
-class TestDetectUnitsLimits:
-    def test_too_many_distinct_languages_raises(self, service):
-        """Mirrors the PDF pipeline's MAX_DISTINCT_LANGUAGES_PER_PAGE guard,
-        applied per-document since DOCX/TXT have no page concept."""
+class TestManyDistinctLanguagesAreAccepted:
+    """The MAX_DISTINCT_LANGUAGES_PER_DOCUMENT count guard is gone.
+
+    It measured detection noise, not multilingualism: per-block detection on
+    a long real document routinely yields dozens of one-block "languages".
+    Mixed documents are now translated, and the only remaining rejection is
+    the share-based supported-language coverage gate in
+    `PipelineOrchestrator._assert_language_supported`.
+    """
+
+    def test_five_languages_return_a_full_distribution(self, service):
         long_texts = [
             f"This is sentence number {i} written in English for testing purposes only."
             for i in range(3)
@@ -90,9 +125,6 @@ class TestDetectUnitsLimits:
             "Questo e un testo abbastanza lungo in italiano per il test.",
             "Esta es una oracion en espanol suficientemente larga para probar.",
         ]
-        with patch(
-            "src.worker.services.language_detection_service.MAX_DISTINCT_LANGUAGES_PER_DOCUMENT",
-            1,
-        ):
-            with pytest.raises(ValueError, match="Detected more than 1"):
-                service._detect_units(long_texts, source_label="test")
+        winner, distribution = service._detect_units(long_texts, source_label="test")
+        assert winner == "en"
+        assert len(distribution) >= 4

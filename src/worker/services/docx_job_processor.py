@@ -31,6 +31,7 @@ from src.worker.doctranslator.format.docx.docx_translator import translate_docx
 from src.worker.doctranslator.format.pdf.translation_config import (
     TranslationCoverPageMetadata,
 )
+from src.worker.doctranslator.glossary import ExtractedGlossaryTerm
 from src.worker.doctranslator.translator.factory import create_translator
 from src.worker.services.attempt_decision import AttemptDecision
 from src.worker.services.attempt_decision import decide_after_attempt
@@ -95,7 +96,7 @@ class DocxJobProcessor:
 
         `config` keys: job_id, input_file, output_dir, lang_in, lang_out,
         domain, model_list, max_model_attempts, enable_dlp,
-        auto_extract_glossary.
+        auto_extract_glossary, detected_languages.
         """
         job_id = str(config["job_id"])
         input_path = Path(config["input_file"])
@@ -115,6 +116,10 @@ class DocxJobProcessor:
             config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
         )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
+        # Significant detected languages, used only for CJK-aware batch
+        # sizing (see get_token_multiplier). Absent for direct callers/tests,
+        # in which case sizing falls back to the declared language pair.
+        detected_languages = list(config.get("detected_languages") or [])
         enable_judge = bool(
             config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
@@ -134,7 +139,7 @@ class DocxJobProcessor:
         best_attempt_index = 0
         attempt_reports: list[dict[str, Any]] = []
 
-        cached_extracted_terms: list[tuple[str, str]] | None = None
+        cached_extracted_terms: list[ExtractedGlossaryTerm] | None = None
         cached_dlp_result: DlpResult | None = None
 
         for attempt_index in range(1, max_attempts + 1):
@@ -178,6 +183,7 @@ class DocxJobProcessor:
                     auto_extract_glossary=auto_extract_glossary,
                     extracted_terms=cached_extracted_terms,
                     dlp_result=cached_dlp_result,
+                    detected_languages=detected_languages,
                 )
                 if cached_extracted_terms is None and result.extracted_terms:
                     cached_extracted_terms = result.extracted_terms
@@ -429,6 +435,13 @@ class DocxJobProcessor:
         Must only be called after the job has been marked completed
         successfully -- terms from failed/low-quality jobs must never reach
         the shared glossary (see docs/architecture/pdf-vs-docx-translation-architecture.md).
+
+        No `source_language` is passed here any more: each
+        `ExtractedGlossaryTerm` already carries the language it was
+        actually extracted from (reported by the extraction LLM itself,
+        not assumed from this job's declared source language), and
+        `merge_new_terms_into_domain_glossary` buckets every term
+        individually on that value.
         """
         terms = attempt_result.get("extracted_terms") or []
         if not terms:
@@ -438,7 +451,6 @@ class DocxJobProcessor:
             return False
         return self.glossary_service.merge_new_terms_into_domain_glossary(
             domain=domain,
-            source_language=attempt_result.get("source_language", ""),
             target_language_name=attempt_result.get("target_language", ""),
             new_terms=terms,
         )

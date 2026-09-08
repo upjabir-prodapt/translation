@@ -5,6 +5,7 @@ from src.config.translation_routing import ModelRoute
 from src.config.translation_routing import get_language_display_name
 from src.config.translation_routing import get_language_mapper
 from src.config.translation_routing import get_model_selection_entries
+from src.config.translation_routing import is_cjk_language_code
 from src.config.translation_routing import normalize_domain
 from src.config.translation_routing import normalize_language
 from src.config.translation_routing import select_model_list
@@ -127,3 +128,17 @@ class TestTranslationRouting:
     def test_get_language_display_name_empty(self):
         assert get_language_display_name(None) == "N/A"
         assert get_language_display_name("") == "N/A"
+
+    def test_is_cjk_language_code_matches_zh_ja_ko(self):
+        assert is_cjk_language_code("zh") is True
+        assert is_cjk_language_code("ja") is True
+        assert is_cjk_language_code("ko") is True
+
+    def test_is_cjk_language_code_matches_by_prefix(self):
+        assert is_cjk_language_code("zh-tw") is True
+        assert is_cjk_language_code("ZH") is True
+
+    def test_is_cjk_language_code_false_for_non_cjk_and_empty(self):
+        assert is_cjk_language_code("en") is False
+        assert is_cjk_language_code(None) is False
+        assert is_cjk_language_code("") is False

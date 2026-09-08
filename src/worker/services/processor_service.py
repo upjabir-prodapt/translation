@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pymupdf
-from langdetect import DetectorFactory
 from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
@@ -37,6 +36,9 @@ from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.translator.factory import create_translator
 from src.worker.loaders.assets import get_doclayout_onnx_model_path
 from src.worker.services.language_detection_core import aggregate_languages
+from src.worker.services.language_detection_core import (
+    build_unclassifiable_text_message,
+)
 from src.worker.services.language_detection_core import detect_language_for_text
 from src.worker.services.language_detection_core import is_detectable_text
 from src.worker.services.language_detection_core import normalize_detected_language
@@ -44,8 +46,6 @@ from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestra
 from src.worker.services.task_models import DocTranslatorTranslationConfig
 
 logger = logging.getLogger(__name__)
-
-DetectorFactory.seed = 0
 
 # Process-wide singleton for the DocLayout ONNX model. Previously each
 # JobProcessor instance (created fresh per job in PipelineOrchestrator)
@@ -87,21 +87,23 @@ class JobProcessor:
     PROGRESS_FINALIZE = 0.8
     PROGRESS_COMPLETE = 0.9
 
-    # Renamed from MAX_LANGUAGES_PER_PAGE (implementation_plan.md Phase
-    # C.3): the guard message used to say "more than 2 languages" while
-    # this constant was actually 10 -- a real message/constant
-    # contradiction. The name now matches what it actually is, and the
-    # message below renders the live value instead of a hardcoded "2".
-    MAX_DISTINCT_LANGUAGES_PER_PAGE = 10
-    MAX_DETECTION_CHARS = settings.LANGUAGE_DETECTION_MAX_CHARS
-    MIN_DETECTION_TEXT_LENGTH = 20
-    MIN_DETECTION_ALPHA_CHARS = 5
-    MIN_DETECTION_CONFIDENCE = 0.80
-    DETECTED_LANGUAGE_ALIASES = {
-        "zh-cn": "zh",
-        "zh-tw": "zh",
-        "iw": "he",
-    }
+    # MAX_DISTINCT_LANGUAGES_PER_PAGE (a per-page "more than 10 distinct
+    # languages" rejection) was removed when mixed-language documents
+    # became translatable. Counting distinct languages was never a useful
+    # signal: per-block detection produces a long tail of one-block
+    # artefacts, so the count measured how noisy detection was, not how
+    # multilingual the document was. It is replaced by
+    # `PipelineOrchestrator._assert_language_supported`'s two checks:
+    # supported-language coverage of the raw distribution, and the
+    # declared-vs-dominant (noise-filtered) language comparison.
+
+    @property
+    def MAX_DETECTION_CHARS(self) -> int:  # noqa: N802 (kept upper-case: public, long-standing name)
+        """Read live from settings -- previously bound once at class-
+        definition time (`MAX_DETECTION_CHARS = settings.LANGUAGE_DETECTION_MAX_CHARS`
+        as a class attribute), so a settings override after import never
+        took effect. A property re-reads it on every access instead."""
+        return settings.LANGUAGE_DETECTION_MAX_CHARS
 
     def __init__(self, progress_tracker: Any):
         self.progress_tracker = progress_tracker
@@ -326,12 +328,6 @@ class JobProcessor:
         with pymupdf.open(str(input_file)) as doc:
             for page_number, page in enumerate(doc, start=1):
                 page_languages, page_chars = self._detect_page_languages(page)
-                if len(page_languages) > self.MAX_DISTINCT_LANGUAGES_PER_PAGE:
-                    detected = ", ".join(sorted(page_languages))
-                    raise ValueError(
-                        f"Detected more than {self.MAX_DISTINCT_LANGUAGES_PER_PAGE} "
-                        f"languages on page {page_number}: {detected}"
-                    )
                 document_languages.update(page_languages)
                 processed_chars += page_chars
                 if processed_chars >= self.MAX_DETECTION_CHARS:
@@ -342,17 +338,31 @@ class JobProcessor:
                     )
                     break
         if not document_languages:
-            # This branch fires when no page yielded any detectable text
-            # -- the same underlying condition PDFValidator's API-side
-            # text-layer probe rejects. Use the identical user-facing
-            # wording (implementation_plan.md Phase B.3.3) instead of the
-            # internal "Unable to detect source language from PDF text",
-            # since a scanned/image-only PDF is the far more common cause
-            # than a genuinely undetectable (but present) language.
+            # Two genuinely different failures used to share one message.
+            # `processed_chars` counts characters that passed
+            # `is_detectable_text` -- i.e. text that was present and long
+            # enough to be worth classifying -- independently of whether a
+            # language came back. Under lingua's relative-distance floor a
+            # text-rich PDF whose blocks are all ambiguous now legitimately
+            # yields an empty distribution, so reporting every empty
+            # distribution as "scanned or image-only" would tell the user
+            # to re-scan a perfectly good text PDF.
+            if processed_chars == 0:
+                # No candidate text at all: the same underlying condition
+                # PDFValidator's API-side text-layer probe rejects, so use
+                # the identical wording (implementation_plan.md Phase
+                # B.3.3).
+                raise ValueError(
+                    "This PDF has no extractable text layer (scanned or "
+                    "image-only). OCR is not supported — please supply a "
+                    "text-based PDF."
+                )
             raise ValueError(
-                "This PDF has no extractable text layer (scanned or "
-                "image-only). OCR is not supported — please supply a "
-                "text-based PDF."
+                build_unclassifiable_text_message(
+                    subject="This PDF",
+                    text_noun="extractable text",
+                    include_prefix=False,
+                )
             )
         detected_language = aggregate_languages(document_languages)
         logger.info(f"Detected source language {detected_language} from {input_file}")
@@ -483,6 +493,13 @@ class JobProcessor:
                 dlp_post_translation=bool(config.get("dlp_post_translation", False)),
             ),
             shared_context_cross_split_part=shared_context,
+            # Threaded from PipelineOrchestrator so batch sizing follows the
+            # document's real language mix, not just the declared pair -- a
+            # mixed en->de document that is a third Japanese needs the CJK
+            # multiplier or its batches overrun the model context. Absent
+            # (direct JobProcessor callers, tests) it falls back to the
+            # declared-pair behaviour.
+            detected_languages=list(config.get("detected_languages") or []),
         )
 
     async def _handle_translation_event(

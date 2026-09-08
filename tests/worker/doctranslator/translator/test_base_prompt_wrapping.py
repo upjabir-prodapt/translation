@@ -43,9 +43,7 @@ class RecordingTranslator(BaseTranslator):
         self.response_text = "TRANSLATED"
 
     def prompt(self, text: str) -> str:
-        return build_translation_prompt(
-            text, self.lang_in, self.lang_out, domain=self.domain
-        )
+        return build_translation_prompt(text, self.lang_out, domain=self.domain)
 
     def invoke(self, contents: str, response_schema: Any | None = None) -> Any:
         self.seen_contents.append(contents)
@@ -143,8 +141,12 @@ class TestTranslateStillWrapsRawText:
         translator.translate("hello")
 
         sent = translator.seen_contents[0]
-        assert sent == build_translation_prompt("hello", "en", "de")
-        assert "Translate the INPUT below from en into de." in sent
+        assert sent == build_translation_prompt("hello", "de")
+        # The task line names the target language as an instruction; the
+        # source language is never named at all -- see
+        # TestMultilingualTolerance in test_prompts.py for why.
+        assert "Translate the INPUT below into de." in sent
+        assert "primarily en" not in sent
         assert "hello" in sent
 
     def test_wrapper_applied_exactly_once(self, translator: RecordingTranslator):

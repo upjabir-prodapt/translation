@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from docx import Document
 from src.worker.doctranslator.format.docx.docx_translator import DocxTranslationResult
+from src.worker.doctranslator.glossary import ExtractedGlossaryTerm
 from src.worker.services.dlp_service import DlpProvider
 from src.worker.services.dlp_service import DlpResult
 from src.worker.services.docx_job_processor import DocxJobProcessor
@@ -315,7 +316,11 @@ class TestDocxJobProcessorAttemptReuse:
             token_rows=[{"token": "[EMAIL_1]", "original_value": "user@test.com"}],
             dlp_provider=DlpProvider.REGEX_FALLBACK,
         )
-        extracted_terms = [("source_term", "target_term")]
+        extracted_terms = [
+            ExtractedGlossaryTerm(
+                source="source_term", target="target_term", source_language="en"
+            )
+        ]
 
         res1 = DocxTranslationResult(
             output_path=tmp_path / "iter_1" / "input.docx",
@@ -377,3 +382,62 @@ class TestDocxJobProcessorAttemptReuse:
         assert result["attempts"][1]["attempt_number"] == 2
         assert result["attempts"][1]["is_selected"] is True
         assert result["attempts"][0]["docx_path"] is not None
+
+
+class TestPersistExtractedTerms:
+    """`persist_extracted_terms` no longer passes a single declared
+    `source_language` for the whole batch -- each `ExtractedGlossaryTerm`
+    already carries the language it was actually extracted from, and
+    `GlossaryService.merge_new_terms_into_domain_glossary` buckets on that
+    per term."""
+
+    def test_forwards_terms_without_a_source_language_kwarg(self):
+        glossary_service = MagicMock()
+        glossary_service.merge_new_terms_into_domain_glossary.return_value = True
+        processor = DocxJobProcessor(glossary_service=glossary_service)
+
+        terms = [
+            ExtractedGlossaryTerm(
+                source="indemnification", target="Freistellung", source_language="en"
+            ),
+            ExtractedGlossaryTerm(
+                source="indemnisation", target="Freistellung", source_language="fr"
+            ),
+        ]
+        attempt_result = {
+            "extracted_terms": terms,
+            "domain": "legal",
+            "source_language": "en",
+            "target_language": "de",
+        }
+
+        assert processor.persist_extracted_terms(attempt_result) is True
+        glossary_service.merge_new_terms_into_domain_glossary.assert_called_once_with(
+            domain="legal",
+            target_language_name="de",
+            new_terms=terms,
+        )
+        call_kwargs = (
+            glossary_service.merge_new_terms_into_domain_glossary.call_args.kwargs
+        )
+        assert "source_language" not in call_kwargs
+
+    def test_no_terms_short_circuits_without_calling_the_glossary_service(self):
+        glossary_service = MagicMock()
+        processor = DocxJobProcessor(glossary_service=glossary_service)
+
+        assert processor.persist_extracted_terms({"extracted_terms": []}) is False
+        glossary_service.merge_new_terms_into_domain_glossary.assert_not_called()
+
+    def test_no_domain_short_circuits_without_calling_the_glossary_service(self):
+        glossary_service = MagicMock()
+        processor = DocxJobProcessor(glossary_service=glossary_service)
+
+        attempt_result = {
+            "extracted_terms": [
+                ExtractedGlossaryTerm(source="x", target="y", source_language="en")
+            ],
+            "domain": "",
+        }
+        assert processor.persist_extracted_terms(attempt_result) is False
+        glossary_service.merge_new_terms_into_domain_glossary.assert_not_called()

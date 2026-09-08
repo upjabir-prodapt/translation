@@ -6,12 +6,14 @@ import shutil
 import tempfile
 import threading
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from src.config.constants import settings
 from src.config.translation_routing import get_language_display_name
+from src.config.translation_routing import is_cjk_language_code
 from src.worker.doctranslator.format.pdf.split_manager import BaseSplitStrategy
 from src.worker.doctranslator.format.pdf.split_manager import PageCountStrategy
 from src.worker.doctranslator.glossary import Glossary
@@ -22,15 +24,35 @@ from src.worker.doctranslator.translator.translator import BaseTranslator
 logger = logging.getLogger(__name__)
 
 
-def _is_cjk_language_code(lang: str | None) -> bool:
-    if not lang:
-        return False
-    normalized = str(lang).strip().lower()
-    return normalized.startswith(("zh", "ja", "ko"))
+def get_token_multiplier(
+    lang_in: str,
+    lang_out: str,
+    detected_languages: Iterable[str] | None = None,
+) -> float:
+    """Batch-size multiplier, widened to CJK when the *content* is CJK.
 
+    tiktoken's gpt-4o encoding under-counts CJK relative to what
+    Gemini/Claude actually consume, so CJK batches must hold fewer
+    paragraphs or the request overruns the model's context and the output
+    comes back truncated (see batching.py).
 
-def get_token_multiplier(lang_in: str, lang_out: str) -> float:
-    if _is_cjk_language_code(lang_in) or _is_cjk_language_code(lang_out):
+    `lang_in`/`lang_out` alone are no longer sufficient. They are the
+    *declared* languages, and now that mixed-language documents are
+    translated rather than rejected, a document declared `en` targeting
+    `de` can legitimately be a third Japanese by character count -- and
+    would silently get the non-CJK multiplier. `detected_languages` is the
+    significant part of the detected distribution (noise already dropped),
+    so the multiplier follows what is actually in the document.
+
+    Erring toward the CJK multiplier is the safe direction: it makes
+    batches smaller, costing a few more LLM round trips, whereas erring
+    the other way costs truncated translations.
+    """
+    if (
+        is_cjk_language_code(lang_in)
+        or is_cjk_language_code(lang_out)
+        or any(is_cjk_language_code(code) for code in detected_languages or ())
+    ):
         return float(settings.LLM_TOKEN_MULTIPLIER_CJK)
     return float(settings.LLM_TOKEN_MULTIPLIER_DEFAULT)
 
@@ -366,11 +388,17 @@ class TranslationConfig:
         self.dlp_unmask_before_pdf = True
 
     def _init_llm_batch_limits(
-        self, lang_in: str, lang_out: str, disable_same_text_fallback: bool
+        self,
+        lang_in: str,
+        lang_out: str,
+        disable_same_text_fallback: bool,
+        detected_languages: Iterable[str] | None = None,
     ) -> None:
         """Calculate and store LLM batch size limits."""
         self.disable_same_text_fallback = disable_same_text_fallback
-        token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
+        token_multiplier = max(
+            get_token_multiplier(lang_in, lang_out, detected_languages), 0.1
+        )
         self.llm_translation_batch_max_tokens = int(
             settings.LLM_TRANSLATION_BATCH_MAX_TOKENS
         )
@@ -450,6 +478,12 @@ class TranslationConfig:
         dlp_config: DlpConfig
         | None = None,  # NOSONAR - public configuration object; param count cannot be reduced below 13 without breaking callers
         shared_context_cross_split_part: SharedContextCrossSplitPart | None = None,
+        # Significant languages actually detected in the document (noise
+        # already dropped). Optional and defaulting to None so every
+        # existing caller and test keeps working; only used to widen the
+        # batch-size multiplier to CJK when the *content* is CJK even
+        # though neither declared language is. See get_token_multiplier().
+        detected_languages: Iterable[str] | None = None,
     ):
         self.translator = translator
         self.term_extraction_translator = term_extraction_translator or translator
@@ -554,7 +588,10 @@ class TranslationConfig:
             "completion_tokens": 0,
             "cache_hit_prompt_tokens": 0,
         }
-        self._init_llm_batch_limits(lang_in, lang_out, disable_same_text_fallback)
+        self.detected_languages: list[str] = list(detected_languages or [])
+        self._init_llm_batch_limits(
+            lang_in, lang_out, disable_same_text_fallback, self.detected_languages
+        )
 
     def _normalize_page_range(
         self, start: int, end: int, total_pages: int

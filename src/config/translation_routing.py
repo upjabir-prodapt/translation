@@ -95,6 +95,32 @@ def get_language_display_name(value: str | None) -> str:
     return LANGUAGE_DISPLAY_NAMES.get(code) or str(value).strip().title()
 
 
+# Language codes whose text is dense enough (multi-byte, no whitespace word
+# boundaries) that tiktoken's gpt-4o encoding under-counts real token usage
+# relative to what Gemini/Claude actually consume -- these get a smaller
+# LLM batch-size multiplier (LLM_TOKEN_MULTIPLIER_CJK) regardless of
+# whether the language itself is translatable. This is a "how token-dense
+# is this language" property, not a "can we translate it" property, so it
+# is intentionally a separate list from `language_mapper.json`'s supported
+# set: Korean ("ko") is included here on token-density grounds even though
+# it is not currently a supported translation language.
+CJK_LANGUAGE_CODES: frozenset[str] = frozenset({"zh", "ja", "ko"})
+
+
+def is_cjk_language_code(lang: str | None) -> bool:
+    """Return True if `lang` is a CJK(-density) language code.
+
+    Matches by prefix (`"zh-tw"`, `"ja-jp"`, etc. all count), the same
+    tolerant style used for detected/declared codes elsewhere in this
+    codebase -- callers here may pass either a bare canonical code or a
+    fuller locale-style string.
+    """
+    if not lang:
+        return False
+    normalized = str(lang).strip().lower()
+    return any(normalized.startswith(code) for code in CJK_LANGUAGE_CODES)
+
+
 def normalize_domain(value: str) -> str:
     """Normalize domain name into lowercase domain key."""
     normalized = str(value).strip().lower()
