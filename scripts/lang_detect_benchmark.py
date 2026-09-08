@@ -166,7 +166,10 @@ def run_langdetect_production(blocks: list[str]) -> Result:
     for block in blocks:
         text = normalize(block)
         alpha_count = sum(1 for ch in text if ch.isalpha())
-        if len(text) < MIN_DETECTION_TEXT_LENGTH or alpha_count < MIN_DETECTION_ALPHA_CHARS:
+        if (
+            len(text) < MIN_DETECTION_TEXT_LENGTH
+            or alpha_count < MIN_DETECTION_ALPHA_CHARS
+        ):
             skipped_short += 1
             continue
         try:
@@ -215,7 +218,11 @@ def run_lingua(full_text: str) -> Result:
 
     text = normalize(full_text)
     build_start = time.perf_counter()
-    detector = LanguageDetectorBuilder.from_all_languages().with_preloaded_language_models().build()
+    detector = (
+        LanguageDetectorBuilder.from_all_languages()
+        .with_preloaded_language_models()
+        .build()
+    )
     build_elapsed = time.perf_counter() - build_start
 
     start = time.perf_counter()
@@ -232,7 +239,9 @@ def run_lingua(full_text: str) -> Result:
             note=f"no confident result (model build took {build_elapsed:.2f}s)",
         )
     top_value = next((v.value for v in values if v.language == language), None)
-    others = ", ".join(f"{v.language.iso_code_639_1.name.lower()}:{v.value:.2f}" for v in values[1:4])
+    others = ", ".join(
+        f"{v.language.iso_code_639_1.name.lower()}:{v.value:.2f}" for v in values[1:4]
+    )
     return Result(
         "lingua",
         language.iso_code_639_1.name.lower(),
@@ -250,7 +259,9 @@ def run_gemini(sample: str, *, project: str, location: str, model: str) -> Resul
         from google import genai
         from google.genai import types as genai_types
     except ImportError:
-        return Result("Gemini (Vertex)", "?", "-", 0.0, note="google-genai not installed")
+        return Result(
+            "Gemini (Vertex)", "?", "-", 0.0, note="google-genai not installed"
+        )
 
     start = time.perf_counter()
     try:
@@ -301,7 +312,9 @@ def run_claude(sample: str, *, project: str, region: str, model: str) -> Result:
             messages=[{"role": "user", "content": LLM_PROMPT.format(sample=sample)}],
         )
         text = "".join(
-            block.text for block in response.content if getattr(block, "type", "") == "text"
+            block.text
+            for block in response.content
+            if getattr(block, "type", "") == "text"
         ).strip()
     except Exception as exc:  # noqa: BLE001 - surfaced as a benchmark row
         elapsed = time.perf_counter() - start
@@ -328,7 +341,9 @@ def print_table(results: list[Result]) -> None:
         for r in results
     ]
     widths = [
-        max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i])
+        max(len(headers[i]), *(len(row[i]) for row in rows))
+        if rows
+        else len(headers[i])
         for i in range(len(headers))
     ]
 
@@ -342,15 +357,23 @@ def print_table(results: list[Result]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("path", type=Path, help="PDF or text file to detect the language of")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "path", type=Path, help="PDF or text file to detect the language of"
+    )
     parser.add_argument("--project", default=DEFAULT_PROJECT)
-    parser.add_argument("--location", default=DEFAULT_LOCATION, help="Gemini Vertex region")
+    parser.add_argument(
+        "--location", default=DEFAULT_LOCATION, help="Gemini Vertex region"
+    )
     parser.add_argument("--gemini-model", default=DEFAULT_GEMINI_MODEL)
     parser.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL)
     parser.add_argument("--claude-region", default=DEFAULT_CLAUDE_REGION)
     parser.add_argument("--sample-chars", type=int, default=DEFAULT_SAMPLE_CHARS)
-    parser.add_argument("--skip-llm", action="store_true", help="Only run local detectors")
+    parser.add_argument(
+        "--skip-llm", action="store_true", help="Only run local detectors"
+    )
     args = parser.parse_args()
 
     if not args.path.is_file():
@@ -374,10 +397,20 @@ def main() -> int:
 
     if not args.skip_llm:
         results.append(
-            run_gemini(sample, project=args.project, location=args.location, model=args.gemini_model)
+            run_gemini(
+                sample,
+                project=args.project,
+                location=args.location,
+                model=args.gemini_model,
+            )
         )
         results.append(
-            run_claude(sample, project=args.project, region=args.claude_region, model=args.claude_model)
+            run_claude(
+                sample,
+                project=args.project,
+                region=args.claude_region,
+                model=args.claude_model,
+            )
         )
 
     print_table(results)
