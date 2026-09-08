@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pymupdf
-from langdetect import DetectorFactory
 from opentelemetry.trace import SpanKind
 
 from src.config.constants import settings
@@ -46,8 +45,6 @@ from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestra
 from src.worker.services.task_models import DocTranslatorTranslationConfig
 
 logger = logging.getLogger(__name__)
-
-DetectorFactory.seed = 0
 
 # Process-wide singleton for the DocLayout ONNX model. Previously each
 # JobProcessor instance (created fresh per job in PipelineOrchestrator)
@@ -349,7 +346,7 @@ class JobProcessor:
                 # Every unit was filtered as low-signal (short labels,
                 # proper nouns, all-caps fragments). Before declaring the
                 # document undetectable, try the whole-document
-                # concatenation -- long text is where langdetect is most
+                # concatenation -- long text is where detection is most
                 # reliable, and this recovers slide-style PDFs made
                 # entirely of short blocks.
                 document_languages = detect_language_of_joined_text(
@@ -456,6 +453,14 @@ class JobProcessor:
         )
         selected_model = str(config.get("selected_model", "")).strip()
         domain = config.get("domain")
+        # Minority languages detection found, threaded in the same way
+        # `domain` is: once into the translator (for the raw-text prompt in
+        # translator/prompts.py) and once into TranslationConfig (for the
+        # two PDF batch templates). Both paths render the same block.
+        secondary_languages = [
+            (str(code), float(share))
+            for code, share in (config.get("secondary_languages") or [])
+        ]
         # "selected_model_region" is threaded in by TranslationAttemptRunner
         # from the matching ModelRoute (docs/plan.md Section 3.3) so
         # gemini-3.5-flash's europe-west3 pinning survives the trip from
@@ -468,6 +473,7 @@ class JobProcessor:
             qps=base_config.qps,
             region=selected_region,
             domain=domain,
+            secondary_languages=secondary_languages,
         )
         glossaries = config.get("glossaries")
 
@@ -483,6 +489,7 @@ class JobProcessor:
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
             domain=domain,
+            secondary_languages=secondary_languages,
             doc_layout_model=doc_layout_model,
             table_model=None,
             working_dir=working_dir,

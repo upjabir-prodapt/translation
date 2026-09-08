@@ -19,7 +19,7 @@ class _NoopUpdater:
 
 
 class LanguageDetectionService:
-    """Detect source language using langdetect-backed processor."""
+    """Detect source language using the lingua-backed processor."""
 
     def __init__(self):
         tracker = ProgressTracker(updater=_NoopUpdater(), job_id="detector")
@@ -63,7 +63,7 @@ class LanguageDetectionService:
         implementation_plan.md Phase C.2.1: brings DOCX/TXT detection to
         parity with the PDF pipeline's per-block, confidence-floored,
         char-weighted aggregation. Previously this ran a single
-        `detect_langs()` call over the whole concatenated document with
+        detection call over the whole concatenated document with
         **no confidence floor at all** -- the root cause of the EC-09
         defect (short/ambiguous text like "Information" or "OK" got a
         confident-looking but unreliable guess accepted outright).

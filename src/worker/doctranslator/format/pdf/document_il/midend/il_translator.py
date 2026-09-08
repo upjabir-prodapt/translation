@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 import src.worker.doctranslator.format.pdf.document_il.il_version_1 as il_version_1
 from src.config.domain_prompts import get_domain_role_block
+from src.config.language_prompts import build_secondary_language_block
 from src.worker.doctranslator.doctranslator_exception.DocTranslatorException import (
     ContentFilterError,
 )
@@ -73,6 +74,7 @@ logger = logging.getLogger(__name__)
 PROMPT_TEMPLATE = Template(
     """$role_block
 
+$secondary_language_block
 ## Rules
 
 1. Keep the structure exactly unchanged: do NOT add/remove/reorder any tags, placeholders, or tokens.
@@ -1191,6 +1193,20 @@ class ILTranslator:
             getattr(self.translation_config, "custom_system_prompt", None),
         )
 
+    def _build_secondary_language_block(self) -> str:
+        """Mixed-language instruction block, or "" on a monolingual document.
+
+        This template never named a source language at all -- it only ever
+        said "translate into $lang_out" -- so on a mixed document the model
+        had nothing telling it that some segments are in a different
+        language from the rest. See config/language_prompts.py.
+        """
+        return build_secondary_language_block(
+            getattr(self.translation_config, "secondary_languages", None) or (),
+            primary_language=self.translation_config.lang_in,
+            target_language=self.translation_config.lang_out,
+        )
+
     def _build_context_block(
         self,
         title_paragraph: PdfParagraph | None = None,
@@ -1309,6 +1325,7 @@ class ILTranslator:
 
         return PROMPT_TEMPLATE.substitute(
             role_block=role_block,
+            secondary_language_block=self._build_secondary_language_block(),
             glossary_block=glossary_block,
             context_block=context_block,
             security_notice=INJECTION_GUARD_CLAUSE,

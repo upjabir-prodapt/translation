@@ -60,8 +60,11 @@ class GeminiVertexAITranslator(BaseTranslator):
         temperature=0.0,
         region: str | None = None,
         domain: str | None = None,
+        secondary_languages=None,
     ):
-        super().__init__(lang_in, lang_out, domain=domain)
+        super().__init__(
+            lang_in, lang_out, domain=domain, secondary_languages=secondary_languages
+        )
         if genai is None:
             raise ImportError(
                 "google-genai is required for Gemini translator. "
@@ -93,7 +96,11 @@ class GeminiVertexAITranslator(BaseTranslator):
 
     def prompt(self, text: str) -> str:
         return build_translation_prompt(
-            text, self.lang_in, self.lang_out, domain=self.domain
+            text,
+            self.lang_in,
+            self.lang_out,
+            domain=self.domain,
+            secondary_languages=self.secondary_languages,
         )
 
     def _build_thinking_config(self) -> genai_types.ThinkingConfig | None:

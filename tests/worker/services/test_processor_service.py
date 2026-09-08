@@ -141,24 +141,26 @@ class TestJobProcessorCore:
 
     def test_detect_language_for_text_low_confidence(self, processor):
         """C.1.1: `_detect_language_for_text` now delegates to the shared
-        `language_detection_core.detect_language_for_text`, so the
-        underlying `detect_langs` call is patched there instead of on
-        `processor_service` directly."""
+        `language_detection_core.detect_language_for_text`, so the lingua
+        detector is stubbed there instead of on `processor_service`
+        directly."""
+        from lingua import Language
+
         mock_candidate = MagicMock()
-        mock_candidate.lang = "en"
-        mock_candidate.prob = 0.1  # Below default threshold
+        mock_candidate.language = Language.ENGLISH
+        mock_candidate.value = 0.1  # Below default threshold
         with patch(
-            "src.worker.services.language_detection_core.detect_langs",
-            return_value=[mock_candidate],
+            "src.worker.services.language_detection_core._get_detector",
+            return_value=MagicMock(
+                compute_language_confidence_values=lambda _text: [mock_candidate]
+            ),
         ):
             assert processor._detect_language_for_text("some text") is None
 
     def test_detect_language_for_text_exception(self, processor):
-        from langdetect import LangDetectException
-
         with patch(
-            "src.worker.services.language_detection_core.detect_langs",
-            side_effect=LangDetectException(0, "Error"),
+            "src.worker.services.language_detection_core._get_detector",
+            side_effect=RuntimeError("detector unavailable"),
         ):
             assert processor._detect_language_for_text("some text") is None
 

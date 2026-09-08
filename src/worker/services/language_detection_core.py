@@ -5,30 +5,49 @@
 Extracted from `processor_service.py` (implementation_plan.md Phase C.1)
 so DOCX/TXT detection can share the exact same per-unit confidence-floor
 algorithm that PDF already used, instead of DOCX/TXT falling back to a
-single whole-document `detect_langs()` call with no confidence floor at
-all (the root cause of the EC-09 defect: short/ambiguous text like
+single whole-document detection call with no confidence floor at all
+(the root cause of the EC-09 defect: short/ambiguous text like
 "Information" or "OK" got a confident-looking but unreliable guess
 accepted outright).
+
+Detector
+--------
+Detection is backed by `lingua` (see `_get_detector`), which replaced
+`langdetect`. The two differ in ways that matter to everything below:
+
+* `lingua` normalizes its confidence values across all the languages it
+  was built with, so `MIN_DETECTION_CONFIDENCE` is a real threshold
+  rather than a formality. `langdetect` returned ~0.99999 for almost any
+  input, including a three-word run of city names, which is why the
+  floor could not filter noise on its own and the shape-based rules
+  below had to exist.
+* `lingua` lowercases internally, so casing no longer changes a verdict
+  (`case_normalize_for_detection` is now a no-op in effect, and is kept
+  only so the pipeline is not sensitive to that detail of the backend).
+* `lingua` is deterministic; `langdetect` needed `DetectorFactory.seed`
+  pinned to stop the same text resolving differently between runs.
 
 Mixed-language decision
 -----------------------
 The original guard rejected a document when the *count* of distinct
 languages on a single page exceeded a fixed limit. That was unusable in
 practice: a wholly monolingual English brochure (all-caps headings plus
-a network map full of city names) registers four "languages" on one
-page, because `langdetect` is ~0.99999 confident that "THE EXTRAORDINARY
-EVERYDAY." is Spanish and "Richmond Richmond Richmond" is German. A
-26-character run of proper nouns counted exactly as much toward the
-limit as 2,400 characters of real prose.
+a network map full of city names) registered four "languages" on one
+page. A 26-character run of proper nouns counted exactly as much toward
+the limit as 2,400 characters of real prose.
 
 Detection is now two layers, both defined here so every format shares
 them:
 
 1. Per-unit signal quality (`is_high_signal_unit`,
-   `case_normalize_for_detection`) discards the text where `langdetect`
-   is known to be unreliable -- too short, too few words, all-caps (its
-   n-gram profiles are lowercase), or a list of proper nouns -- so noise
-   never enters the distribution in the first place.
+   `case_normalize_for_detection`) discards text that carries no
+   reliable language signal -- too short, too few words, or a list of
+   proper nouns -- so noise never enters the distribution in the first
+   place. `lingua` scores that noise low enough for the confidence floor
+   to catch most of it ("Richmond Richmond Richmond" -> en 0.14,
+   "Busan Tokyo Osaka Yokohama" -> ms 0.22), so this layer is now
+   defence in depth rather than the only thing standing between a
+   monolingual brochure and a mixed-language rejection.
 
 2. A char-weighted *share* decision (`resolve_dominant_language`)
    replaces the distinct-language count. Languages holding a negligible
@@ -47,41 +66,37 @@ from collections import Counter
 from collections.abc import Iterable
 from functools import lru_cache
 
-from langdetect import DetectorFactory
-from langdetect import LangDetectException
-from langdetect import detect_langs
+from lingua import LanguageDetector
+from lingua import LanguageDetectorBuilder
 
 from src.config.constants import settings
 from src.config.translation_routing import get_language_mapper
 
 logger = logging.getLogger(__name__)
 
-# langdetect is non-deterministic by default (uses a random seed
-# internally); pin it so repeated detection of the same text is stable.
-# `processor_service.py` also sets this -- both assignments are
-# idempotent (module-level, same value), so importing either module
-# first has no effect on the other.
-DetectorFactory.seed = 0
-
 # Relaxed floor. Only gates which text is *considered* at all, and is
 # also the floor used by the whole-document fallback pass; counting a
 # unit toward the language distribution requires `is_high_signal_unit`.
 MIN_DETECTION_TEXT_LENGTH = 20
 MIN_DETECTION_ALPHA_CHARS = 5
+# lingua spreads its confidence across every language it knows, so this
+# is a meaningful floor: clear prose in a supported language scores
+# >=0.93, while proper-noun runs and stray-word fragments score under
+# 0.25 and are dropped.
 MIN_DETECTION_CONFIDENCE = 0.80
 
 # --- Layer 1: per-unit signal quality --------------------------------
-# langdetect is overconfident on short text -- it returns p=0.99999 for
-# "Richmond Richmond Richmond" (de) -- so the confidence floor above
-# cannot filter these on its own. Length and shape can.
+# Length and shape rules, applied before the detector is consulted at
+# all. Retained from the langdetect era (where they were load-bearing,
+# because the confidence floor could not filter anything) as a cheap
+# first pass that keeps short display text out of the distribution.
 MIN_UNIT_TEXT_LENGTH = settings.LANGUAGE_DETECTION_MIN_UNIT_CHARS
 MIN_UNIT_WORD_COUNT = settings.LANGUAGE_DETECTION_MIN_UNIT_WORDS
 
-# Above this share of cased letters being uppercase, the unit is treated
-# as all-caps display text and lowercased before detection: langdetect's
-# n-gram profiles are built from lowercase text, so ALL-CAPS English
-# matches foreign profiles at near-certainty ("SUPPORTING YOUR BUSINESS
-# WITH OUR BACKBONE" -> de 0.99999; lowercased -> en 0.99999).
+# Above this share of cased letters being uppercase, the unit is
+# lowercased before detection. lingua is case-insensitive, so this no
+# longer changes any verdict; it is kept so the pipeline does not depend
+# on that property of the backend.
 UPPERCASE_NORMALIZATION_RATIO = 0.6
 
 # Above this share of words being capitalized, the unit is treated as a
@@ -113,14 +128,36 @@ MIN_MIXED_DECISION_CHARS = settings.LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS
 # a confident-looking wrong language, not a tuning knob.
 MIN_FALLBACK_TEXT_CHARS = 500
 
-# langdetect emits ISO codes that don't always match this service's
-# canonical set (language_mapper.json); normalize the handful of aliases
-# actually seen in practice.
+# lingua emits clean ISO 639-1 codes (`zh`, `he`), so these aliases are
+# inert for the current backend. Kept because the same normalization is
+# applied to language codes arriving from elsewhere -- language_mapper.json
+# still carries a `zh-cn` key -- and because dropping it would silently
+# change what a caller passing a legacy code resolves to.
 DETECTED_LANGUAGE_ALIASES: dict[str, str] = {
     "zh-cn": "zh",
     "zh-tw": "zh",
     "iw": "he",
 }
+
+
+@lru_cache(maxsize=1)
+def _get_detector() -> LanguageDetector:
+    """Return the process-wide lingua detector, building it once.
+
+    Built from *all* of lingua's languages rather than only the ones in
+    `get_supported_languages()`: callers rely on detection being able to
+    name an unsupported language so they can skip that text
+    (`paragraph_translator.py`, `il_translator_llm_only.py`,
+    `pipeline_orchestrator.py`). Restricting the detector would force
+    every Dutch or Portuguese block into the nearest supported language
+    instead.
+
+    Language models load lazily on first use and are then cached inside
+    the detector, which is why this is a singleton -- one shared
+    detector across concurrent jobs rather than one per `JobProcessor`.
+    `LanguageDetector` is immutable and safe to share between threads.
+    """
+    return LanguageDetectorBuilder.from_all_languages().build()
 
 
 class MixedLanguageError(ValueError):
@@ -139,7 +176,7 @@ class MixedLanguageError(ValueError):
 
 
 def is_detectable_text(text: str) -> bool:
-    """Return True if `text` has enough signal for langdetect to be trusted."""
+    """Return True if `text` has enough signal for detection to be trusted."""
     alpha_count = sum(1 for ch in text if ch.isalpha())
     return (
         len(text) >= MIN_DETECTION_TEXT_LENGTH
@@ -150,11 +187,14 @@ def is_detectable_text(text: str) -> bool:
 def case_normalize_for_detection(text: str) -> str:
     """Lowercase `text` when it is predominantly uppercase.
 
-    langdetect's language profiles are lowercase n-grams, so all-caps
-    headings -- ubiquitous in brochures, slide decks and marketing PDFs
-    -- are matched against the wrong profiles with near-total
-    confidence. Lowercasing restores the correct match; text that is
-    already mixed-case is returned untouched.
+    A no-op as far as the verdict goes under lingua, which lowercases
+    input itself: "SUPPORTING YOUR BUSINESS WITH OUR BACKBONE NETWORK
+    TODAY" and its lowercase form both score en 0.899591. It mattered
+    under langdetect, whose profiles were lowercase n-grams, so all-caps
+    English headings -- ubiquitous in brochures, slide decks and
+    marketing PDFs -- matched foreign profiles at near-total confidence.
+    Kept so the pipeline stays correct if the backend changes again;
+    text that is already mixed-case is returned untouched.
     """
     cased = [ch for ch in text if ch.isalpha()]
     if not cased:
@@ -171,9 +211,8 @@ def is_proper_noun_list(text: str) -> bool:
     Page furniture such as "Busan Tokyo Osaka Yokohama Nagoya Kyoto
     Kobe" or "Executive Manager Katsuya Oe (Vice President, Enterprise
     Sales - Asia)" is long enough to clear every length floor, yet
-    carries no language signal -- langdetect reports Tagalog and
-    Catalan respectively, at high confidence. Names are overwhelmingly
-    capitalized, which is what this detects.
+    carries no language signal. Names are overwhelmingly capitalized,
+    which is what this detects.
     """
     words = [word for word in text.split() if any(ch.isalpha() for ch in word)]
     if not words:
@@ -199,7 +238,7 @@ def is_high_signal_unit(text: str) -> bool:
 
 
 def normalize_detected_language(language: str) -> str:
-    """Map a raw langdetect code to this service's canonical alias, if any."""
+    """Map a raw detected code to this service's canonical alias, if any."""
     normalized = str(language).strip().lower()
     return DETECTED_LANGUAGE_ALIASES.get(normalized, normalized)
 
@@ -207,22 +246,32 @@ def normalize_detected_language(language: str) -> str:
 def detect_language_for_text(text: str) -> str | None:
     """Detect the language of one chunk of text, or None if not confident.
 
-    Returns `None` (rather than a low-confidence guess) when langdetect
-    itself fails, returns nothing, or reports a confidence below
+    Returns `None` (rather than a low-confidence guess) when the
+    detector fails, returns nothing, or reports a confidence below
     `MIN_DETECTION_CONFIDENCE` -- the confidence floor that DOCX/TXT
     detection previously lacked entirely (EC-09). The text is
     case-normalized first (see `case_normalize_for_detection`).
+
+    Note that lingua returns a full, zero-valued candidate list for text
+    it cannot read at all rather than an empty one, so the floor -- not
+    the emptiness check -- is what rejects those.
     """
     try:
-        candidates = detect_langs(case_normalize_for_detection(text))
-    except LangDetectException:
+        candidates = _get_detector().compute_language_confidence_values(
+            case_normalize_for_detection(text)
+        )
+    except Exception:
+        # Detection is advisory: a backend failure on one text block must
+        # not abort a job that would otherwise translate fine, so this
+        # degrades to "no language" exactly as an unconfident result does.
+        logger.warning("Language detection failed for a text block", exc_info=True)
         return None
     if not candidates:
         return None
     best_match = candidates[0]
-    if best_match.prob < MIN_DETECTION_CONFIDENCE:
+    if best_match.value < MIN_DETECTION_CONFIDENCE:
         return None
-    return normalize_detected_language(best_match.lang)
+    return normalize_detected_language(best_match.language.iso_code_639_1.name)
 
 
 def count_unit_languages(
@@ -253,9 +302,9 @@ def detect_language_of_joined_text(units: Iterable[str]) -> Counter[str]:
 
     Documents made entirely of short units -- slide decks, bullet lists,
     form labels -- can leave the high-signal pass empty even though the
-    document as a whole is unambiguous. Concatenating is exactly the
-    case langdetect handles best (long text), so this recovers them
-    without weakening the per-unit floors.
+    document as a whole is unambiguous. Concatenating gives the detector
+    the long text it is most reliable on, so this recovers them without
+    weakening the per-unit floors.
 
     Deliberately requires substantially more text than a single unit
     does: a handful of words like "Information Total OK 2026" must still

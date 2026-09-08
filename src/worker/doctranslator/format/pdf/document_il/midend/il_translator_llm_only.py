@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from src.config.constants import settings
 from src.config.domain_prompts import get_domain_role_block
+from src.config.language_prompts import build_secondary_language_block
 from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
@@ -64,6 +65,7 @@ logger = logging.getLogger(__name__)
 PROMPT_TEMPLATE = Template(
     """$role_block
 
+$secondary_language_block
 ## Structure Rules
 1. Keep **the same number of paragraphs as the input**.
 2. Input paragraphs may be **sliced pieces of the same original paragraph**.  
@@ -1242,6 +1244,20 @@ class ILTranslatorLLMOnly:
         glossary_tables_block = "\n".join(glossary_table_lines)
         return glossary_usage_rules_block, glossary_tables_block
 
+    def _build_secondary_language_block(self) -> str:
+        """Mixed-language instruction block, or "" on a monolingual document.
+
+        This template never named a source language at all -- it only ever
+        said "translate into $lang_out" -- so on a mixed document the model
+        had nothing telling it that some segments are in a different
+        language from the rest. See config/language_prompts.py.
+        """
+        return build_secondary_language_block(
+            getattr(self.translation_config, "secondary_languages", None) or (),
+            primary_language=self.translation_config.lang_in,
+            target_language=self.translation_config.lang_out,
+        )
+
     def _build_llm_prompt(
         self,
         json_input_str: str,
@@ -1260,6 +1276,7 @@ class ILTranslatorLLMOnly:
 
         return PROMPT_TEMPLATE.substitute(
             role_block=role_block,
+            secondary_language_block=self._build_secondary_language_block(),
             glossary_usage_rules_block=glossary_usage_rules_block,
             contextual_hints_block=contextual_hints_block,
             json_input_str=wrap_untrusted_content(json_input_str),

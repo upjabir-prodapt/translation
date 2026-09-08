@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Sequence
 
 from src.config.constants import settings
 from src.worker.doctranslator.utils.atomic_integer import AtomicInteger
@@ -58,6 +59,7 @@ def build_cache_key(
     lang_out: str,
     text: str,
     domain: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> str:
     """Return a stable, namespaced cache key for one (engine, params, text)
     combination.
@@ -78,6 +80,19 @@ def build_cache_key(
     ]
     if domain and str(domain).strip():
         parts.append(str(domain).strip().lower())
+    # The mixed-language prompt block is an input to the prompt, so two
+    # jobs over the same text differing only in which secondary languages
+    # were detected must not share a cache entry -- one of them would be
+    # served a translation produced without the instruction to switch
+    # source language per segment.
+    if secondary_languages:
+        parts.append(
+            "sec:"
+            + ",".join(
+                f"{str(code).strip().lower()}"
+                for code, _share in sorted(secondary_languages)
+            )
+        )
     parts.append(text)
     payload = "|".join(parts)
     digest = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()

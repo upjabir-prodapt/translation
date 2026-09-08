@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from src.config.domain_prompts import get_domain_prompt_block
+from src.config.language_prompts import build_secondary_language_block
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 
@@ -12,6 +15,7 @@ def build_translation_prompt(
     lang_in: str,
     lang_out: str,
     domain: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> str:
     """Build the standard document translation prompt used across all LLM backends.
 
@@ -20,15 +24,29 @@ def build_translation_prompt(
     `INJECTION_GUARD_CLAUSE` so the model treats anything inside the
     delimiters as data to translate, never as instructions -- see
     prompt_safety.py for the full threat model and output-side guard.
+
+    `secondary_languages` are the minority languages detection found in
+    this document. When present they are rendered directly after the Task
+    line -- the one place in the prompt that names a source language --
+    so the instruction to switch source language per segment sits next to
+    the default it overrides. Empty on a monolingual document, which
+    leaves this prompt byte-for-byte as it was.
     """
     domain_block = get_domain_prompt_block(domain)
     domain_section = f"{domain_block}\n\n" if domain_block else ""
+    secondary_block = build_secondary_language_block(
+        secondary_languages or (),
+        primary_language=lang_in,
+        target_language=lang_out,
+    )
+    secondary_section = f"{secondary_block}\n" if secondary_block else ""
 
     return (
         "# Role\n"
         "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
         "# Task\n"
         f"Translate the INPUT below from {lang_in} into {lang_out}.\n\n"
+        f"{secondary_section}"
         f"{domain_section}"
         f"{INJECTION_GUARD_CLAUSE}\n"
         "# Output format (plain text only)\n"

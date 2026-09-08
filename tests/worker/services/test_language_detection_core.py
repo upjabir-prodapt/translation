@@ -10,8 +10,30 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-from langdetect import LangDetectException
+from lingua import Language
 from src.worker.services import language_detection_core as core
+
+
+def _confidence(language: Language, value: float) -> MagicMock:
+    """Stand in for a lingua `ConfidenceValue`.
+
+    `ConfidenceValue` is a Rust-backed type that cannot be constructed
+    from Python, so tests that need to force a specific confidence mock
+    the two attributes the code reads.
+    """
+    candidate = MagicMock()
+    candidate.language = language
+    candidate.value = value
+    return candidate
+
+
+def _patch_detector(**kwargs):
+    """Swap in a stub lingua detector for the duration of one test.
+
+    Patches the module attribute rather than the `lru_cache`, so the
+    real detector's cached language models are never disturbed.
+    """
+    return patch.object(core, "_get_detector", return_value=MagicMock(**kwargs))
 
 
 class TestIsDetectableText:
@@ -37,24 +59,46 @@ class TestNormalizeDetectedLanguage:
 
 class TestDetectLanguageForText:
     def test_low_confidence_returns_none(self):
-        mock_candidate = MagicMock(lang="en", prob=0.1)
-        with patch.object(core, "detect_langs", return_value=[mock_candidate]):
+        with _patch_detector(
+            compute_language_confidence_values=lambda _text: [
+                _confidence(Language.ENGLISH, 0.1)
+            ]
+        ):
             assert core.detect_language_for_text("some text") is None
 
-    def test_confident_match_returns_normalized_language(self):
-        mock_candidate = MagicMock(lang="zh-cn", prob=0.95)
-        with patch.object(core, "detect_langs", return_value=[mock_candidate]):
+    def test_confident_match_returns_iso_639_1_code(self):
+        with _patch_detector(
+            compute_language_confidence_values=lambda _text: [
+                _confidence(Language.CHINESE, 0.95)
+            ]
+        ):
             assert core.detect_language_for_text("some text") == "zh"
 
     def test_exception_returns_none(self):
-        with patch.object(
-            core, "detect_langs", side_effect=LangDetectException(0, "Error")
+        """Detection is advisory: a backend failure degrades to "no
+        language" instead of failing the job."""
+        with _patch_detector(
+            compute_language_confidence_values=MagicMock(
+                side_effect=RuntimeError("detector unavailable")
+            )
         ):
             assert core.detect_language_for_text("some text") is None
 
     def test_empty_candidates_returns_none(self):
-        with patch.object(core, "detect_langs", return_value=[]):
+        with _patch_detector(compute_language_confidence_values=lambda _text: []):
             assert core.detect_language_for_text("some text") is None
+
+    def test_unreadable_text_is_rejected_by_the_confidence_floor(self):
+        """lingua returns a full zero-valued candidate list -- not an
+        empty one -- for text it cannot read, so the floor is what has
+        to reject it."""
+        with _patch_detector(
+            compute_language_confidence_values=lambda _text: [
+                _confidence(Language.FRENCH, 0.0),
+                _confidence(Language.POLISH, 0.0),
+            ]
+        ):
+            assert core.detect_language_for_text("12345 !!!") is None
 
 
 class TestAggregateLanguages:
@@ -82,9 +126,11 @@ class TestGetSupportedLanguages:
 
 # Text taken verbatim from a real monolingual English company brochure
 # that the previous distinct-language-count guard rejected. Every one of
-# these is English, and langdetect assigns each a *different* non-English
-# language at >=0.85 confidence, so the confidence floor cannot filter
-# them -- only case normalization and shape can.
+# these is English. Under langdetect each drew a *different* non-English
+# language at >=0.85 confidence, so only the length and shape rules could
+# filter them; lingua scores them low enough that the confidence floor
+# would catch them too. Both layers are asserted below, because layer 1
+# is what makes the outcome independent of the detector.
 ENGLISH_TEXT_MISREAD_AS_FOREIGN = [
     "THE EXTRAORDINARY EVERYDAY.",
     "SUPPORTING YOUR BUSINESS WITH OUR BACKBONE",
@@ -113,14 +159,22 @@ class TestCaseNormalizeForDetection:
         assert core.case_normalize_for_detection("1,100+") == "1,100+"
 
     def test_all_caps_english_headings_detect_as_english(self):
-        """The all-caps failure mode: langdetect profiles are lowercase
-        n-grams, so ALL-CAPS English matches foreign profiles at ~0.99999
-        confidence until the text is normalized."""
+        """The all-caps failure mode, exercised against the real
+        detector. langdetect matched ALL-CAPS English to foreign
+        lowercase n-gram profiles at ~0.99999 and needed the
+        normalization above to recover; lingua is case-insensitive. The
+        headings must come back as English either way."""
         for heading in (
             "THE EXTRAORDINARY EVERYDAY. WE DELIVER EVERY SINGLE DAY.",
             "SUPPORTING YOUR BUSINESS WITH OUR BACKBONE NETWORK TODAY",
         ):
             assert core.detect_language_for_text(heading) == "en"
+
+    def test_casing_does_not_change_the_detected_language(self):
+        """Guards the property the normalization exists to provide,
+        rather than the normalization itself."""
+        assert core.detect_language_for_text(ENGLISH_PROSE) == "en"
+        assert core.detect_language_for_text(ENGLISH_PROSE.upper()) == "en"
 
 
 class TestIsProperNounList:
@@ -172,6 +226,13 @@ class TestCountUnitLanguages:
         language, so a monolingual document cannot look multilingual."""
         counter, _chars = core.count_unit_languages(ENGLISH_TEXT_MISREAD_AS_FOREIGN)
         assert counter == Counter()
+
+    @pytest.mark.parametrize("text", ENGLISH_TEXT_MISREAD_AS_FOREIGN)
+    def test_brochure_noise_is_also_below_the_confidence_floor(self, text):
+        """Layer 2 independently rejects every unit layer 1 drops, so a
+        change to the length or shape thresholds cannot on its own let
+        this noise back into the distribution."""
+        assert core.detect_language_for_text(text) is None
 
     def test_prose_units_are_char_weighted(self):
         counter, chars = core.count_unit_languages([ENGLISH_PROSE])
