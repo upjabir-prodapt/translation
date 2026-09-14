@@ -4,6 +4,8 @@
   {"name": "source_document", "type": "STRING", "mode": "NULLABLE"},
   {"name": "translation_config", "type": "STRING", "mode": "NULLABLE"},
   {"name": "cost_attribution", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "business_unit", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "organization", "type": "STRING", "mode": "NULLABLE"},
   {"name": "result", "type": "STRING", "mode": "NULLABLE"},
   {"name": "error_message", "type": "STRING", "mode": "NULLABLE"},
   {"name": "source_hash", "type": "STRING", "mode": "NULLABLE"},

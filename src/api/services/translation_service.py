@@ -222,6 +222,11 @@ class TranslationService:
                     "enable_dlp": request.processing_options.enable_dlp,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
+                # Promoted to top-level translation_jobs columns too (see
+                # bigquery_repository.upsert_translation_job) so BigQuery
+                # queries/joins don't need JSON_VALUE() into cost_attribution.
+                "business_unit": request.cost_attribution.business_unit,
+                "organization": request.cost_attribution.organization,
                 # Record the priority actually used, not what the client asked
                 # for, so BigQuery reflects the real routing decision.
                 "processing_options": {
@@ -346,6 +351,11 @@ class TranslationService:
                     "enable_dlp": request.processing_options.enable_dlp,
                 },
                 "cost_attribution": request.cost_attribution.model_dump(),
+                # Promoted to top-level translation_jobs columns too (see
+                # bigquery_repository.upsert_translation_job) so BigQuery
+                # queries/joins don't need JSON_VALUE() into cost_attribution.
+                "business_unit": request.cost_attribution.business_unit,
+                "organization": request.cost_attribution.organization,
                 "processing_options": {
                     "enable_dlp": request.processing_options.enable_dlp,
                     "enable_chunking": request.processing_options.enable_chunking,

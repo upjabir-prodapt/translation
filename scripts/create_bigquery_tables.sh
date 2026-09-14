@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Creates dataset/tables when missing. When a table exists:
 #   - adds missing columns via `bq update`
-#   - if any shared column has a type/mode mismatch, or live table has extra
-#     columns not in the schema file, deletes the table and recreates it
+#   - reconciles clustering (adds/changes/removes clustering columns) via
+#     `bq update --clustering_fields=...` -- non-destructive, safe to change
+#     on a live table at any time
+#   - if any shared column has a type/mode mismatch, live table has extra
+#     columns not in the schema file, or the partitioning field doesn't match
+#     what's configured below (BigQuery partitioning is immutable once a
+#     table is created), deletes the table and recreates it
 #     (destructive — all rows in that table are lost)
 #
 # Table names are identical in every project; only PROJECT (and derived dataset id) change.
@@ -46,7 +51,7 @@ CUSTOM_PROJECT=""
 CUSTOM_DATASET=""
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -152,6 +157,31 @@ create_table() {
   fi
 }
 
+# Reconciles clustering on an already-existing table. Unlike partitioning,
+# BigQuery allows changing (or removing) clustering columns on a live table
+# at any time via `bq update --clustering_fields=...` -- no rebuild, no data
+# loss -- so this is handled independently of the column/partition
+# drift-recreate path below.
+reconcile_clustering() {
+  local ref="$1" desired="$2" live_clustering_file="$3"
+  local live
+  live="$(cat "$live_clustering_file" 2>/dev/null || true)"
+
+  if [[ "$live" == "$desired" ]]; then
+    log "Clustering already up to date: ${ref}"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "Would update clustering for ${ref} (live=[${live}] desired=[${desired}])"
+    return 0
+  fi
+
+  log "Updating clustering for ${ref} (live=[${live}] desired=[${desired}])"
+  # An empty --clustering_fields value removes clustering entirely.
+  run bq update --clustering_fields="$desired" "$ref"
+}
+
 sync_table() {
   local project="$1" dataset="$2" table="$3" schema_file="$4" partition_field="$5" clustering_fields="${6:-}"
   local ref="${project}:${dataset}.${table}"
@@ -165,11 +195,13 @@ sync_table() {
     return 0
   fi
 
-  local tmp_missing tmp_drift
+  local tmp_missing tmp_drift tmp_clustering_live tmp_partition_warning
   tmp_missing="$(mktemp)"
   tmp_drift="$(mktemp)"
+  tmp_clustering_live="$(mktemp)"
+  tmp_partition_warning="$(mktemp)"
 
-  python3 - "$ref" "$schema_file" "$tmp_missing" "$tmp_drift" <<'PY'
+  python3 - "$ref" "$schema_file" "$tmp_missing" "$tmp_drift" "$partition_field" "$tmp_clustering_live" "$tmp_partition_warning" <<'PY'
 import json
 import subprocess
 import sys
@@ -188,13 +220,22 @@ def norm_type(value: str) -> str:
     return TYPE_ALIASES.get(value, value)
 
 
-ref, schema_file, missing_path, drift_path = sys.argv[1:5]
+(
+    ref,
+    schema_file,
+    missing_path,
+    drift_path,
+    partition_field,
+    clustering_live_path,
+    partition_warning_path,
+) = sys.argv[1:8]
 desired = json.load(open(schema_file, encoding="utf-8"))
 raw = subprocess.check_output(
     ["bq", "show", "--format=prettyjson", ref],
     text=True,
 )
-existing = json.loads(raw)["schema"]["fields"]
+table = json.loads(raw)
+existing = table["schema"]["fields"]
 by_name = {field["name"]: field for field in existing}
 
 missing = []
@@ -214,6 +255,30 @@ for field in desired:
             f"desired={field.get('type')}/{field.get('mode', 'NULLABLE')}"
         )
 
+# Partitioning is immutable on an existing BigQuery table -- the only way to
+# actually change it is delete-and-recreate, which is far too destructive to
+# trigger automatically just because a routine column sync noticed it (the
+# table may have real rows nobody asked to throw away right now). So this is
+# surfaced as an advisory-only warning, deliberately kept OUT of `drift`
+# (which drives the auto-recreate path below) -- fixing it is a separate,
+# deliberate `bq rm` + `create_table` a human decides to run.
+live_partition_field = (table.get("timePartitioning") or {}).get("field")
+partition_warning = ""
+if partition_field and live_partition_field != partition_field:
+    partition_warning = (
+        f"partitioning mismatch on {ref}: live_field={live_partition_field!r} "
+        f"desired_field={partition_field!r} -- BigQuery partitioning cannot "
+        "be changed in place; NOT auto-recreating (would lose all rows) -- "
+        "fix manually if this table needs partition pruning"
+    )
+open(partition_warning_path, "w", encoding="utf-8").write(partition_warning)
+
+# Clustering, unlike partitioning, CAN be changed in place -- reconciled
+# separately (reconcile_clustering(), non-destructive) rather than folded
+# into `drift`, so a clustering-only change never triggers a table rebuild.
+live_clustering_fields = ",".join((table.get("clustering") or {}).get("fields", []))
+open(clustering_live_path, "w", encoding="utf-8").write(live_clustering_fields)
+
 for name in sorted(by_name):
     if name not in desired_names:
         drift.append(f"{name}: extra column in live table not in schema")
@@ -222,10 +287,12 @@ json.dump(missing, open(missing_path, "w", encoding="utf-8"))
 open(drift_path, "w", encoding="utf-8").write("\n".join(drift))
 PY
 
-  local missing_count drift_count
+  local missing_count drift_count partition_warning
   missing_count="$(python3 -c "import json; print(len(json.load(open('$tmp_missing'))))")"
   drift_count="$(grep -c . "$tmp_drift" 2>/dev/null || true)"
   drift_count="${drift_count:-0}"
+  partition_warning="$(cat "$tmp_partition_warning" 2>/dev/null || true)"
+  [[ -n "$partition_warning" ]] && echo "WARNING: ${partition_warning}" >&2
 
   if [[ "$drift_count" -gt 0 ]]; then
     while IFS= read -r line; do
@@ -238,19 +305,23 @@ PY
       run bq rm -f -t "$ref"
       create_table "$ref" "$schema_file" "$partition_field" "$clustering_fields"
     fi
-    rm -f "$tmp_missing" "$tmp_drift"
+    # Recreation (or its dry-run) already applies the desired clustering via
+    # create_table(), so no separate reconcile_clustering() call here.
+    rm -f "$tmp_missing" "$tmp_drift" "$tmp_clustering_live" "$tmp_partition_warning"
     return 0
   fi
 
   if [[ "$missing_count" -eq 0 ]]; then
     log "Schema up to date: ${ref}"
-    rm -f "$tmp_missing" "$tmp_drift"
+    reconcile_clustering "$ref" "$clustering_fields" "$tmp_clustering_live"
+    rm -f "$tmp_missing" "$tmp_drift" "$tmp_clustering_live" "$tmp_partition_warning"
     return 0
   fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "Would update schema for ${ref} (add ${missing_count} column(s))"
-    rm -f "$tmp_missing" "$tmp_drift"
+    reconcile_clustering "$ref" "$clustering_fields" "$tmp_clustering_live"
+    rm -f "$tmp_missing" "$tmp_drift" "$tmp_clustering_live" "$tmp_partition_warning"
     return 0
   fi
 
@@ -283,7 +354,8 @@ PY
 
   log "Updating schema for ${ref} (adding ${missing_count} column(s))"
   run bq update "$ref" "$tmp_merged"
-  rm -f "$tmp_missing" "$tmp_drift" "$tmp_merged"
+  reconcile_clustering "$ref" "$clustering_fields" "$tmp_clustering_live"
+  rm -f "$tmp_missing" "$tmp_drift" "$tmp_merged" "$tmp_clustering_live" "$tmp_partition_warning"
 }
 
 provision_project() {
@@ -295,8 +367,14 @@ provision_project() {
   run gcloud config set project "$project" >/dev/null
 
   ensure_dataset "$project" "$dataset"
-  sync_table "$project" "$dataset" "$TABLE_TRANSLATION_JOBS" "$SCHEMA_TRANSLATION_JOBS" "submitted_at" "status,job_id"
-  sync_table "$project" "$dataset" "$TABLE_TRANSLATION_COSTS" "$SCHEMA_TRANSLATION_COSTS" "timestamp"
+  # translation_jobs/translation_costs: business_unit/organization appended
+  # as clustering columns (BigQuery allows up to 4) so a query filtering on
+  # them -- e.g. job status or cost by business unit/organization -- gets
+  # block pruning instead of a full per-partition scan. Existing status/
+  # job_id clustering on translation_jobs is kept first so it stays the
+  # dominant lookup path.
+  sync_table "$project" "$dataset" "$TABLE_TRANSLATION_JOBS" "$SCHEMA_TRANSLATION_JOBS" "submitted_at" "status,job_id,business_unit,organization"
+  sync_table "$project" "$dataset" "$TABLE_TRANSLATION_COSTS" "$SCHEMA_TRANSLATION_COSTS" "timestamp" "business_unit,organization,job_id"
   sync_table "$project" "$dataset" "$TABLE_DLP_MAPPINGS" "$SCHEMA_DLP_MAPPINGS" "masked_at" "job_id,chunk_index"
   sync_table "$project" "$dataset" "$TABLE_TRANSLATION_REVIEWS" "$SCHEMA_TRANSLATION_REVIEWS" "created_at" "job_id"
 

@@ -106,6 +106,14 @@ class BigQueryRepository:
         if isinstance(completed_at, str):
             completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
 
+        # cost_attribution carries business_unit/organization nested (see
+        # CostAttributionInput); promoted to their own top-level columns here
+        # too so BigQuery queries/joins on translation_jobs don't need to
+        # JSON_VALUE() into cost_attribution just for these two, mirroring
+        # write_cost_attribution()'s columns on translation_costs. A caller
+        # may also pass them as top-level job_data keys directly (e.g. a
+        # patch_translation_job() merge), which takes precedence.
+        cost_attribution = job_data.get("cost_attribution") or {}
         row = {
             "job_id": str(job_data["job_id"]),
             "status": str(job_data.get("status", "queued")),
@@ -114,6 +122,10 @@ class BigQueryRepository:
                 job_data.get("translation_config")
             ),
             "cost_attribution": self._to_json_string(job_data.get("cost_attribution")),
+            "business_unit": job_data.get("business_unit")
+            or cost_attribution.get("business_unit"),
+            "organization": job_data.get("organization")
+            or cost_attribution.get("organization"),
             "result": self._to_json_string(job_data.get("result")),
             "error_message": job_data.get("error_message"),
             "source_hash": job_data.get("source_hash"),
@@ -136,6 +148,8 @@ class BigQueryRepository:
                 @source_document AS source_document,
                 @translation_config AS translation_config,
                 @cost_attribution AS cost_attribution,
+                @business_unit AS business_unit,
+                @organization AS organization,
                 @result AS result,
                 @error_message AS error_message,
                 @source_hash AS source_hash,
@@ -150,6 +164,8 @@ class BigQueryRepository:
             source_document = S.source_document,
             translation_config = S.translation_config,
             cost_attribution = S.cost_attribution,
+            business_unit = S.business_unit,
+            organization = S.organization,
             result = S.result,
             error_message = S.error_message,
             source_hash = S.source_hash,
@@ -158,8 +174,8 @@ class BigQueryRepository:
             submitted_at = S.submitted_at,
             completed_at = S.completed_at
         WHEN NOT MATCHED THEN
-            INSERT (job_id, status, source_document, translation_config, cost_attribution, result, error_message, source_hash, batch_id, batch_index, submitted_at, completed_at)
-            VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.result, S.error_message, S.source_hash, S.batch_id, S.batch_index, S.submitted_at, S.completed_at)
+            INSERT (job_id, status, source_document, translation_config, cost_attribution, business_unit, organization, result, error_message, source_hash, batch_id, batch_index, submitted_at, completed_at)
+            VALUES (S.job_id, S.status, S.source_document, S.translation_config, S.cost_attribution, S.business_unit, S.organization, S.result, S.error_message, S.source_hash, S.batch_id, S.batch_index, S.submitted_at, S.completed_at)
         """  # noqa: S608  # nosec B608
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
@@ -173,6 +189,12 @@ class BigQueryRepository:
                 ),
                 bigquery.ScalarQueryParameter(
                     "cost_attribution", "STRING", row["cost_attribution"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "business_unit", "STRING", row["business_unit"]
+                ),
+                bigquery.ScalarQueryParameter(
+                    "organization", "STRING", row["organization"]
                 ),
                 bigquery.ScalarQueryParameter("result", "STRING", row["result"]),
                 bigquery.ScalarQueryParameter(
@@ -448,6 +470,8 @@ class BigQueryRepository:
             "source_document": self._deserialize_json(row.get("source_document")),
             "translation_config": self._deserialize_json(row.get("translation_config")),
             "cost_attribution": self._deserialize_json(row.get("cost_attribution")),
+            "business_unit": row.get("business_unit"),
+            "organization": row.get("organization"),
             "result": self._deserialize_json(row.get("result")),
             "error_message": row.get("error_message"),
             "source_hash": row.get("source_hash"),
