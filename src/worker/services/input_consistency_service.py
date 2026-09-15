@@ -44,6 +44,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from src.config.constants import settings
+from src.config.llm_identity import current_llm_identity
 from src.config.translation_routing import SUPPORTED_DOMAINS
 
 logger = logging.getLogger(__name__)
@@ -397,14 +398,25 @@ async def classify_document_domain(
 
     Raises `DomainCheckUnavailableError` when no verdict could be reached.
 
-    Cached per `source_hash`: sibling jobs of a multi-target batch share one
-    call, which also guarantees they cannot reach opposite verdicts on the
+    Cached per `(source_hash, user)`: sibling jobs of a multi-target batch share
+    one call, which also guarantees they cannot reach opposite verdicts on the
     same document. A failed classification is evicted rather than cached, so a
     later submission of the same document retries instead of inheriting a
     transient outage; concurrent siblings still see the same failure because
     they already hold the same future.
+
+    The user is part of the key so that two DIFFERENT people submitting the
+    same document are not billed and quota-counted as one. Without it the
+    second user's LLM usage would be attributed to whoever happened to submit
+    first, which is exactly the mis-attribution the gateway exists to prevent.
+    Batch siblings are unaffected: they come from one submission by one user,
+    so they still share a key and still make exactly one call. Department is
+    deliberately not in the key -- it is a function of the user.
     """
+    identity = current_llm_identity()
     cache_key = source_hash.strip()
+    if cache_key and identity is not None and identity.oid:
+        cache_key = f"{cache_key}|{identity.oid}"
     if not cache_key:
         classification, cost_usd = await _do_classify(
             job_id=job_id,

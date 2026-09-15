@@ -13,6 +13,7 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from src.config.constants import settings
+from src.config.llm_identity import use_llm_identity
 from src.config.tracing import tracer_pipeline
 from src.repository.api_storage_repository import APIStorageRepository
 from src.repository.bigquery_repository import BigQueryRepository
@@ -71,18 +72,42 @@ class TranslateTaskHandler:
         job_id = payload.job_id
         parent_ctx = self._attach_trace(payload)
 
-        with tracer_pipeline.start_as_current_span(
-            "worker.translate_task",
-            context=parent_ctx,
-            kind=SpanKind.CONSUMER,
-            attributes={"translation.job_id": job_id},
-        ) as span:
+        with (
+            tracer_pipeline.start_as_current_span(
+                "worker.translate_task",
+                context=parent_ctx,
+                kind=SpanKind.CONSUMER,
+                attributes={"translation.job_id": job_id},
+            ) as span,
+            contextlib.ExitStack() as identity_scope,
+        ):
             job = await self.bigquery.get_translation_job(job_id)
             if not job:
                 span.set_status(trace.Status(trace.StatusCode.ERROR, "job not found"))
                 # Permanent — do not retry forever
                 logger.error("Job %s not found in BigQuery", job_id)
                 return {"job_id": job_id, "status": "not_found", "action": "noop"}
+
+            # Attribute every LLM call this job makes to the submitting user.
+            # This is the ONE point where identity re-enters the worker: the
+            # Cloud Tasks payload is deliberately PII-free, so the job row read
+            # above is the only source. Everything downstream reads it from a
+            # ContextVar (src/config/llm_identity.py) rather than having it
+            # threaded through ~10 function signatures.
+            #
+            # `user_id` is the submitting user's EMAIL, not their Entra oid --
+            # translation_jobs has no oid column and the API persists the email
+            # (src/api/routes/v1/translate.py). The gateway's per-user quota key
+            # is therefore an email for this service. business_unit is a real
+            # top-level column, denormalised out of the cost_attribution JSON
+            # for exactly this kind of read.
+            cost_attribution = job.get("cost_attribution") or {}
+            identity_scope.enter_context(
+                use_llm_identity(
+                    cost_attribution.get("user_id"),
+                    job.get("business_unit") or cost_attribution.get("business_unit"),
+                )
+            )
 
             status = str(job.get("status") or "")
             if status in job_status.TERMINAL_STATUSES:

@@ -70,6 +70,24 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# ── Colt internal CA ────────────────────────────────────────────────────
+# llm.aicoedev-int.colt.net (the Apigee LLM gateway every model call goes
+# through) presents a Colt-internal-CA chain that Python's default trust store
+# rejects with "CERTIFICATE_VERIFY_FAILED: self-signed certificate in
+# certificate chain". Public CA material, no private key -- see certs/README.md.
+#
+# TRAP 1: the destination filename MUST end in .crt even though the content is
+# PEM. update-ca-certificates silently skips any other extension.
+COPY certs/colt-internal-ca.pem /usr/local/share/ca-certificates/colt-internal-ca.crt
+RUN update-ca-certificates
+# TRAP 2: the step above only updates the OpenSSL/system store. httpx (used by
+# google-genai and anthropic) and requests both default to certifi's OWN bundle
+# and would keep failing with the same error. Point them at the system store.
+# Omitting this is the classic half-fix, and it only shows up as a TLS failure
+# at the first outbound call inside a deployed container.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
 COPY --from=builder /app/.venv /app/.venv
 COPY . .
 

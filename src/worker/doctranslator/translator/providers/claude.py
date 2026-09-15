@@ -8,6 +8,7 @@ from typing import Any
 
 from src.config.constants import settings
 from src.config.llm_gateway import gateway_anthropic_vertex_kwargs
+from src.config.llm_gateway import gateway_enabled
 from src.config.retry import llm_retry
 from src.worker.doctranslator.translator.base import BaseTranslator
 from src.worker.doctranslator.translator.instrumentation import ATTR_LLM_MODEL
@@ -43,6 +44,26 @@ class ClaudeVertexAITranslator(BaseTranslator):
         domain: str | None = None,
     ):
         super().__init__(lang_in, lang_out, domain=domain)
+        # Claude is deliberately NOT on the Apigee gateway's model allow-list
+        # (AICOE-Terraform docs/23 decision D-C), and it has been removed from
+        # model_selection.json, so nothing should route here while the gateway
+        # is on. If something does, Apigee rejects it during credential and
+        # operation matching -- before any policy in the proxy runs -- and the
+        # result surfaces as an opaque failure deep inside a translation
+        # attempt, with nothing pointing at the model. Fail here instead, where
+        # the message can name the actual cause.
+        #
+        # Lifting this means three things together, not one: add a Claude
+        # llmOperations entry to the aicoe-llm product, restore the model to
+        # model_selection.json, and verify the proxy accepts AnthropicVertex's
+        # ADC bearer token alongside x-apikey (never tested).
+        if gateway_enabled():
+            raise ValueError(
+                f"Claude model {model!r} cannot be used while LLM_GATEWAY_ENABLED "
+                "is true: it is not on the Apigee gateway's model allow-list "
+                "(decision D-C). Use a Gemini model, or add Claude to the "
+                "aicoe-llm product's llmOperationGroup first."
+            )
         try:
             from anthropic import AnthropicVertex
         except ImportError as exc:
