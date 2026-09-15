@@ -80,7 +80,9 @@ def use_llm_identity(oid: str | None, department: str | None) -> Iterator[None]:
     The token is always reset, so a later job on the same Cloud Run instance
     can never inherit the previous job's user -- these containers are reused.
     """
-    token = _current.set(LlmIdentity(oid=(oid or "").strip(), department=(department or "").strip()))
+    token = _current.set(
+        LlmIdentity(oid=(oid or "").strip(), department=(department or "").strip())
+    )
     try:
         yield
     finally:

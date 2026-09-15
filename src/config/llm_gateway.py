@@ -180,7 +180,10 @@ def gateway_anthropic_vertex_kwargs() -> dict[str, object]:
         return {}
     kwargs: dict[str, object] = {
         "base_url": gateway_base_url(),
-        "default_headers": {"x-apikey": _require_api_key(), **gateway_identity_headers()},
+        "default_headers": {
+            "x-apikey": _require_api_key(),
+            **gateway_identity_headers(),
+        },
     }
     if settings.LLM_GATEWAY_VERTEX_PROJECT:
         kwargs["project_id"] = settings.LLM_GATEWAY_VERTEX_PROJECT

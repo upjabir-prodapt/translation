@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
-
 from src.config.constants import settings
-from src.worker.doctranslator.translator.providers.claude import ClaudeVertexAITranslator
+from src.worker.doctranslator.translator.providers.claude import (
+    ClaudeVertexAITranslator,
+)
 
 
 def test_claude_refuses_while_gateway_enabled(monkeypatch: pytest.MonkeyPatch):
@@ -18,7 +19,10 @@ def test_claude_refuses_while_gateway_enabled(monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setattr(settings, "LLM_GATEWAY_ENABLED", True, raising=False)
     monkeypatch.setattr(
-        settings, "LLM_GATEWAY_BASE_URL", "https://llm.aicoedev-int.colt.net", raising=False
+        settings,
+        "LLM_GATEWAY_BASE_URL",
+        "https://llm.aicoedev-int.colt.net",
+        raising=False,
     )
     with pytest.raises(ValueError, match="allow-list"):
         ClaudeVertexAITranslator("en", "de", "claude-sonnet-4-6")

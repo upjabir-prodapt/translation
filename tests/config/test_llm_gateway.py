@@ -15,19 +15,17 @@ re-breaks the path, which is exactly what happened before this test existed.
 from __future__ import annotations
 
 import pytest
-
 from src.config.constants import settings
-from src.config.llm_gateway import (
-    HEADER_USER_DEPARTMENT,
-    HEADER_USER_OID,
-    gateway_anthropic_vertex_kwargs,
-    gateway_base_url,
-    gateway_enabled,
-    gateway_http_options_kwargs,
-    gateway_identity_headers,
-    gateway_vertex_identity_kwargs,
-)
-from src.config.llm_identity import current_llm_identity, use_llm_identity
+from src.config.llm_gateway import HEADER_USER_DEPARTMENT
+from src.config.llm_gateway import HEADER_USER_OID
+from src.config.llm_gateway import gateway_anthropic_vertex_kwargs
+from src.config.llm_gateway import gateway_base_url
+from src.config.llm_gateway import gateway_enabled
+from src.config.llm_gateway import gateway_http_options_kwargs
+from src.config.llm_gateway import gateway_identity_headers
+from src.config.llm_gateway import gateway_vertex_identity_kwargs
+from src.config.llm_identity import current_llm_identity
+from src.config.llm_identity import use_llm_identity
 
 GATEWAY_HOST = "https://llm.aicoedev-int.colt.net"
 MODEL_PATH = "publishers/google/models/gemini-3.5-flash:generateContent"
@@ -38,7 +36,9 @@ EXPECTED_URL = f"{GATEWAY_HOST}/v1/{MODEL_PATH}"
 def gateway_on(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "LLM_GATEWAY_ENABLED", True, raising=False)
     monkeypatch.setattr(settings, "LLM_GATEWAY_BASE_URL", GATEWAY_HOST, raising=False)
-    monkeypatch.setattr(settings, "LLM_GATEWAY_API_KEY_SECRET", "TESTKEY", raising=False)
+    monkeypatch.setattr(
+        settings, "LLM_GATEWAY_API_KEY_SECRET", "TESTKEY", raising=False
+    )
     return settings
 
 
@@ -63,12 +63,14 @@ def _build_url_and_headers():
     return request.url, headers
 
 
-def test_request_url_is_the_allow_listed_resource(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_request_url_is_the_allow_listed_resource():
     url, _ = _build_url_and_headers()
     assert url == EXPECTED_URL
 
 
-def test_api_key_is_sent_and_no_adc_token_is_minted(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_api_key_is_sent_and_no_adc_token_is_minted():
     """`x-apikey` must be the only credential.
 
     A custom base_url makes google-genai skip `load_auth()`, so no Google ADC
@@ -81,21 +83,24 @@ def test_api_key_is_sent_and_no_adc_token_is_minted(gateway_on):
     assert "authorization" not in headers
 
 
-def test_identity_headers_are_sent_from_context(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_identity_headers_are_sent_from_context():
     with use_llm_identity("OID-123", "Network Engineering"):
         _, headers = _build_url_and_headers()
     assert headers[HEADER_USER_OID] == "OID-123"
     assert headers[HEADER_USER_DEPARTMENT] == "Network Engineering"
 
 
-def test_company_header_is_never_sent(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_company_header_is_never_sent():
     """Company is always Colt, so it carries no analytical value (docs/23 S4.2)."""
     with use_llm_identity("OID-123", "Network Engineering"):
         _, headers = _build_url_and_headers()
     assert "x-colt-user-company" not in headers
 
 
-def test_identity_headers_are_omitted_when_no_user_is_in_scope(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_identity_headers_are_omitted_when_no_user_is_in_scope():
     """Omit rather than invent a sentinel.
 
     Apigee's own AM-Identity policy defaults absent headers to
@@ -109,12 +114,14 @@ def test_identity_headers_are_omitted_when_no_user_is_in_scope(gateway_on):
     assert HEADER_USER_DEPARTMENT not in headers
 
 
-def test_blank_identity_values_are_omitted(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_blank_identity_values_are_omitted():
     with use_llm_identity("", "   "):
         assert gateway_identity_headers() == {}
 
 
-def test_identity_does_not_leak_between_scopes(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_identity_does_not_leak_between_scopes():
     """Cloud Run reuses containers, so a job must not inherit the previous user."""
     with use_llm_identity("OID-first", "Alpha"):
         assert gateway_identity_headers()[HEADER_USER_OID] == "OID-first"
@@ -127,7 +134,8 @@ def test_identity_does_not_leak_between_scopes(gateway_on):
     "configured",
     [GATEWAY_HOST, f"{GATEWAY_HOST}/", f"{GATEWAY_HOST}/v1", f"{GATEWAY_HOST}/v1/"],
 )
-def test_base_url_normalisation_is_idempotent(gateway_on, monkeypatch, configured):
+@pytest.mark.usefixtures("gateway_on")
+def test_base_url_normalisation_is_idempotent(monkeypatch, configured):
     """Never `/v1/v1`, and never a missing `/v1`.
 
     The proxy BasePath is `/v1` and COLLECTION scope appends no version segment,
@@ -140,7 +148,8 @@ def test_base_url_normalisation_is_idempotent(gateway_on, monkeypatch, configure
     assert url == EXPECTED_URL
 
 
-def test_project_and_location_are_forced_to_none(gateway_on):
+@pytest.mark.usefixtures("gateway_on")
+def test_project_and_location_are_forced_to_none():
     """Passing either one re-prefixes the path and re-enables ADC token minting."""
     assert gateway_vertex_identity_kwargs("gclt-aicoe-dev-st", "europe-west1") == {
         "project": None,
@@ -148,7 +157,8 @@ def test_project_and_location_are_forced_to_none(gateway_on):
     }
 
 
-def test_disabled_gateway_is_a_full_passthrough(gateway_off):
+@pytest.mark.usefixtures("gateway_off")
+def test_disabled_gateway_is_a_full_passthrough():
     assert gateway_enabled() is False
     assert gateway_http_options_kwargs() == {}
     assert gateway_anthropic_vertex_kwargs() == {}
@@ -158,7 +168,8 @@ def test_disabled_gateway_is_a_full_passthrough(gateway_off):
     }
 
 
-def test_missing_api_key_fails_loudly(gateway_on, monkeypatch):
+@pytest.mark.usefixtures("gateway_on")
+def test_missing_api_key_fails_loudly(monkeypatch):
     """Previously the key was silently omitted and every call 401'd.
 
     An unauthenticated call to the gateway fails with no local signal at all,
@@ -171,7 +182,8 @@ def test_missing_api_key_fails_loudly(gateway_on, monkeypatch):
         gateway_anthropic_vertex_kwargs()
 
 
-def test_anthropic_kwargs_share_the_versioned_base_url(gateway_on, monkeypatch):
+@pytest.mark.usefixtures("gateway_on")
+def test_anthropic_kwargs_share_the_versioned_base_url(monkeypatch):
     """AnthropicVertex appends no version segment and always embeds the project.
 
     So a base URL ending `/v1` is right for it too -- both SDKs share one
