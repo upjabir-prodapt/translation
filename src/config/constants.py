@@ -267,19 +267,21 @@ class Settings(BaseSettings):
     # stay settable from the environment without a redeploy.
 
     # Guard 1 -- declared source language vs. detected source language.
-    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
-    # Maximum share of detected characters any NON-dominant language may hold
-    # before the document is rejected as mixed-language. Mixed-language
-    # translation is out of scope, so the default is 0.0: any second detected
-    # language fails the job.
     #
-    # Detection is per text block with a 0.80 confidence floor, but stray
-    # blocks still happen in practice (party addresses, "force majeure",
-    # tables of names). If monolingual documents are being rejected, raise
-    # this to tolerate that noise -- e.g. 0.10 allows up to 10% of detected
-    # characters in other languages. The full distribution is logged on
-    # every job specifically so this value can be tuned from real data.
-    LANGUAGE_MIXED_MAX_SECONDARY_SHARE: float = 0.0
+    # The mixed-language half of this guard is a single *global* threshold:
+    # the dominant language must hold LANGUAGE_DETECTION_MIN_DOMINANT_SHARE of
+    # the document's detected characters. There is deliberately no per-block
+    # veto -- the block-level rules in language_detection_core.py only decide
+    # which text enters the distribution, never whether the job fails.
+    #
+    # This replaced a `LANGUAGE_MIXED_MAX_SECONDARY_SHARE = 0.0` rule that
+    # rejected a document the moment *any* second language was detected.
+    # Because detection is per text block, that made one unlucky block fatal:
+    # a wholly English support document was rejected because its escalation
+    # contact list ("1st Level: <name> (<name>@colt.net)") is 70% personal
+    # names, which lingua scores as Albanian at 0.95 confidence. Requiring a
+    # share rather than purity is what makes that document translatable.
+    LANGUAGE_MISMATCH_CHECK_ENABLED: bool = True
 
     # Guard 2 -- declared domain vs. LLM-classified document domain
     # (e.g. an HR policy submitted as `legal`). Costs one small LLM call per
@@ -521,7 +523,19 @@ class Settings(BaseSettings):
     LANGUAGE_DETECTION_MIN_UNIT_CHARS: int = 50
     LANGUAGE_DETECTION_MIN_UNIT_WORDS: int = 8
     LANGUAGE_DETECTION_NOISE_SHARE: float = 0.05
-    LANGUAGE_DETECTION_MIN_DOMINANT_SHARE: float = 0.70
+    # The one global threshold that decides mixed vs. monolingual, applied
+    # identically by the detection core and by the job-level guard in
+    # pipeline_orchestrator.py (both call `dominant_language_and_share`, so
+    # the two cannot drift). A document whose dominant language holds at
+    # least this share translates; below it the job fails as mixed-language.
+    #
+    # 0.60 rather than the original 0.70 because per-block detection noise is
+    # heavier than that left room for: name/address-dense blocks score high
+    # confidence in unrelated languages while genuine short English prose
+    # falls under the 0.80 floor and is dropped, so a monolingual document
+    # can measure as low as ~75% dominant -- and worse on contact-heavy
+    # pages. 0.60 still rejects a genuine 50/50 split.
+    LANGUAGE_DETECTION_MIN_DOMINANT_SHARE: float = 0.60
     LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS: int = 500
 
     # Secondary-language prompt hint (see language_prompts.py). When the
@@ -530,10 +544,10 @@ class Settings(BaseSettings):
     # translate each segment from whichever of them it is actually written
     # in, instead of translating every segment from the dominant language.
     #
-    # Only reachable on jobs that survive the mixed-language guard: with
-    # LANGUAGE_MISMATCH_CHECK_ENABLED=true and
-    # LANGUAGE_MIXED_MAX_SECONDARY_SHARE=0.0 (the defaults), such a
-    # document is rejected before translation and this never renders.
+    # Only reachable on jobs that survive the mixed-language guard, which is
+    # now a 60%-dominance threshold rather than a purity rule -- so this is
+    # the normal case for a document with a real minority language, not the
+    # unreachable corner it was when any second language failed the job.
     MIXED_LANGUAGE_PROMPT_HINT_ENABLED: bool = True
     # Far below LANGUAGE_DETECTION_NOISE_SHARE on purpose: the languages
     # this hint exists to rescue are the ones the mixed-language decision

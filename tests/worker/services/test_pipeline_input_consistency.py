@@ -300,7 +300,7 @@ class TestSourceLanguageMismatchGuard:
         ) as orchestrator:
             with (
                 patch.object(settings, "LANGUAGE_MISMATCH_CHECK_ENABLED", False),
-                _detector(orchestrator, ("en", Counter({"en": 900, "de": 100}))),
+                _detector(orchestrator, ("en", Counter({"en": 550, "de": 450}))),
                 _classifier(_verdict("legal", 0.99)),
                 caplog.at_level("WARNING"),
             ):
@@ -337,16 +337,19 @@ class TestSourceLanguageMismatchGuard:
 
 
 class TestMixedLanguageGuard:
-    """Mixed-language translation is out of scope, so mixed documents fail."""
+    """The mixed-language decision is one global dominance threshold.
 
-    async def test_mixed_document_fails_even_when_declared_dominates(
-        self, pipeline_mocks
-    ):
-        """The declared language winning the vote is not enough.
+    A document fails only when no language reaches
+    `LANGUAGE_DETECTION_MIN_DOMINANT_SHARE` (60%) of the detected
+    characters. There is no per-block veto: the guard this replaced
+    rejected a document as soon as any second language appeared, which
+    made one unlucky text block fatal.
+    """
 
-        The document is 90% English and English was declared, so there is no
-        mismatch -- but it still contains a second language and mixed-language
-        translation is not supported.
+    async def test_dominant_language_above_threshold_translates(self, pipeline_mocks):
+        """A 90/10 split is not "mixed" -- it translates.
+
+        Under the old purity rule this exact distribution failed the job.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         with _patched_orchestrator(
@@ -362,10 +365,109 @@ class TestMixedLanguageGuard:
                     _job_data("job-mixed", source_language="en"),
                 )
 
+        assert _status_calls(bigquery, "failed") == []
+        assert len(_status_calls(bigquery, "completed")) == 1
+
+    async def test_skylight_contact_block_no_longer_fails_the_job(self, pipeline_mocks):
+        """Regression: the real distribution from an all-English PDF.
+
+        A Colt support document whose escalation matrix is a list of names
+        and email addresses ("1st Level: <name> (<name>@colt.net)") measured
+        en 75% / sq 25% -- the contact block is ~70% personal names, which
+        lingua scores as Albanian at 0.95 confidence. The document is
+        entirely English and must translate.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 806, "sq": 269}))),
+                _classifier(_verdict("legal", 0.99)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-skylight",
+                    _job_data("job-skylight", source_language="en"),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        assert len(_status_calls(bigquery, "completed")) == 1
+
+    async def test_dominant_language_below_threshold_fails(self, pipeline_mocks):
+        """A 55/45 split has no single source language to translate from."""
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 550, "de": 450}))),
+                _classifier(_verdict("legal", 0.99)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-half",
+                    _job_data("job-half", source_language="en"),
+                )
+
         message = _error_message(bigquery)
-        assert "more than one language" in message
+        assert "mixed-language" in message
+        assert "60%" in message
         assert "English" in message
         assert "German" in message
+
+    async def test_threshold_is_measured_after_incidental_languages_drop(
+        self, pipeline_mocks
+    ):
+        """A long tail of detector noise must not fail a monolingual document.
+
+        English holds only 58% of the raw characters here, but every other
+        language is individually incidental (<5%), so once they are excluded
+        English holds all of the text that counts. Measuring the 60% on the
+        raw distribution instead would reject this document.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        distribution = Counter({"en": 5800})
+        distribution.update({f"x{i}": 280 for i in range(15)})
+
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", distribution)),
+                _classifier(_verdict("legal", 0.99)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-noisy-tail",
+                    _job_data("job-noisy-tail", source_language="en"),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        assert len(_status_calls(bigquery, "completed")) == 1
+
+    async def test_short_document_is_not_rejected_as_mixed(self, pipeline_mocks):
+        """Below the evidence floor, prefer translating over failing.
+
+        Mirrors the allowance `resolve_dominant_language` makes, so the
+        detection core and this guard cannot disagree on the same document.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 120, "de": 100}))),
+                _classifier(_verdict("legal", 0.99)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-short-mixed",
+                    _job_data("job-short-mixed", source_language="en"),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        assert len(_status_calls(bigquery, "completed")) == 1
 
     async def test_mixed_message_wins_over_mismatch_message(self, pipeline_mocks):
         """A document that is both mixed and mis-declared reports 'mixed'.
@@ -388,51 +490,34 @@ class TestMixedLanguageGuard:
                 )
 
         message = _error_message(bigquery)
-        assert "more than one language" in message
+        assert "mixed-language" in message
         assert "Please correct the source language" not in message
 
-    async def test_threshold_tolerates_configured_noise(self, pipeline_mocks):
-        """Raising the threshold absorbs stray detector noise.
+    async def test_threshold_is_configurable(self, pipeline_mocks):
+        """One setting moves the decision, and it moves both layers.
 
-        Detection is per text block, so a monolingual document can still emit
-        a few foreign-looking blocks. The setting exists so that can be
-        tolerated without a code change.
+        `min_dominant_language_share()` reads `settings` on every call
+        precisely so raising the bar here cannot leave the detection core
+        judging the same document by a different number.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         with _patched_orchestrator(
             bigquery, storage, tmp_path, _attempt_result(tmp_path)
         ) as orchestrator:
             with (
-                patch.object(settings, "LANGUAGE_MIXED_MAX_SECONDARY_SHARE", 0.10),
-                _detector(orchestrator, ("en", Counter({"en": 960, "fr": 40}))),
-                _classifier(_verdict("legal", 0.99)),
-            ):
-                await _run(
-                    orchestrator,
-                    "job-noise",
-                    _job_data("job-noise", source_language="en"),
-                )
-
-        assert _status_calls(bigquery, "failed") == []
-        assert len(_status_calls(bigquery, "completed")) == 1
-
-    async def test_noise_above_threshold_still_fails(self, pipeline_mocks):
-        bigquery, storage, tmp_path = pipeline_mocks
-        with _patched_orchestrator(
-            bigquery, storage, tmp_path, _attempt_result(tmp_path)
-        ) as orchestrator:
-            with (
-                patch.object(settings, "LANGUAGE_MIXED_MAX_SECONDARY_SHARE", 0.10),
+                patch.object(settings, "LANGUAGE_DETECTION_MIN_DOMINANT_SHARE", 0.85),
                 _detector(orchestrator, ("en", Counter({"en": 800, "fr": 200}))),
                 _classifier(_verdict("legal", 0.99)),
             ):
                 await _run(
                     orchestrator,
-                    "job-noise-over",
-                    _job_data("job-noise-over", source_language="en"),
+                    "job-strict",
+                    _job_data("job-strict", source_language="en"),
                 )
 
-        assert "more than one language" in _error_message(bigquery)
+        message = _error_message(bigquery)
+        assert "mixed-language" in message
+        assert "85%" in message
 
 
 class TestUnverifiableLanguage:

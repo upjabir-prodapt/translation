@@ -49,14 +49,24 @@ them:
    defence in depth rather than the only thing standing between a
    monolingual brochure and a mixed-language rejection.
 
-2. A char-weighted *share* decision (`resolve_dominant_language`)
-   replaces the distinct-language count. Languages holding a negligible
-   share are treated as incidental and excluded; a document is rejected
-   as genuinely mixed only when no single language dominates the text
-   that remains. This is scale-invariant (a 2-page brochure and a
-   2,000-page manual are judged the same way) and evaluated once per
-   document rather than per page, so one map page or one page of
-   addresses can no longer fail an otherwise monolingual job.
+2. A char-weighted *share* decision (`dominant_language_and_share`,
+   applied by `resolve_dominant_language`) replaces the
+   distinct-language count. Languages holding a negligible share are
+   treated as incidental and excluded; a document is rejected as
+   genuinely mixed only when no single language dominates the text that
+   remains. This is scale-invariant (a 2-page brochure and a 2,000-page
+   manual are judged the same way) and evaluated once per document
+   rather than per page, so one map page or one page of addresses can no
+   longer fail an otherwise monolingual job.
+
+Layer 2 is the *only* place a document can be failed for its language
+mix. Layer 1 decides what evidence exists, never whether the job runs,
+and `_assert_language_matches` in pipeline_orchestrator.py calls the same
+`dominant_language_and_share` against the same threshold. That matters
+because the guard it replaced rejected a document the moment any second
+language appeared: since detection is per block, one contact list of
+personal names scoring 0.95 in an unrelated language was enough to fail
+an entirely English document.
 """
 
 from __future__ import annotations
@@ -115,7 +125,8 @@ NOISE_LANGUAGE_SHARE = settings.LANGUAGE_DETECTION_NOISE_SHARE
 # The dominant language must hold at least this share of the
 # non-incidental characters, else the document is genuinely mixed and is
 # rejected rather than translated from a single wrong source language.
-MIN_DOMINANT_LANGUAGE_SHARE = settings.LANGUAGE_DETECTION_MIN_DOMINANT_SHARE
+# Exposed as `min_dominant_language_share()` rather than a module
+# constant -- see that function.
 
 # Below this many detected characters there is not enough evidence to
 # call a document "mixed"; accept the dominant language instead of
@@ -369,6 +380,49 @@ def aggregate_languages(language_counter: Counter[str]) -> str | None:
     return detected_language
 
 
+def min_dominant_language_share() -> float:
+    """The one global threshold for the mixed-language decision.
+
+    The dominant language must hold at least this share of the
+    non-incidental characters, else the document is genuinely mixed and
+    is rejected rather than translated from a single wrong source
+    language.
+
+    Read from `settings` on every call rather than bound at import like
+    the constants at the top of this module, because it is the *only*
+    mixed-language threshold in the system: `_assert_language_matches` in
+    pipeline_orchestrator.py applies the same value to the same
+    distribution, and an import-time binding cannot be varied in a test
+    without the two layers silently disagreeing.
+    """
+    return float(settings.LANGUAGE_DETECTION_MIN_DOMINANT_SHARE)
+
+
+def dominant_language_and_share(
+    language_counter: Counter[str],
+) -> tuple[str | None, float, int]:
+    """Return `(dominant_language, its share, non-incidental char count)`.
+
+    The single implementation of "which language is this document, and by
+    how much" -- shared by `resolve_dominant_language` here and by
+    `_assert_language_matches` in pipeline_orchestrator.py so the two
+    layers cannot reach different verdicts on the same distribution.
+
+    The share is measured *after* `significant_languages` removes
+    incidental languages, which is what lets a monolingual document
+    survive a long tail of detector noise: 58% English plus fifteen
+    sub-5% artefacts is 100% English once the artefacts are dropped,
+    rather than a 58% that would fail a 60% bar. `(None, 0.0, 0)` for an
+    empty counter.
+    """
+    if not language_counter:
+        return None, 0.0, 0
+    significant = significant_languages(language_counter)
+    dominant = aggregate_languages(significant)
+    significant_total = sum(significant.values())
+    return dominant, significant[dominant] / significant_total, significant_total
+
+
 def _format_shares(language_counter: Counter[str]) -> str:
     return ", ".join(
         f"{language} {share:.0%}"
@@ -382,7 +436,7 @@ def resolve_dominant_language(
     """Return the language to translate from, or raise if there isn't one.
 
     Raises `MixedLanguageError` when the document is genuinely
-    multilingual -- no language holds `MIN_DOMINANT_LANGUAGE_SHARE` of
+    multilingual -- no language holds `min_dominant_language_share()` of
     the non-incidental characters -- and `ValueError` when nothing
     detectable was found at all.
     """
@@ -394,11 +448,12 @@ def resolve_dominant_language(
         )
 
     significant = significant_languages(language_counter)
-    dominant = aggregate_languages(significant)
-    significant_total = sum(significant.values())
-    dominant_share = significant[dominant] / significant_total
+    dominant, dominant_share, significant_total = dominant_language_and_share(
+        language_counter
+    )
+    min_share = min_dominant_language_share()
 
-    if dominant_share >= MIN_DOMINANT_LANGUAGE_SHARE:
+    if dominant_share >= min_share:
         return dominant
 
     # Not enough text sampled to distinguish a genuinely mixed document
@@ -416,7 +471,7 @@ def resolve_dominant_language(
 
     raise MixedLanguageError(
         f"This document is mixed-language ({_format_shares(significant)}): no "
-        f"single language covers at least {MIN_DOMINANT_LANGUAGE_SHARE:.0%} of "
+        f"single language covers at least {min_share:.0%} of "
         f"the text in {source_label}, so it cannot be reliably translated from "
         "one source language. Please split the document by language, or specify "
         "the source language explicitly to translate it as-is.",

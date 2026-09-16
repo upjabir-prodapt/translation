@@ -46,7 +46,9 @@ from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.input_consistency_service import DomainCheckUnavailableError
 from src.worker.services.input_consistency_service import classify_document_domain
 from src.worker.services.intent_router_service import IntentRouterService
+from src.worker.services.language_detection_core import dominant_language_and_share
 from src.worker.services.language_detection_core import get_supported_languages
+from src.worker.services.language_detection_core import min_dominant_language_share
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.processor_service import JobProcessor
@@ -566,25 +568,32 @@ class PipelineOrchestrator:
         declared_source_lang: str,
         language_distribution: Counter[str],
     ) -> None:
-        """Fail the job unless the document is monolingual in the declared language.
+        """Fail the job unless one language dominates and it is the declared one.
 
         Two separate rejections, checked in this order:
 
-        1. **Mixed language.** Mixed-language translation is out of scope, so
-           a document containing more than one language is rejected outright
-           regardless of what was declared.
-        2. **Wrong language.** The single language present must be the one
-           the user declared.
+        1. **Mixed language.** No language holds
+           `LANGUAGE_DETECTION_MIN_DOMINANT_SHARE` (60%) of the detected
+           characters, so there is no single source language to translate
+           from.
+        2. **Wrong language.** The dominant language is not the one the user
+           declared.
 
         The mixed check runs first deliberately. Reporting the mismatch first
         on a document that is *both* mixed and mis-declared would tell the
         user to resubmit as German, only for that resubmission to fail again
         as mixed -- a two-step dead end.
 
-        `LANGUAGE_MIXED_MAX_SECONDARY_SHARE` defaults to 0.0, i.e. any second
-        detected language fails. It exists because detection is per text
-        block and stray blocks do occur in real documents; raise it to
-        tolerate that noise without a code change.
+        The threshold is global: one share, measured once over the whole
+        document, via the same `dominant_language_and_share` the detection
+        core uses. There is no per-block veto. The previous rule
+        (`LANGUAGE_MIXED_MAX_SECONDARY_SHARE = 0.0`) rejected a document as
+        soon as *any* second language was detected, which -- because
+        detection is per text block -- made a single block fatal: an entirely
+        English support document failed because its escalation contact list
+        is 70% personal names and scored Albanian at 0.95 confidence. A
+        minority language now reaches the translation prompt as a hint
+        (`_secondary_prompt_languages`) instead of failing the job.
 
         The distribution is logged even when the guard is switched off, which
         is what makes a shadow rollout possible: run with
@@ -646,33 +655,57 @@ class PipelineOrchestrator:
             declared_code,
         )
 
-        max_secondary = float(settings.LANGUAGE_MIXED_MAX_SECONDARY_SHARE)
-        secondary = {
-            code: share
-            for code, share in shares.items()
-            if code != dominant_code and share > max_secondary
-        }
-        if secondary:
-            detected_summary = ", ".join(
-                f"{_language_for_user(code)} {share * 100:.0f}%"
-                for code, share in sorted(
-                    shares.items(), key=lambda item: item[1], reverse=True
+        # The mixed-language decision, on the same footing as the detection
+        # core's: one global share threshold, measured after incidental
+        # languages are dropped. `dominant_code`/`dominant_share` above are
+        # raw (every language, for the log line); these are the values the
+        # verdict is actually made on.
+        min_share = min_dominant_language_share()
+        significant_code, significant_share, significant_chars = (
+            dominant_language_and_share(language_distribution)
+        )
+        if significant_code is not None and significant_share < min_share:
+            if significant_chars < int(
+                settings.LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS
+            ):
+                # Too little evidence to call a document mixed -- the same
+                # short-document allowance `resolve_dominant_language` makes,
+                # so the two layers stay in agreement.
+                logger.info(
+                    "Job %s: dominant language '%s' holds only %.0f%% but only "
+                    "%s chars were detected -- accepting rather than rejecting "
+                    "as mixed-language.",
+                    job_id,
+                    significant_code,
+                    significant_share * 100,
+                    significant_chars,
                 )
-            )
-            logger.warning(
-                "Job %s: mixed-language document%s -- distribution %s",
-                job_id,
-                " rejected" if enabled else " detected (guard disabled)",
-                dict(language_distribution),
-            )
-            if not enabled:
-                return
-            raise ValueError(
-                "This document contains more than one language "
-                f"({detected_summary}). Translating mixed-language documents "
-                "is not supported. Please submit a document written in a "
-                "single language."
-            )
+            else:
+                detected_summary = ", ".join(
+                    f"{_language_for_user(code)} {share * 100:.0f}%"
+                    for code, share in sorted(
+                        shares.items(), key=lambda item: item[1], reverse=True
+                    )
+                )
+                logger.warning(
+                    "Job %s: mixed-language document%s -- no language reaches "
+                    "%.0f%% (dominant '%s' at %.1f%%), distribution %s",
+                    job_id,
+                    " rejected" if enabled else " detected (guard disabled)",
+                    min_share * 100,
+                    significant_code,
+                    significant_share * 100,
+                    dict(language_distribution),
+                )
+                if not enabled:
+                    return
+                raise ValueError(
+                    "This document is mixed-language "
+                    f"({detected_summary}): no single language covers at "
+                    f"least {min_share:.0%} of the text, so it cannot be "
+                    "reliably translated from one source language. Please "
+                    "submit a document written in a single language."
+                )
 
         if dominant_code != declared_code:
             logger.warning(

@@ -123,9 +123,9 @@ class TestLanguageDistributionPersistence:
     async def test_detected_languages_persisted_to_bigquery(self, pipeline_mocks):
         """The whole Counter is persisted, not just the winning language.
 
-        `LANGUAGE_MIXED_MAX_SECONDARY_SHARE` is raised here so the job is not
-        rejected as mixed before it can persist anything -- which also
-        exercises that the threshold setting actually loosens the guard.
+        The 70/30 split clears the 60% dominance threshold, so the job
+        translates and reaches the persistence step with a genuinely
+        multi-language distribution to persist.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
@@ -133,13 +133,10 @@ class TestLanguageDistributionPersistence:
         with _patched_orchestrator(
             bigquery, storage, tmp_path, attempt_result
         ) as orchestrator:
-            with (
-                patch.object(settings, "LANGUAGE_MIXED_MAX_SECONDARY_SHARE", 0.5),
-                patch.object(
-                    orchestrator.language_detector,
-                    "detect_with_distribution",
-                    return_value=("de", Counter({"de": 700, "en": 300})),
-                ),
+            with patch.object(
+                orchestrator.language_detector,
+                "detect_with_distribution",
+                return_value=("de", Counter({"de": 700, "en": 300})),
             ):
                 pipeline_span = MagicMock()
                 await orchestrator._execute_pipeline(
