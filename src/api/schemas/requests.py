@@ -106,18 +106,37 @@ class TranslationConfigInput(BaseModel):
             "Supported: English, Spanish, Italian, French, Japanese, German."
         ),
     )
-    domain: str = Field(
-        ...,
-        min_length=2,
+    # Accepted as well as an absent field: a form-encoded client cannot easily
+    # omit a field it has a control for, so a cleared dropdown posts "".
+    AUTO_DOMAIN_VALUES: ClassVar[set[str]] = {"", "auto"}
+
+    domain: str | None = Field(
+        None,
         max_length=20,
-        description="Translation domain: commercial, legal, finance, hr, operations",
+        description=(
+            "Translation domain: commercial, legal, finance, hr, operations. "
+            "Optional -- when omitted (or sent as 'auto'), the worker reads "
+            "the domain off the document itself. Send an explicit value only "
+            "to override that; the worker then verifies it against the "
+            "document and fails the job if the two confidently disagree."
+        ),
     )
 
     @field_validator("domain")
     @classmethod
-    def validate_domain(cls, v: str) -> str:
-        """Validate and normalize domain."""
+    def validate_domain(cls, v: str | None) -> str | None:
+        """Normalize domain, or return None to mean "auto-detect".
+
+        A rejected value still has to be a rejection rather than a silent
+        fallback to auto-detect: a client that posts "legall" meant to declare
+        something and would otherwise get an unannounced behaviour change.
+        """
+        if v is None:
+            return None
+
         normalized = v.strip().lower()
+        if normalized in cls.AUTO_DOMAIN_VALUES:
+            return None
 
         # Handle legacy alias
         if normalized == "oprations":
@@ -125,7 +144,8 @@ class TranslationConfigInput(BaseModel):
 
         if normalized not in cls.VALID_DOMAINS:
             raise ValueError(
-                f"Invalid domain. Allowed: {', '.join(sorted(cls.VALID_DOMAINS))}"
+                f"Invalid domain. Allowed: {', '.join(sorted(cls.VALID_DOMAINS))}, "
+                "or omit the field to detect it from the document"
             )
         return normalized
 

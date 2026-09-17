@@ -26,6 +26,7 @@ from src.config.constants import settings
 from src.worker.services.input_consistency_service import DomainCheckUnavailableError
 from src.worker.services.input_consistency_service import DomainClassification
 from src.worker.services.input_consistency_service import DomainVerdict
+from src.worker.services.pipeline_orchestrator import _UNDETECTED_DOMAIN
 from src.worker.services.pipeline_orchestrator import PipelineOrchestrator
 from src.worker.services.temp_workspace_service import TempWorkspaceService
 
@@ -732,3 +733,120 @@ class TestDomainCheckCostAccounting:
         bigquery.write_cost_attribution.assert_awaited_once()
         recorded = bigquery.write_cost_attribution.await_args[0][0]
         assert recorded["cost_usd"] == pytest.approx(0.07)
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection -- no domain declared
+# ---------------------------------------------------------------------------
+
+
+def _persisted_config(bigquery) -> dict:
+    """The translation_config the orchestrator persisted before translating."""
+    calls = [
+        call[0][1]["translation_config"]
+        for call in bigquery.patch_translation_job.call_args_list
+        if "translation_config" in call[0][1]
+    ]
+    assert calls, "routing metadata was never persisted"
+    return calls[-1]
+
+
+class TestDomainAutoDetection:
+    """With no declared domain, the classifier's verdict *is* the domain.
+
+    The guard semantics invert here. There is no claim to contradict, so
+    nothing in this path may fail the job -- it either adopts what was
+    detected or falls back.
+    """
+
+    async def test_detected_domain_is_adopted_and_routed_on(self, pipeline_mocks):
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 500}))),
+                _classifier(_verdict("hr", 0.93)) as stub,
+            ):
+                await _run(
+                    orchestrator,
+                    "job-domain-auto",
+                    _job_data("job-domain-auto", domain=""),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        # Everything downstream must route on the detected domain rather than
+        # on the empty declaration: prompt profile, glossary and model chain
+        # all key on this one value.
+        stub.assert_awaited_once()
+        assert _persisted_config(bigquery)["domain"] == "hr"
+        glossary = orchestrator.glossary_service.load_domain_glossary
+        assert glossary.call_args.kwargs["domain"] == "hr"
+        chain = orchestrator.intent_router.get_model_chain
+        assert chain.call_args.kwargs["domain"] == "hr"
+
+    async def test_missing_domain_key_is_treated_as_undeclared(self, pipeline_mocks):
+        """A direct-to-worker row may omit the field entirely."""
+        bigquery, storage, tmp_path = pipeline_mocks
+        job_data = _job_data("job-domain-absent")
+        del job_data["translation_config"]["domain"]
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 500}))),
+                _classifier(_verdict("finance", 0.91)),
+            ):
+                await _run(orchestrator, "job-domain-absent", job_data)
+
+        assert _status_calls(bigquery, "failed") == []
+        assert _persisted_config(bigquery)["domain"] == "finance"
+
+    async def test_low_confidence_detection_is_still_adopted(self, pipeline_mocks):
+        """The confidence floor decides whether to override a human.
+
+        With nobody to override, a hedged verdict is still the best evidence
+        available and beats the fallback.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 500}))),
+                _classifier(_verdict("operations", 0.41)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-domain-auto-hedged",
+                    _job_data("job-domain-auto-hedged", domain=""),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        assert _persisted_config(bigquery)["domain"] == "operations"
+
+    async def test_unavailable_detection_falls_back_instead_of_failing(
+        self, pipeline_mocks
+    ):
+        """The inverted fail-closed rule.
+
+        A declared job fails here, because its claim could not be verified.
+        An undeclared job must not: the submitter made no claim, and has no
+        corrective action to take on a Vertex or DLP outage.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 500}))),
+                _classifier(raises=DomainCheckUnavailableError("vertex down")),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-domain-auto-outage",
+                    _job_data("job-domain-auto-outage", domain=""),
+                )
+
+        assert _status_calls(bigquery, "failed") == []
+        assert _persisted_config(bigquery)["domain"] == _UNDETECTED_DOMAIN

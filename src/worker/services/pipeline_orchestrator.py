@@ -10,6 +10,7 @@ runtime mode.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import shutil
 from collections import Counter
@@ -79,6 +80,13 @@ _NO_TEXT_LAYER_MESSAGE = (
     "This PDF has no extractable text layer (scanned or image-only). "
     "OCR is not supported — please supply a text-based PDF."
 )
+
+# Domain used when a job declared none and the classifier could not answer.
+# A constant rather than a setting: the value only has to be one of the five
+# supported domains, and an env var could be typo'd into one that matches no
+# model route and no glossary. `commercial` is the least domain-specific of
+# the five prompt profiles.
+_UNDETECTED_DOMAIN = "commercial"
 
 
 def _user_facing_error_message(exc: Exception) -> str:
@@ -726,46 +734,51 @@ class PipelineOrchestrator:
                 "source language and submit again."
             )
 
-    async def _assert_domain_matches(
+    async def _resolve_domain(
         self,
         *,
         job_id: str,
-        domain: str,
+        domain: str | None,
         local_input_path: Path,
         is_docx: bool,
         source_lang: str,
         enable_dlp: bool,
         source_hash: str,
-    ) -> float:
-        """Fail the job when the declared domain contradicts the document.
+    ) -> tuple[str, float]:
+        """Settle the domain this job will be translated with.
 
-        Returns the USD cost of the classification call so it can be added to
-        the job's total. That is zero when the guard is disabled or when a
-        sibling job of the same batch already paid for the call.
+        Returns `(domain, cost_usd)` -- the cost of the classification call, so
+        it can be added to the job total. Zero when no call was made.
 
-        Only a contradiction the classifier is confident about fails the job.
-        Business domains genuinely overlap -- an HR policy is full of
-        contractual language, a finance document is full of regulatory
-        language -- so a disagreement below
-        `DOMAIN_CLASSIFIER_MIN_CONFIDENCE` is logged and allowed through.
-        That floor, not the on/off flag, is the real false-positive control.
+        **Undeclared** (the usual case): the model reads the document and its
+        verdict is adopted, including a low-confidence one. The confidence
+        floor below exists to decide whether to override a human; there is no
+        human choice here to override. Nothing in this path fails the job --
+        a classifier that cannot answer falls back to `_UNDETECTED_DOMAIN`,
+        because the submitter made no claim and has nothing to correct on
+        resubmission.
 
-        A classifier that cannot answer at all raises `DomainCheckUnavailableError`
-        and fails the job: an unverifiable document is not translated
-        unchecked. Note that this makes a Vertex or DLP outage fail jobs
-        permanently, since a failed job is terminal and Cloud Tasks does not
-        redeliver it -- `DOMAIN_MISMATCH_CHECK_ENABLED` is the kill switch.
+        **Declared**: the historical guard, unchanged. Only a contradiction the
+        classifier is confident about fails the job -- domains genuinely
+        overlap, so a disagreement below `DOMAIN_CLASSIFIER_MIN_CONFIDENCE` is
+        logged and the declared domain wins. A classifier that cannot answer
+        fails the job: an unverifiable claim is not translated unchecked.
+        `DOMAIN_MISMATCH_CHECK_ENABLED` is the kill switch for that, and it
+        short-circuits before validation so the declared value passes through
+        exactly as submitted.
         """
-        if not settings.DOMAIN_MISMATCH_CHECK_ENABLED:
-            return 0.0
+        declared_domain = str(domain or "").strip()
 
-        try:
-            declared_domain = normalize_domain(domain)
-        except ValueError:
-            # The API restricts domain to SUPPORTED_DOMAINS, so this is a
-            # direct-to-worker submission. There is nothing to classify
-            # against, and the guard is fail-closed.
-            raise ValueError(f"Unsupported document domain '{domain}'.") from None
+        if declared_domain:
+            if not settings.DOMAIN_MISMATCH_CHECK_ENABLED:
+                return declared_domain, 0.0
+            try:
+                declared_domain = normalize_domain(declared_domain)
+            except ValueError:
+                # The API normalizes against SUPPORTED_DOMAINS, so this is a
+                # direct-to-worker submission. Fail rather than silently
+                # detecting instead: they asserted something specific.
+                raise ValueError(f"Unsupported document domain '{domain}'.") from None
 
         try:
             verdict = await classify_document_domain(
@@ -777,6 +790,15 @@ class PipelineOrchestrator:
                 source_hash=source_hash,
             )
         except DomainCheckUnavailableError as exc:
+            if not declared_domain:
+                logger.warning(
+                    "Job %s: domain detection could not run (%s); falling "
+                    "back to '%s'.",
+                    job_id,
+                    exc,
+                    _UNDETECTED_DOMAIN,
+                )
+                return _UNDETECTED_DOMAIN, 0.0
             logger.warning(
                 "Job %s: domain check could not run (%s); failing the job "
                 "because the declared domain could not be verified.",
@@ -792,8 +814,19 @@ class PipelineOrchestrator:
             ) from exc
 
         classification = verdict.classification
+
+        if not declared_domain:
+            logger.info(
+                "Job %s: domain auto-detected as '%s' (confidence %.2f). Reason: %s",
+                job_id,
+                classification.domain,
+                classification.confidence,
+                classification.reason,
+            )
+            return classification.domain, verdict.cost_usd
+
         if classification.domain == declared_domain:
-            return verdict.cost_usd
+            return declared_domain, verdict.cost_usd
 
         min_confidence = float(settings.DOMAIN_CLASSIFIER_MIN_CONFIDENCE)
         if classification.confidence < min_confidence:
@@ -808,7 +841,7 @@ class PipelineOrchestrator:
                 min_confidence,
                 classification.reason,
             )
-            return verdict.cost_usd
+            return declared_domain, verdict.cost_usd
 
         logger.warning(
             "Job %s: domain mismatch -- declared '%s', classified '%s' "
@@ -891,7 +924,9 @@ class PipelineOrchestrator:
             await self.session_manager.set_input_path(job_id, local_input_path)
 
             target_lang = translation_config["target_language"]
-            domain = translation_config["domain"]
+            # May be absent: `domain` is optional at the API and is read off
+            # the document below when the submitter did not declare one.
+            declared_domain = translation_config.get("domain") or ""
 
             # Everything downstream routes on the language the user
             # *declared*; the detected one exists only to check that claim.
@@ -956,16 +991,22 @@ class PipelineOrchestrator:
                 )
             )
 
-            # Guard 2: the declared domain must match what the document
-            # actually is (an HR policy submitted as `legal`). Runs after
-            # `enable_dlp` is resolved because the text sampled for
-            # classification is sent to Vertex and must respect the same
+            # Guard 2 / domain resolution. When the submitter declared a
+            # domain this verifies it and fails the job on a confident
+            # contradiction (an HR policy submitted as `legal`); when they
+            # declared nothing it reads the domain off the document and
+            # adopts it. Either way `domain` below is the value everything
+            # downstream -- prompt profile, glossary, model chain, the job
+            # record -- is keyed on.
+            #
+            # Runs after `enable_dlp` is resolved because the text sampled for
+            # classification may be sent to Vertex and must respect the same
             # masking the translation path applies. Cached per source_hash
-            # inside the service, so a multi-target batch classifies once.
+            # inside the service, so a multi-target batch resolves once.
             current_stage = "domain_consistency_check"
-            domain_check_cost_usd = await self._assert_domain_matches(
+            domain, domain_check_cost_usd = await self._resolve_domain(
                 job_id=job_id,
-                domain=domain,
+                domain=declared_domain,
                 local_input_path=local_input_path,
                 is_docx=source_doc.get("format") in ("docx", "txt"),
                 source_lang=source_lang,
@@ -1018,9 +1059,21 @@ class PipelineOrchestrator:
                     exc_info=True,
                 )
 
-            glossaries = self.glossary_service.load_domain_glossary(
-                domain=domain,
-                target_language_name=target_lang,
+            # Keyed on the language *pair*. Loading every source section, as
+            # this used to, is what let a Spanish->Italian job's terms steer a
+            # French->Italian one (TRANSLATION_FIX_PLAN.md RC-3).
+            #
+            # Off-thread because the load is synchronous and now issues two
+            # BigQuery queries. Blocking the event loop on a network call in
+            # this coroutine is what produced the 203s stall in
+            # docs/architecture/; a cache miss here must not repeat it.
+            glossaries = await asyncio.to_thread(
+                functools.partial(
+                    self.glossary_service.load_domain_glossary,
+                    domain=domain,
+                    target_language_name=target_lang,
+                    source_language=source_lang,
+                )
             )
 
             is_txt = source_doc.get("format") == "txt"
@@ -1059,7 +1112,8 @@ class PipelineOrchestrator:
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
                     "enable_dlp": enable_dlp,
                     "enable_judge": enable_judge,
-                    "auto_extract_glossary": True,
+                    "glossaries": glossaries,
+                    "auto_extract_glossary": settings.AUTO_EXTRACT_GLOSSARY,
                     # Plain-text jobs are unwrapped back to .txt after
                     # translation (see docx_path_to_txt_bytes below); a DOCX
                     # cover page would leak formatted disclaimer paragraphs
@@ -1257,7 +1311,11 @@ class PipelineOrchestrator:
             # from (see docs/architecture/pdf-vs-docx-translation-architecture.md).
             if is_docx and attempt_result.get("extracted_terms"):
                 try:
-                    docx_processor.persist_extracted_terms(attempt_result)
+                    # Off-thread for the same reason as the load above: the
+                    # merge is a synchronous BigQuery statement.
+                    await asyncio.to_thread(
+                        docx_processor.persist_extracted_terms, attempt_result
+                    )
                 except Exception:
                     logger.warning(
                         f"Failed to persist auto-extracted glossary terms for job {job_id}",

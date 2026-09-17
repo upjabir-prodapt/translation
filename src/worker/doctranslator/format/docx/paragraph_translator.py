@@ -31,10 +31,15 @@ from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
+from src.worker.doctranslator.format.pdf.translation_config import (
+    effective_min_text_length,
+)
 from src.worker.doctranslator.format.pdf.translation_config import get_token_multiplier
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
 from src.worker.doctranslator.translator.prompt_safety import looks_like_prompt_leak
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
+from src.worker.doctranslator.translator.prompts import build_glossary_block
+from src.worker.doctranslator.translator.prompts import build_language_rules_block
 from src.worker.doctranslator.translator.translation_cache import build_cache_key
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
@@ -156,6 +161,7 @@ def _build_prompt(
     domain: str | None = None,
     lang_in: str | None = None,
     secondary_languages: Sequence[tuple[str, float]] | None = None,
+    glossaries: Sequence | None = None,
 ) -> str:
     """Build the DOCX batch translation prompt.
 
@@ -180,6 +186,12 @@ def _build_prompt(
         target_language=lang_out,
     )
     secondary_section = f"{secondary_block}\n" if secondary_block else ""
+    # Matched against this batch's text only, so the table stays small and
+    # relevant rather than listing the whole domain glossary on every call.
+    glossary_block = build_glossary_block(
+        glossaries, "\n".join(unit.text for unit in batch), lang_out
+    )
+    glossary_section = f"{glossary_block}\n" if glossary_block else ""
 
     return (
         f"You are a professional {lang_out} native translator who specializes{domain_desc} "
@@ -191,6 +203,8 @@ def _build_prompt(
         "2. Treat each input item as an independent, fixed unit.\n"
         "3. Translate ALL human-readable content into "
         f"{lang_out}.\n\n"
+        f"{glossary_section}"
+        f"{build_language_rules_block(lang_out)}\n"
         "## Do NOT Modify\n"
         "- Placeholders: `{v1}`, `{name}`, `%s`, `%d`, `[[...]]` -- keep exactly unchanged.\n"
         "- Data-masking tokens matching __DLP_TOKEN_NNNN__ -- copy verbatim.\n"
@@ -213,9 +227,15 @@ class DocxParagraphTranslator:
         translate_engine: BaseTranslator,
         lang_out: str,
         domain: str | None = None,
+        glossaries: Sequence | None = None,
     ):
         self.translate_engine = translate_engine
         self.lang_out = lang_out
+        # The DOCX path carried no glossary at all before this: it never
+        # loaded one and never rendered one, so every .docx job ran with no
+        # terminology control while its extractor still wrote to the shared
+        # glossary that the PDF path read.
+        self.glossaries = list(glossaries or [])
         self.domain = domain or getattr(translate_engine, "domain", None)
         # Same route as `domain` above: read off the engine, which
         # `create_translator` populated from the job config. Avoids
@@ -316,7 +336,9 @@ class DocxParagraphTranslator:
         text = (unit.text or "").strip()
         if not text:
             return True
-        if len(text) < int(settings.LLM_TRANSLATION_MIN_TEXT_LENGTH):
+        if len(text) < effective_min_text_length(
+            settings.LLM_TRANSLATION_MIN_TEXT_LENGTH, self.lang_in
+        ):
             return True
         if _NUMERIC_ONLY_PATTERN.fullmatch(text):
             return True
@@ -490,6 +512,7 @@ class DocxParagraphTranslator:
             domain=self.domain,
             lang_in=self.lang_in,
             secondary_languages=self.secondary_languages,
+            glossaries=self.glossaries,
         )
         raw = self.translate_engine.llm_translate(
             prompt,
@@ -551,6 +574,7 @@ class DocxParagraphTranslator:
             domain=self.domain,
             lang_in=self.lang_in,
             secondary_languages=self.secondary_languages,
+            glossaries=self.glossaries,
         )
         results: dict[int, str] = {}
         try:

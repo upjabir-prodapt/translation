@@ -69,6 +69,7 @@ def translate_docx(
     auto_extract_glossary: bool = True,
     extracted_terms: list[tuple[str, str]] | None = None,
     dlp_result: DlpResult | None = None,
+    glossaries: list | None = None,
 ) -> DocxTranslationResult:
     """Translate a DOCX document in place (writing to `output_path`).
 
@@ -113,7 +114,9 @@ def translate_docx(
     # Automatic term extraction and paragraph translation are run
     # concurrently on first attempt; on retry attempts, previously extracted
     # candidate terms can be passed in directly to avoid duplicate LLM calls.
-    paragraph_translator = DocxParagraphTranslator(translator, lang_out, domain=domain)
+    paragraph_translator = DocxParagraphTranslator(
+        translator, lang_out, domain=domain, glossaries=glossaries
+    )
 
     if extracted_terms is not None:
         logger.info(

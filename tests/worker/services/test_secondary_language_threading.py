@@ -99,6 +99,7 @@ class TestPdfTemplates:
             json_input_str="[]",
             glossary_tables_block="",
             security_notice="SEC",
+            language_rules="",
             lang_out="es",
         )
         assert MARKER in rendered
@@ -115,6 +116,7 @@ class TestPdfTemplates:
             glossary_block="",
             context_block="",
             security_notice="SEC",
+            language_rules="",
             lang_out="es",
             text_to_translate="x",
         )

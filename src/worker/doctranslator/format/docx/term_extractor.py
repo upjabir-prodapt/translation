@@ -22,6 +22,7 @@ import tiktoken
 
 from src.config.constants import settings
 from src.config.domain_prompts import get_domain_prompt_profile
+from src.config.glossary_hygiene import is_acceptable_term_pair
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
@@ -100,7 +101,11 @@ def _parse_terms(llm_output: str) -> list[tuple[str, str]]:
             continue
         src = str(item.get("src", "")).strip()
         tgt = str(item.get("tgt", "")).strip()
-        if src and tgt and len(src) < 100:
+        # Same gate as the PDF extractor and the GCS merge. This path
+        # previously had no identity guard at all -- not even the weak one
+        # the PDF side carried -- so `des -> des` and `integrity -> integrity`
+        # went straight into the shared domain glossary.
+        if is_acceptable_term_pair(src, tgt):
             pairs.append((src, tgt))
     return pairs
 

@@ -36,10 +36,10 @@ router = APIRouter()
 )
 async def submit_translation(
     file: Annotated[UploadFile, File(...)],
-    domain: Annotated[str, Form(...)],
     response: Response,
     target_languages: Annotated[list[str], Form(...)],
     source_language: Annotated[str, Form(...)],
+    domain: Annotated[str | None, Form()] = None,
     enable_dlp: Annotated[bool, Form()] = True,
     enable_chunking: Annotated[bool, Form()] = True,
     priority: Annotated[str, Form()] = "standard",
@@ -52,10 +52,17 @@ async def submit_translation(
 
     Accepts one or more target languages and returns HTTP 202 with batch details.
 
-    `source_language`, `target_languages` and `domain` are all required. The
-    worker verifies the declared source language and domain against the
-    document itself and fails the job when they disagree, so there is no
-    auto-detect mode to fall back on.
+    `source_language` and `target_languages` are required; `domain` is not.
+
+    Omit `domain` (or send "auto") and the worker reads the business domain
+    off the document itself, which is what selects the translator persona,
+    the domain glossary and the prompt profile. Send an explicit domain only
+    to override that: the worker then verifies the declaration against the
+    document and fails the job when the two confidently disagree.
+
+    `source_language` has no such auto mode -- the worker verifies the
+    declared source language against the document and fails the job when they
+    disagree.
     """
     content = await file.read()
     if not content:

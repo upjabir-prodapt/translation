@@ -381,6 +381,30 @@ class Settings(BaseSettings):
     # turned off without a redeploy if it ever needs to be disabled.
     SKIP_UNSUPPORTED_LANGUAGE_UNITS: bool = True
 
+    # Learn terminology from the document being translated and persist it to
+    # the shared domain glossary. This was hardcoded on with no way to turn it
+    # off, which is how a single bad extraction run could pollute a shared
+    # asset for every later job (TRANSLATION_FIX_PLAN.md RC-2/RC-3). The
+    # hygiene gate now rejects the junk it used to write, but this stays
+    # settable from the environment so extraction can be stopped without a
+    # redeploy if a new failure shape appears. Turning it off also skips the
+    # weight-30 extraction stage, which is a material cost saving.
+    AUTO_EXTRACT_GLOSSARY: bool = True
+
+    # Glossary hygiene thresholds. Tunable from the environment because the
+    # right values depend on the document mix, and discovering that in a UAT
+    # round should not require a code change. See src/config/glossary_hygiene.py
+    # for what each one governs; the vocabulary the gate matches against lives
+    # in src/config/glossary_vocabulary.json, not in code.
+    GLOSSARY_MIN_TOKEN_CHARS: int = 4
+    GLOSSARY_MIN_TOKEN_CHARS_CJK: int = 2
+    GLOSSARY_MAX_TERM_CHARS: int = 80
+    GLOSSARY_MAX_TERM_WORDS: int = 8
+    GLOSSARY_MAX_LENGTH_RATIO: float = 6.0
+    # How much more meaning a CJK character carries than a Latin one. Without
+    # this the length-ratio test flags every correct Japanese pair.
+    GLOSSARY_CJK_DENSITY_FACTOR: float = 2.5
+
     ONNX_LAYOUT_BATCH_SIZE: int
     ONNX_INTRA_OP_NUM_THREADS: int
     ONNX_INTER_OP_NUM_THREADS: int

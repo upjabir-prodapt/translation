@@ -29,6 +29,24 @@ def _is_cjk_language_code(lang: str | None) -> bool:
     return normalized.startswith(("zh", "ja", "ko"))
 
 
+def effective_min_text_length(configured: int, lang_in: str | None) -> int:
+    """Shortest unit still worth sending to the LLM, adjusted for script.
+
+    `LLM_TRANSLATION_MIN_TEXT_LENGTH` is counted in characters, which makes it
+    mean two different things depending on the script. Five characters of
+    English is noise; five characters of Japanese is a phrase -- 本社, 取締役,
+    合計 and 株式会社 are all at or under it. Every such unit was silently passed
+    through untranslated, which is what the UAT round reported as "various
+    parts of the document were not translated and remain in the original
+    Japanese characters" (Japanese Supplier Names Sep26.docx, ja->en).
+
+    Applies to the *source* language, since that is the text being measured.
+    """
+    if _is_cjk_language_code(lang_in):
+        return min(int(configured), 2)
+    return int(configured)
+
+
 def get_token_multiplier(lang_in: str, lang_out: str) -> float:
     if _is_cjk_language_code(lang_in) or _is_cjk_language_code(lang_out):
         return float(settings.LLM_TOKEN_MULTIPLIER_CJK)
@@ -166,14 +184,23 @@ class SharedContextCrossSplitPart:
     def get_glossaries_for_translation(
         self, auto_extract_enabled: bool
     ) -> list[Glossary]:
+        """Curated glossaries first, then the auto-extracted one.
+
+        This used to *return only* the auto-extracted glossary whenever
+        auto-extraction was on -- which it always is in production -- so
+        Colt's approved terminology was discarded on every job and the only
+        terminology authority in force was a list the model had written about
+        this document seconds earlier. That is the root of the product- and
+        role-name drift in the UAT round (TRANSLATION_FIX_PLAN.md RC-1).
+
+        Order matters: `_build_glossary_block` renders these in sequence and
+        curated terms must be the ones the model sees as authoritative.
+        """
         with self._lock:
+            glossaries = list(self.user_glossaries)
             if auto_extract_enabled and self.auto_extracted_glossary:
-                return [self.auto_extracted_glossary]
-            else:
-                all_glossaries = list(self.user_glossaries)
-                if self.auto_extracted_glossary:
-                    all_glossaries.append(self.auto_extracted_glossary)
-                return all_glossaries
+                glossaries.append(self.auto_extracted_glossary)
+            return glossaries
 
     def add_valid_counts(self, char_count: int, token_count: int):
         """Accumulate valid character and token counts in a threadsafe way."""
@@ -483,7 +510,9 @@ class TranslationConfig:
         self.dual_translate_first = dual_translate_first
         self.disable_rich_text_translate = disable_rich_text_translate
         self.report_interval = report_interval
-        self.min_text_length = min_text_length
+        # Script-aware: a 2-character Japanese unit is a real phrase, while a
+        # 2-character English one is noise. See effective_min_text_length.
+        self.min_text_length = effective_min_text_length(min_text_length, lang_in)
         self.use_alternating_pages_dual = use_alternating_pages_dual
         self.ocr_workaround = ocr_workaround
         self.merge_alternating_line_numbers = merge_alternating_line_numbers

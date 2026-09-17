@@ -58,6 +58,8 @@ from src.worker.doctranslator.format.pdf.document_il.utils.style_helper import G
 from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
+from src.worker.doctranslator.translator.prompts import build_glossary_block
+from src.worker.doctranslator.translator.prompts import build_language_rules_block
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
@@ -85,6 +87,7 @@ $secondary_language_block
 4. If the entire input is pure code/identifiers, return it unchanged.
 5. Translate ALL human-readable content into $lang_out.
 
+$language_rules
 $glossary_block
 
 $context_block
@@ -1256,48 +1259,10 @@ class ILTranslator:
         return ""
 
     def _build_glossary_block(self, text: str) -> str:
-        """Build the glossary block for LLM prompt.
-
-        Args:
-            text: Text to match against glossary entries
-
-        Returns:
-            Glossary block string with tables, empty if no active glossary entries
-        """
-        if not self._cached_glossaries:
-            return ""
-
-        glossary_entries_per_glossary: dict[str, list[tuple[str, str]]] = {}
-
-        for glossary in self._cached_glossaries:
-            active_entries = glossary.get_active_entries_for_text(text)
-            if active_entries:
-                glossary_entries_per_glossary[glossary.name] = sorted(active_entries)
-
-        if not glossary_entries_per_glossary:
-            return ""
-
-        glossary_block_lines: list[str] = [
-            "## Glossary",
-            "",
-            "Always use the glossary's **Target Term** for any occurrence of its **Source Term** "
-            "(including variants, inside tags, or broken across lines).",
-            "",
-            "Unlisted terms are translated naturally.",
-            "",
-        ]
-
-        for glossary_name, entries in glossary_entries_per_glossary.items():
-            glossary_block_lines.append(f"### Glossary: {glossary_name}")
-            glossary_block_lines.append("")
-            glossary_block_lines.append(
-                "| Source Term | Target Term |\n|-------------|-------------|"
-            )
-            for original_source, target_text in entries:
-                glossary_block_lines.append(f"| {original_source} | {target_text} |")
-            glossary_block_lines.append("")
-
-        return "\n".join(glossary_block_lines)
+        """Delegates to the shared renderer used by the DOCX path too."""
+        return build_glossary_block(
+            self._cached_glossaries, text, self.translation_config.lang_out
+        )
 
     def generate_prompt_for_llm(
         self,
@@ -1329,6 +1294,7 @@ class ILTranslator:
             glossary_block=glossary_block,
             context_block=context_block,
             security_notice=INJECTION_GUARD_CLAUSE,
+            language_rules=build_language_rules_block(self.translation_config.lang_out),
             lang_out=self.translation_config.lang_out,
             text_to_translate=wrap_untrusted_content(text),
         )

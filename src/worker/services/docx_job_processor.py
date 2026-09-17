@@ -123,6 +123,9 @@ class DocxJobProcessor:
             config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
         )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
+        # Curated domain terminology for this language pair. Absent before
+        # this change, which left every .docx job with no terminology control.
+        glossaries = list(config.get("glossaries") or [])
         enable_judge = bool(
             config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
@@ -185,6 +188,7 @@ class DocxJobProcessor:
                     domain=domain,
                     enable_dlp=enable_dlp,
                     auto_extract_glossary=auto_extract_glossary,
+                    glossaries=glossaries,
                     extracted_terms=cached_extracted_terms,
                     dlp_result=cached_dlp_result,
                 )

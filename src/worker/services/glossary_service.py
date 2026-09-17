@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -13,6 +15,11 @@ from typing import Any
 from google.api_core.exceptions import PreconditionFailed
 
 from src.config.constants import settings
+from src.config.glossary_hygiene import HygieneContext
+from src.config.glossary_hygiene import Trust
+from src.config.glossary_hygiene import sanitize_term_pairs
+from src.config.translation_routing import get_language_display_name
+from src.config.translation_routing import normalize_language
 from src.repository import get_storage_client
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.glossary import GlossaryEntry
@@ -26,7 +33,37 @@ _MERGE_MAX_RETRIES = 5
 
 
 class GlossaryService:
-    """Load domain-specific glossary from GCS assets."""
+    """Load domain-specific terminology from the per-domain JSON in GCS."""
+
+    def __init__(self) -> None:
+        # Keyed by (domain, source_language, target_language). The raw JSON is
+        # already cached on disk; this caches the *assembled* result, which is
+        # where the work is -- every load re-runs the hygiene gate over ~1,500
+        # pairs. Same TTL as the file cache, so there is one number to reason
+        # about.
+        self._pair_cache: dict[tuple[str, str, str], tuple[float, list[Glossary]]] = {}
+        self._pair_cache_lock = threading.Lock()
+
+    def _cache_get(self, key: tuple[str, str, str]) -> list[Glossary] | None:
+        ttl = float(settings.GLOSSARY_CACHE_TTL_SECONDS)
+        with self._pair_cache_lock:
+            entry = self._pair_cache.get(key)
+            if entry is None:
+                return None
+            cached_at, glossaries = entry
+            if (time.monotonic() - cached_at) >= ttl:
+                self._pair_cache.pop(key, None)
+                return None
+            return glossaries
+
+    def _cache_put(self, key: tuple[str, str, str], glossaries: list[Glossary]) -> None:
+        with self._pair_cache_lock:
+            self._pair_cache[key] = (time.monotonic(), glossaries)
+
+    def invalidate_cache(self) -> None:
+        """Drop the in-process glossary cache. For tests and for a forced reload."""
+        with self._pair_cache_lock:
+            self._pair_cache.clear()
 
     def _get_local_glossary_path(self, domain: str) -> Path:
         return get_cache_file_path(f"{domain}.json", settings.GLOSSARIES_DIR)
@@ -80,36 +117,171 @@ class GlossaryService:
             logger.warning(f"Glossary prefetch failed for domain '{domain}': {e}")
             return False
 
-    def load_domain_glossary(
-        self, *, domain: str, target_language_name: str
-    ) -> list[Glossary]:
+    @staticmethod
+    def _language_keys(value: str) -> set[str]:
+        """Every spelling a glossary file might use for one language.
+
+        The files on disk are inconsistent: hand-authored sections key their
+        translations by display name (``"Spanish"``) while auto-extracted ones
+        use the canonical code (``"es"``). Callers pass the code, so a lookup
+        that only tried the code silently skipped every curated term -- which
+        is why Colt's approved terminology never reached a single translation.
+        Matching on the whole set makes both spellings resolve.
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return set()
+        keys = {raw, raw.lower(), raw.title()}
         try:
-            data = self._download_glossary_json(domain, refresh=False)
+            code = normalize_language(raw)
+        except ValueError:
+            return keys
+        keys.add(code)
+        keys.add(get_language_display_name(code))
+        return keys
+
+    @classmethod
+    def _lookup(cls, payload: dict[str, Any], value: str) -> Any:
+        """First value under any spelling of `value`. For a term's translations,
+        where one language has exactly one form."""
+        for key in cls._language_keys(value):
+            if key in payload:
+                return payload[key]
+        return None
+
+    @classmethod
+    def _lookup_all(cls, payload: dict[str, Any], value: str) -> list[Any]:
+        """*Every* value under any spelling of `value`.
+
+        Sections, unlike translations, can legitimately be split across
+        spellings: the glossary files written before this change carry both an
+        ``English`` section (hand-authored) and an ``en`` one (auto-extracted).
+        Returning only the first would silently discard one of them.
+        """
+        return [payload[key] for key in cls._language_keys(value) if key in payload]
+
+    def _load_from_gcs(
+        self, *, domain: str, target_language_name: str, source_language: str | None
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+        """Shred the GCS JSON into (curated pairs, learned pairs, preserve)."""
+        data = self._download_glossary_json(domain, refresh=False)
+
+        source_language_map = data.get("glossary", {}) or {}
+        if source_language:
+            sections = [
+                s
+                for s in self._lookup_all(source_language_map, source_language)
+                if isinstance(s, dict)
+            ]
+        else:
+            sections = [s for s in source_language_map.values() if isinstance(s, dict)]
+
+        # Split by declared provenance. A file that does not say is treated as
+        # machine-written, which is the safe default: the legacy files mix
+        # hand-authored and extracted entries in one undifferentiated structure.
+        curated_pairs: list[tuple[str, str]] = []
+        learned_pairs: list[tuple[str, str]] = []
+        preserve: list[str] = []
+        for lang_payload in sections:
+            for term in lang_payload.get("terms", []) or []:
+                source_term = term.get("source_term")
+                translations = term.get("translations", {}) or {}
+                target_term = self._lookup(translations, target_language_name)
+                if not (source_term and target_term):
+                    continue
+                pair = (str(source_term), str(target_term))
+                if Trust.from_origin(term.get("origin")) is Trust.CURATED:
+                    curated_pairs.append(pair)
+                else:
+                    learned_pairs.append(pair)
+            preserve.extend(
+                str(t) for t in (lang_payload.get("preserve_as_is") or []) if t
+            )
+
+        return curated_pairs, learned_pairs, preserve
+
+    def load_domain_glossary(
+        self,
+        *,
+        domain: str,
+        target_language_name: str,
+        source_language: str | None = None,
+    ) -> list[Glossary]:
+        """Load the approved terminology for one language *pair*.
+
+        `source_language` is optional only so older callers keep working.
+        Falling back to every source section is the cross-language
+        contamination in TRANSLATION_FIX_PLAN.md RC-3: a French->Italian job
+        inheriting terms a Spanish->Italian job had written.
+
+        Every entry is re-checked against the hygiene gate on the way out.
+        Filtering on read is what makes anything that gets into the file by
+        another route inert without waiting for a cleanup.
+        """
+        cache_key = (domain, source_language or "", target_language_name)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            curated_pairs, learned_pairs, preserve = self._load_from_gcs(
+                domain=domain,
+                target_language_name=target_language_name,
+                source_language=source_language,
+            )
         except Exception as e:
             logger.warning(
-                f"Failed to load glossary for domain '{domain}' and target '{target_language_name}': {e}"
+                f"Failed to load glossary for domain '{domain}' "
+                f"({source_language or 'all'}->{target_language_name}): {e}",
+                exc_info=True,
             )
             return []
 
-        entries: list[GlossaryEntry] = []
-        source_language_map = data.get("glossary", {})
-        for _, lang_payload in source_language_map.items():
-            for term in lang_payload.get("terms", []):
-                source_term = term.get("source_term")
-                translations = term.get("translations", {})
-                target_term = translations.get(target_language_name)
-                if not source_term or not target_term:
-                    continue
-                entries.append(
-                    GlossaryEntry(
-                        source=str(source_term),
-                        target=str(target_term),
-                        target_language=target_language_name,
-                    )
-                )
-        if not entries:
-            return []
-        return [Glossary(name=f"{domain}-json-glossary", entries=entries)]
+        # Business vocabulary for the person-name heuristic, taken from the
+        # hand-authored do-not-translate list rather than a list maintained in
+        # code. Non-circular: preserve entries are trusted content, and are
+        # never among the pairs being judged.
+        context = HygieneContext.from_terms(preserve)
+        kept_curated, curated_rejected = sanitize_term_pairs(
+            curated_pairs, trust=Trust.CURATED, context=context
+        )
+        kept_learned, rejected = sanitize_term_pairs(
+            learned_pairs, trust=Trust.LEARNED, context=context
+        )
+        kept = kept_curated + kept_learned
+        for reason, count in curated_rejected.items():
+            rejected[reason] = rejected.get(reason, 0) + count
+        # `preserve_as_is` is hand-authored "do not translate this", so an
+        # identity pair there is the intent rather than a defect.
+        kept_preserve, preserve_rejected = sanitize_term_pairs(
+            [(t, t) for t in preserve], trust=Trust.PRESERVE
+        )
+        if rejected or preserve_rejected:
+            logger.warning(
+                f"Dropped unusable glossary entries for domain '{domain}' "
+                f"({source_language or 'all'}->{target_language_name}): "
+                f"terms={rejected} preserve_as_is={preserve_rejected}"
+            )
+
+        entries = [
+            GlossaryEntry(
+                source=term, target=translation, target_language=target_language_name
+            )
+            for term, translation in kept + kept_preserve
+        ]
+        # An empty result is cached too: "this domain has nothing for this
+        # pair" is a real answer, and re-deriving it costs the same as a
+        # populated one.
+        glossaries = (
+            [Glossary(name=f"{domain}-glossary", entries=entries)] if entries else []
+        )
+        self._cache_put(cache_key, glossaries)
+        if entries:
+            logger.info(
+                f"Loaded {len(entries)} glossary term(s) for domain '{domain}' "
+                f"({source_language or 'all'}->{target_language_name})"
+            )
+        return glossaries
 
     def _blob_path_for_domain(self, domain: str) -> str:
         return f"{settings.GCS_ASSETS_PREFIX}/{settings.GCS_GLOSSARIES_PREFIX}/{domain}.json"
@@ -128,8 +300,49 @@ class GlossaryService:
         already has a translation for target_language_name (first-writer-wins
         per term, including terms added by a concurrent job since this read).
         """
+        # Canonicalise the section key so a job routed as "es" and one routed
+        # as "Spanish" write to the same section instead of forking the file.
+        try:
+            section_key = normalize_language(source_language)
+        except ValueError:
+            section_key = str(source_language or "").strip().lower()
+        try:
+            target_key = normalize_language(target_language_name)
+        except ValueError:
+            target_key = str(target_language_name or "").strip().lower()
+        if not section_key or not target_key:
+            return data, 0
+
+        # The gate that stops this file becoming what the UAT round found:
+        # identity pairs, function words, DLP tokens, names, dates, headings.
+        # Judge the newly learned terms against the terminology this domain
+        # already holds, so onboarding a domain sharpens the heuristics instead
+        # of needing a code change.
+        context = HygieneContext.from_terms(
+            [
+                term.get("source_term", "")
+                for section in (data.get("glossary") or {}).values()
+                if isinstance(section, dict)
+                for term in (section.get("terms") or [])
+            ]
+            + [
+                entry
+                for section in (data.get("glossary") or {}).values()
+                if isinstance(section, dict)
+                for entry in (section.get("preserve_as_is") or [])
+            ]
+        )
+        new_terms, rejected = sanitize_term_pairs(new_terms, context=context)
+        if rejected:
+            logger.info(
+                f"Glossary hygiene rejected {sum(rejected.values())} extracted "
+                f"term(s) before merge ({section_key}->{target_key}): {rejected}"
+            )
+        if not new_terms:
+            return data, 0
+
         glossary_map = data.setdefault("glossary", {})
-        lang_payload = glossary_map.setdefault(source_language, {"terms": []})
+        lang_payload = glossary_map.setdefault(section_key, {"terms": []})
         terms_list = lang_payload.setdefault("terms", [])
 
         existing_by_source = {
@@ -146,16 +359,16 @@ class GlossaryService:
             existing = existing_by_source.get(key)
             if existing is not None:
                 translations = existing.setdefault("translations", {})
-                if target_language_name in translations:
+                if target_key in translations:
                     # Already has a translation for this language (possibly
                     # added by a concurrent job) -- do not overwrite.
                     continue
-                translations[target_language_name] = target_term
+                translations[target_key] = target_term
                 added += 1
             else:
                 new_entry = {
                     "source_term": source_term,
-                    "translations": {target_language_name: target_term},
+                    "translations": {target_key: target_term},
                 }
                 terms_list.append(new_entry)
                 existing_by_source[key] = new_entry
@@ -174,17 +387,41 @@ class GlossaryService:
         """Persist newly auto-extracted terms into the domain glossary JSON in GCS.
 
         Only call this after a translation job has completed successfully --
-        terms from failed/low-quality jobs should never reach the shared
-        glossary. Uses optimistic concurrency (GCS if_generation_match) so
-        concurrent jobs writing to the same domain file cannot silently
-        clobber each other's additions; on a generation mismatch, the read-
-        modify-write is retried up to _MERGE_MAX_RETRIES times.
+        terms from failed/low-quality jobs must never reach the shared
+        glossary. The hygiene gate runs first, inside `_merge_terms_into_json`.
+
+        Uses optimistic concurrency (GCS `if_generation_match`) so concurrent
+        jobs writing to the same domain file cannot silently clobber each
+        other's additions; on a generation mismatch the read-modify-write is
+        retried up to `_MERGE_MAX_RETRIES` times. First-writer-wins per term,
+        so a learned term never displaces a curated one.
 
         Returns True if any new terms were actually written.
         """
         if not new_terms:
             return False
 
+        written = self._merge_into_gcs(
+            domain=domain,
+            source_language=source_language,
+            target_language_name=target_language_name,
+            new_terms=new_terms,
+        )
+        if written:
+            # The next job in this domain should see what this one learned
+            # rather than wait out the TTL.
+            self.invalidate_cache()
+        return written
+
+    def _merge_into_gcs(
+        self,
+        *,
+        domain: str,
+        source_language: str,
+        target_language_name: str,
+        new_terms: list[tuple[str, str]],
+    ) -> bool:
+        """The read-modify-write cycle. See the caller for the guarantees."""
         blob_path = self._blob_path_for_domain(domain)
         client = get_storage_client()
         bucket = client.bucket(settings.GCS_BUCKET_NAME)

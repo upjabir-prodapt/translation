@@ -26,6 +26,33 @@ class GlossaryEntry:
 
 TERM_NORM_PATTERN = re.compile(r"\s+", regex.UNICODE)
 
+# A term whose outer characters are word characters must match on a word
+# boundary. Without this, matching is plain caseless substring search, so a
+# three-letter entry such as "der" activates on "under", "order" and "leader",
+# and "los" on "Carlos" -- every paragraph in the document then carries a
+# glossary instruction it has nothing to do with.
+#
+# The databases are compiled without HS_FLAG_UCP, so hyperscan's \b is the
+# ASCII one: only [A-Za-z0-9_] counts as a word character. The test below uses
+# the same definition deliberately. Judging "é" to be a word character here
+# would emit `...société\b`, which cannot match, because hyperscan sees é as a
+# non-word character and the boundary never fires.
+#
+# CJK falls out of this correctly for free: an ideograph is not an ASCII word
+# character, so a Japanese term is anchored bare rather than behind a \b that
+# would never match.
+_WORD_CHAR_PATTERN = re.compile(r"[A-Za-z0-9_]")
+
+
+def _bounded_pattern(source_term: str) -> str:
+    """Escape a term and anchor it to word boundaries where they apply."""
+    escaped = re.escape(source_term)
+    if not source_term:
+        return escaped
+    prefix = r"\b" if _WORD_CHAR_PATTERN.match(source_term[0]) else ""
+    suffix = r"\b" if _WORD_CHAR_PATTERN.match(source_term[-1]) else ""
+    return f"{prefix}{escaped}{suffix}"
+
 
 class Glossary:
     def __init__(self, name: str, entries: list[GlossaryEntry]):
@@ -78,7 +105,7 @@ class Glossary:
             self.normalized_lookup[normalized_key] = (entry.source, entry.target)
             self.id_lookup.append((entry.source, entry.target))
 
-            hs_pattern.append((re.escape(entry.source).encode("utf-8"), idx))
+            hs_pattern.append((_bounded_pattern(entry.source).encode("utf-8"), idx))
 
         chunk_size = 20000
         for i, pattern_chunk in enumerate(
