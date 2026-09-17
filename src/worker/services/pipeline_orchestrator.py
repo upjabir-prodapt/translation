@@ -10,6 +10,7 @@ runtime mode.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import shutil
 from collections import Counter
@@ -24,6 +25,7 @@ from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode
 
 from src.config.constants import settings
+from src.config.language_prompts import select_secondary_languages
 from src.config.tracing import set_root_span
 from src.config.tracing import set_root_span_attributes
 from src.config.tracing import tracer_pipeline
@@ -45,11 +47,9 @@ from src.worker.services.glossary_service import GlossaryService
 from src.worker.services.input_consistency_service import DomainCheckUnavailableError
 from src.worker.services.input_consistency_service import classify_document_domain
 from src.worker.services.intent_router_service import IntentRouterService
-from src.worker.services.language_detection_core import aggregate_languages
+from src.worker.services.language_detection_core import dominant_language_and_share
 from src.worker.services.language_detection_core import get_supported_languages
-from src.worker.services.language_detection_core import language_shares
-from src.worker.services.language_detection_core import significant_languages
-from src.worker.services.language_detection_core import supported_language_share
+from src.worker.services.language_detection_core import min_dominant_language_share
 from src.worker.services.language_detection_service import LanguageDetectionService
 from src.worker.services.llm_cost_service import get_vertex_llm_cost_service
 from src.worker.services.processor_service import JobProcessor
@@ -80,6 +80,13 @@ _NO_TEXT_LAYER_MESSAGE = (
     "This PDF has no extractable text layer (scanned or image-only). "
     "OCR is not supported — please supply a text-based PDF."
 )
+
+# Domain used when a job declared none and the classifier could not answer.
+# A constant rather than a setting: the value only has to be one of the five
+# supported domains, and an env var could be typo'd into one that matches no
+# model route and no glossary. `commercial` is the least domain-specific of
+# the five prompt profiles.
+_UNDETECTED_DOMAIN = "commercial"
 
 
 def _user_facing_error_message(exc: Exception) -> str:
@@ -547,45 +554,80 @@ class PipelineOrchestrator:
             prepared.detected_language_distribution,
         )
 
-    def _assert_language_supported(
+    def _secondary_prompt_languages(
+        self,
+        *,
+        job_id: str,
+        language_distribution: Counter[str],
+        source_lang: str,
+        target_lang: str,
+    ) -> list[tuple[str, float]]:
+        """Minority languages to name in the translation prompt.
+
+        The document is translated from one source language, so any segment
+        written in another language would otherwise be translated from the
+        wrong one. Naming those languages in the prompt lets the model
+        translate each segment from whichever it is actually in -- a
+        prompt-level fix, with no per-segment routing or re-detection (see
+        language_prompts.py).
+
+        Returns `[]` when the hint is switched off, when detection produced
+        nothing, or when the document is monolingual, in which case every
+        prompt below is left exactly as it was.
+        """
+        if not settings.MIXED_LANGUAGE_PROMPT_HINT_ENABLED:
+            return []
+
+        secondary = select_secondary_languages(
+            language_distribution,
+            primary_language=source_lang,
+            target_language=target_lang,
+            min_share=float(settings.MIXED_LANGUAGE_PROMPT_MIN_SHARE),
+            max_languages=int(settings.MIXED_LANGUAGE_PROMPT_MAX_LANGUAGES),
+        )
+        if secondary:
+            logger.info(
+                "Job %s: prompting for %d secondary language(s) alongside '%s': %s",
+                job_id,
+                len(secondary),
+                source_lang,
+                {code: round(share, 4) for code, share in secondary},
+            )
+        return secondary
+
+    def _assert_language_matches(
         self,
         *,
         job_id: str,
         declared_source_lang: str,
         language_distribution: Counter[str],
-    ) -> Counter[str]:
-        """Fail the job unless the document matches its declared source
-        language and enough of it is in a translatable language.
+    ) -> None:
+        """Fail the job unless one language dominates and it is the declared one.
 
         Two independent checks, both gated by the single
         `LANGUAGE_MISMATCH_CHECK_ENABLED` kill switch:
 
-        1. **Coverage.** The combined share of *all* detected characters
-           (languages) held by codes in `language_mapper.json` must reach
-           `LANGUAGE_SUPPORTED_MIN_COVERAGE` (default 0.90). This is
-           computed on the *raw* distribution, not the noise-filtered one:
-           untranslatable content fragmented across many small per-block
-           detections must still count against the budget, or a document
-           made of ten different 9%-share unsupported languages would score
-           as if it were clean. Content inside the tolerated gap is passed
-           through unchanged by `SKIP_UNSUPPORTED_LANGUAGE_UNITS`, never
-           mistranslated.
-        2. **Declared vs. dominant.** The document's dominant *significant*
-           (noise-filtered -- see `significant_languages()`) detected
-           language must equal the declared `source_language`. Exactly one
-           source language is selected per job; a document dominated by a
-           different language was very likely submitted under the wrong
-           declaration and is rejected rather than silently translated
-           under the wrong label.
+        1. **Mixed language.** No language holds
+           `LANGUAGE_DETECTION_MIN_DOMINANT_SHARE` (60%) of the detected
+           characters, so there is no single source language to translate
+           from.
+        2. **Wrong language.** The dominant language is not the one the user
+           declared.
 
         Coverage is checked first: a document that is mostly in a language
         nobody can translate should be told that, not told it doesn't match
         the declared source.
 
-        The full distribution and computed coverage are logged on every
-        job, pass or fail, which is what makes a shadow rollout possible:
-        run with `LANGUAGE_MISMATCH_CHECK_ENABLED=false`, read the real
-        numbers, tune the thresholds, then switch it on.
+        The threshold is global: one share, measured once over the whole
+        document, via the same `dominant_language_and_share` the detection
+        core uses. There is no per-block veto. The previous rule
+        (`LANGUAGE_MIXED_MAX_SECONDARY_SHARE = 0.0`) rejected a document as
+        soon as *any* second language was detected, which -- because
+        detection is per text block -- made a single block fatal: an entirely
+        English support document failed because its escalation contact list
+        is 70% personal names and scored Albanian at 0.95 confidence. A
+        minority language now reaches the translation prompt as a hint
+        (`_secondary_prompt_languages`) instead of failing the job.
 
         Returns the noise-filtered ("significant") language `Counter` so
         the caller does not need to recompute it.
@@ -663,13 +705,62 @@ class PipelineOrchestrator:
             "" if enabled else " (guard disabled)",
         )
 
-        if coverage < min_coverage:
-            unsupported_summary = _summarize_unsupported_languages(
-                unsupported_raw_shares
-            )
+        # The mixed-language decision, on the same footing as the detection
+        # core's: one global share threshold, measured after incidental
+        # languages are dropped. `dominant_code`/`dominant_share` above are
+        # raw (every language, for the log line); these are the values the
+        # verdict is actually made on.
+        min_share = min_dominant_language_share()
+        significant_code, significant_share, significant_chars = (
+            dominant_language_and_share(language_distribution)
+        )
+        if significant_code is not None and significant_share < min_share:
+            if significant_chars < int(
+                settings.LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS
+            ):
+                # Too little evidence to call a document mixed -- the same
+                # short-document allowance `resolve_dominant_language` makes,
+                # so the two layers stay in agreement.
+                logger.info(
+                    "Job %s: dominant language '%s' holds only %.0f%% but only "
+                    "%s chars were detected -- accepting rather than rejecting "
+                    "as mixed-language.",
+                    job_id,
+                    significant_code,
+                    significant_share * 100,
+                    significant_chars,
+                )
+            else:
+                detected_summary = ", ".join(
+                    f"{_language_for_user(code)} {share * 100:.0f}%"
+                    for code, share in sorted(
+                        shares.items(), key=lambda item: item[1], reverse=True
+                    )
+                )
+                logger.warning(
+                    "Job %s: mixed-language document%s -- no language reaches "
+                    "%.0f%% (dominant '%s' at %.1f%%), distribution %s",
+                    job_id,
+                    " rejected" if enabled else " detected (guard disabled)",
+                    min_share * 100,
+                    significant_code,
+                    significant_share * 100,
+                    dict(language_distribution),
+                )
+                if not enabled:
+                    return
+                raise ValueError(
+                    "This document is mixed-language "
+                    f"({detected_summary}): no single language covers at "
+                    f"least {min_share:.0%} of the text, so it cannot be "
+                    "reliably translated from one source language. Please "
+                    "submit a document written in a single language."
+                )
+
+        if dominant_code != declared_code:
             logger.warning(
-                "Job %s: supported-language coverage %.3f below threshold "
-                "%.2f%s -- unsupported content: %s",
+                "Job %s: source language mismatch%s -- declared '%s', document "
+                "is '%s' (%.1f%% of detected text)",
                 job_id,
                 coverage,
                 min_coverage,
@@ -704,46 +795,51 @@ class PipelineOrchestrator:
 
         return significant
 
-    async def _assert_domain_matches(
+    async def _resolve_domain(
         self,
         *,
         job_id: str,
-        domain: str,
+        domain: str | None,
         local_input_path: Path,
         is_docx: bool,
         source_lang: str,
         enable_dlp: bool,
         source_hash: str,
-    ) -> float:
-        """Fail the job when the declared domain contradicts the document.
+    ) -> tuple[str, float]:
+        """Settle the domain this job will be translated with.
 
-        Returns the USD cost of the classification call so it can be added to
-        the job's total. That is zero when the guard is disabled or when a
-        sibling job of the same batch already paid for the call.
+        Returns `(domain, cost_usd)` -- the cost of the classification call, so
+        it can be added to the job total. Zero when no call was made.
 
-        Only a contradiction the classifier is confident about fails the job.
-        Business domains genuinely overlap -- an HR policy is full of
-        contractual language, a finance document is full of regulatory
-        language -- so a disagreement below
-        `DOMAIN_CLASSIFIER_MIN_CONFIDENCE` is logged and allowed through.
-        That floor, not the on/off flag, is the real false-positive control.
+        **Undeclared** (the usual case): the model reads the document and its
+        verdict is adopted, including a low-confidence one. The confidence
+        floor below exists to decide whether to override a human; there is no
+        human choice here to override. Nothing in this path fails the job --
+        a classifier that cannot answer falls back to `_UNDETECTED_DOMAIN`,
+        because the submitter made no claim and has nothing to correct on
+        resubmission.
 
-        A classifier that cannot answer at all raises `DomainCheckUnavailableError`
-        and fails the job: an unverifiable document is not translated
-        unchecked. Note that this makes a Vertex or DLP outage fail jobs
-        permanently, since a failed job is terminal and Cloud Tasks does not
-        redeliver it -- `DOMAIN_MISMATCH_CHECK_ENABLED` is the kill switch.
+        **Declared**: the historical guard, unchanged. Only a contradiction the
+        classifier is confident about fails the job -- domains genuinely
+        overlap, so a disagreement below `DOMAIN_CLASSIFIER_MIN_CONFIDENCE` is
+        logged and the declared domain wins. A classifier that cannot answer
+        fails the job: an unverifiable claim is not translated unchecked.
+        `DOMAIN_MISMATCH_CHECK_ENABLED` is the kill switch for that, and it
+        short-circuits before validation so the declared value passes through
+        exactly as submitted.
         """
-        if not settings.DOMAIN_MISMATCH_CHECK_ENABLED:
-            return 0.0
+        declared_domain = str(domain or "").strip()
 
-        try:
-            declared_domain = normalize_domain(domain)
-        except ValueError:
-            # The API restricts domain to SUPPORTED_DOMAINS, so this is a
-            # direct-to-worker submission. There is nothing to classify
-            # against, and the guard is fail-closed.
-            raise ValueError(f"Unsupported document domain '{domain}'.") from None
+        if declared_domain:
+            if not settings.DOMAIN_MISMATCH_CHECK_ENABLED:
+                return declared_domain, 0.0
+            try:
+                declared_domain = normalize_domain(declared_domain)
+            except ValueError:
+                # The API normalizes against SUPPORTED_DOMAINS, so this is a
+                # direct-to-worker submission. Fail rather than silently
+                # detecting instead: they asserted something specific.
+                raise ValueError(f"Unsupported document domain '{domain}'.") from None
 
         try:
             verdict = await classify_document_domain(
@@ -755,6 +851,15 @@ class PipelineOrchestrator:
                 source_hash=source_hash,
             )
         except DomainCheckUnavailableError as exc:
+            if not declared_domain:
+                logger.warning(
+                    "Job %s: domain detection could not run (%s); falling "
+                    "back to '%s'.",
+                    job_id,
+                    exc,
+                    _UNDETECTED_DOMAIN,
+                )
+                return _UNDETECTED_DOMAIN, 0.0
             logger.warning(
                 "Job %s: domain check could not run (%s); failing the job "
                 "because the declared domain could not be verified.",
@@ -770,8 +875,19 @@ class PipelineOrchestrator:
             ) from exc
 
         classification = verdict.classification
+
+        if not declared_domain:
+            logger.info(
+                "Job %s: domain auto-detected as '%s' (confidence %.2f). Reason: %s",
+                job_id,
+                classification.domain,
+                classification.confidence,
+                classification.reason,
+            )
+            return classification.domain, verdict.cost_usd
+
         if classification.domain == declared_domain:
-            return verdict.cost_usd
+            return declared_domain, verdict.cost_usd
 
         min_confidence = float(settings.DOMAIN_CLASSIFIER_MIN_CONFIDENCE)
         if classification.confidence < min_confidence:
@@ -786,7 +902,7 @@ class PipelineOrchestrator:
                 min_confidence,
                 classification.reason,
             )
-            return verdict.cost_usd
+            return declared_domain, verdict.cost_usd
 
         logger.warning(
             "Job %s: domain mismatch -- declared '%s', classified '%s' "
@@ -869,7 +985,9 @@ class PipelineOrchestrator:
             await self.session_manager.set_input_path(job_id, local_input_path)
 
             target_lang = translation_config["target_language"]
-            domain = translation_config["domain"]
+            # May be absent: `domain` is optional at the API and is read off
+            # the document below when the submitter did not declare one.
+            declared_domain = translation_config.get("domain") or ""
 
             # Everything downstream routes on the language the user
             # *declared* (model selection, cache key, cover page). The
@@ -942,16 +1060,22 @@ class PipelineOrchestrator:
                 )
             )
 
-            # Guard 2: the declared domain must match what the document
-            # actually is (an HR policy submitted as `legal`). Runs after
-            # `enable_dlp` is resolved because the text sampled for
-            # classification is sent to Vertex and must respect the same
+            # Guard 2 / domain resolution. When the submitter declared a
+            # domain this verifies it and fails the job on a confident
+            # contradiction (an HR policy submitted as `legal`); when they
+            # declared nothing it reads the domain off the document and
+            # adopts it. Either way `domain` below is the value everything
+            # downstream -- prompt profile, glossary, model chain, the job
+            # record -- is keyed on.
+            #
+            # Runs after `enable_dlp` is resolved because the text sampled for
+            # classification may be sent to Vertex and must respect the same
             # masking the translation path applies. Cached per source_hash
-            # inside the service, so a multi-target batch classifies once.
+            # inside the service, so a multi-target batch resolves once.
             current_stage = "domain_consistency_check"
-            domain_check_cost_usd = await self._assert_domain_matches(
+            domain, domain_check_cost_usd = await self._resolve_domain(
                 job_id=job_id,
-                domain=domain,
+                domain=declared_domain,
                 local_input_path=local_input_path,
                 is_docx=source_doc.get("format") in ("docx", "txt"),
                 source_lang=source_lang,
@@ -1004,38 +1128,40 @@ class PipelineOrchestrator:
                     exc_info=True,
                 )
 
-            # Reuses the noise-filtered Counter `_assert_language_supported`
-            # already computed, rather than re-deriving it from
-            # `language_distribution` a second time. Used for (before both
-            # the glossary load and batch sizing below):
-            #  - Batch sizing keys off what the document actually contains,
-            #    not only the declared pair: a mixed en->de document that is
-            #    a third Japanese still needs the CJK token multiplier, or
-            #    tiktoken's under-count of CJK produces oversized batches
-            #    and truncated output.
-            #  - The glossary load uses it to only pull in per-language term
-            #    buckets relevant to this document (see load_domain_glossary's
-            #    `source_languages` docstring).
-            detected_languages = sorted(significant_language_distribution)
-
-            glossaries = self.glossary_service.load_domain_glossary(
-                domain=domain,
-                target_language_name=target_lang,
-                # `None` (no filtering, every bucket included) rather than
-                # an empty list when detection produced no evidence at all
-                # (only reachable with LANGUAGE_MISMATCH_CHECK_ENABLED=false
-                # -- the guard otherwise fails the job first). An empty list
-                # would filter out every bucket and silently zero out
-                # glossary consistency for a document we simply couldn't
-                # read, which isn't a more correct outcome than the
-                # historical unfiltered behaviour.
-                source_languages=detected_languages or None,
+            # Keyed on the language *pair*. Loading every source section, as
+            # this used to, is what let a Spanish->Italian job's terms steer a
+            # French->Italian one (TRANSLATION_FIX_PLAN.md RC-3).
+            #
+            # Off-thread because the load is synchronous and now issues two
+            # BigQuery queries. Blocking the event loop on a network call in
+            # this coroutine is what produced the 203s stall in
+            # docs/architecture/; a cache miss here must not repeat it.
+            glossaries = await asyncio.to_thread(
+                functools.partial(
+                    self.glossary_service.load_domain_glossary,
+                    domain=domain,
+                    target_language_name=target_lang,
+                    source_language=source_lang,
+                )
             )
 
             is_txt = source_doc.get("format") == "txt"
             is_docx = source_doc.get("format") == "docx" or is_txt
 
             current_stage = "translate"
+            # Minority languages worth naming in the translation prompt, so
+            # the model translates those segments from the language they are
+            # actually in rather than from the dominant one. Keyed on
+            # `source_lang` (the declared, routed language) rather than the
+            # detected dominant, so the exclusion matches what the prompt
+            # will actually call the primary language.
+            secondary_languages = self._secondary_prompt_languages(
+                job_id=job_id,
+                language_distribution=language_distribution,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+
             if is_docx:
                 # Native DOCX translation: direct OOXML manipulation, no PDF
                 # conversion, no LibreOffice subprocess -- see
@@ -1050,12 +1176,13 @@ class PipelineOrchestrator:
                     "lang_in": source_lang,
                     "lang_out": target_lang,
                     "domain": domain,
+                    "secondary_languages": secondary_languages,
                     "model_list": model_chain,
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
                     "enable_dlp": enable_dlp,
                     "enable_judge": enable_judge,
-                    "auto_extract_glossary": True,
-                    "detected_languages": detected_languages,
+                    "glossaries": glossaries,
+                    "auto_extract_glossary": settings.AUTO_EXTRACT_GLOSSARY,
                     # Plain-text jobs are unwrapped back to .txt after
                     # translation (see docx_path_to_txt_bytes below); a DOCX
                     # cover page would leak formatted disclaimer paragraphs
@@ -1079,6 +1206,7 @@ class PipelineOrchestrator:
                     "lang_in": source_lang,
                     "lang_out": target_lang,
                     "domain": domain,
+                    "secondary_languages": secondary_languages,
                     "intent": intent,
                     "model_list": model_chain,
                     "max_model_attempts": max(1, settings.MAX_MODEL_ATTEMPTS),
@@ -1253,7 +1381,11 @@ class PipelineOrchestrator:
             # from (see docs/architecture/pdf-vs-docx-translation-architecture.md).
             if is_docx and attempt_result.get("extracted_terms"):
                 try:
-                    docx_processor.persist_extracted_terms(attempt_result)
+                    # Off-thread for the same reason as the load above: the
+                    # merge is a synchronous BigQuery statement.
+                    await asyncio.to_thread(
+                        docx_processor.persist_extracted_terms, attempt_result
+                    )
                 except Exception:
                     logger.warning(
                         f"Failed to persist auto-extracted glossary terms for job {job_id}",

@@ -37,6 +37,7 @@ import tiktoken
 
 from src.config.constants import settings
 from src.config.domain_prompts import get_domain_prompt_profile
+from src.config.glossary_hygiene import is_acceptable_term_pair
 from src.worker.doctranslator.batching import compute_batch_plan
 from src.worker.doctranslator.batching import log_batch_plan
 from src.worker.doctranslator.format.docx.units import TranslatableUnit
@@ -122,26 +123,13 @@ def _parse_terms(
             continue
         src = str(item.get("src", "")).strip()
         tgt = str(item.get("tgt", "")).strip()
-        if not (src and tgt and len(src) < 100):
-            continue
-        # The model is asked to self-report the source language per term
-        # (rule 6 above) rather than trusting the batch's declared
-        # source_language -- a mixed document can legitimately contribute
-        # terms in more than one language from a single batch. Anything
-        # that doesn't normalize to one of the supported codes is dropped
-        # rather than guessed -- see `TermLanguageDropTracker` (shared with
-        # the PDF extractor).
-        source_language = drop_tracker.resolve(
-            str(item.get("src_lang", "")), source_term=src
-        )
-        if source_language is None:
-            continue
-        terms.append(
-            ExtractedGlossaryTerm(
-                source=src, target=tgt, source_language=source_language
-            )
-        )
-    return terms
+        # Same gate as the PDF extractor and the GCS merge. This path
+        # previously had no identity guard at all -- not even the weak one
+        # the PDF side carried -- so `des -> des` and `integrity -> integrity`
+        # went straight into the shared domain glossary.
+        if is_acceptable_term_pair(src, tgt):
+            pairs.append((src, tgt))
+    return pairs
 
 
 class DocxTermExtractor:

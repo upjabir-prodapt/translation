@@ -40,8 +40,11 @@ class ClaudeVertexAITranslator(BaseTranslator):
         model,
         temperature=0.0,
         domain: str | None = None,
+        secondary_languages=None,
     ):
-        super().__init__(lang_in, lang_out, domain=domain)
+        super().__init__(
+            lang_in, lang_out, domain=domain, secondary_languages=secondary_languages
+        )
         try:
             from anthropic import AnthropicVertex
         except ImportError as exc:
@@ -65,7 +68,13 @@ class ClaudeVertexAITranslator(BaseTranslator):
         self.cache_hit_prompt_token_count = AtomicInteger()
 
     def prompt(self, text: str) -> str:
-        return build_translation_prompt(text, self.lang_out, domain=self.domain)
+        return build_translation_prompt(
+            text,
+            self.lang_in,
+            self.lang_out,
+            domain=self.domain,
+            secondary_languages=self.secondary_languages,
+        )
 
     def _build_tool_schema(self, response_schema) -> dict:
         return {

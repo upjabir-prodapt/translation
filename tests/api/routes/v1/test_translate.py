@@ -3,6 +3,7 @@
 from datetime import UTC
 from datetime import datetime
 
+import pytest
 from src.api.exceptions import JobNotFoundError
 from src.api.schemas.responses import JobDetailResponse
 
@@ -150,10 +151,51 @@ class TestSubmitTranslation:
         )
         assert resp.status_code == 422
 
-    def test_missing_domain_returns_422(self, api_client, minimal_pdf_bytes):
+    def test_missing_domain_is_accepted_for_auto_detection(
+        self, api_client, minimal_pdf_bytes
+    ):
+        """Domain is optional, unlike source language.
+
+        There is something for the worker to detect here and a safe fallback
+        if it cannot, so an omitted domain is a request for auto-detection
+        rather than an incomplete submission.
+        """
         resp = api_client.post(
             "/api/v1/translate",
             data={"target_languages": ["Spanish"], "source_language": "English"},
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 202
+
+    @pytest.mark.parametrize("value", ["", "auto", "  AUTO "])
+    def test_auto_sentinels_are_accepted(
+        self, api_client, minimal_pdf_bytes, value: str
+    ):
+        """A form-encoded client cannot easily omit a field it has a control
+        for, so a cleared dropdown posts ""."""
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": value,
+            },
+            files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
+        )
+        assert resp.status_code == 202
+
+    def test_a_typo_is_still_rejected_rather_than_auto_detected(
+        self, api_client, minimal_pdf_bytes
+    ):
+        """ "legall" meant to declare something. Silently auto-detecting it
+        would turn a typo into an unannounced change of behaviour."""
+        resp = api_client.post(
+            "/api/v1/translate",
+            data={
+                "target_languages": ["Spanish"],
+                "source_language": "English",
+                "domain": "legall",
+            },
             files={"file": ("sample.pdf", minimal_pdf_bytes, "application/pdf")},
         )
         assert resp.status_code == 422

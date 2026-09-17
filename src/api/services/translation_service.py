@@ -393,10 +393,19 @@ class TranslationService:
 
     def _normalize_config(self, request: TranslateRequest) -> dict[str, Any]:
         """Normalize translation configuration."""
-        try:
-            domain = normalize_domain(request.translation_config.domain)
-        except ValueError as e:
-            raise ValidationError(str(e), field="translation_config.domain") from e
+        # Empty means "let the worker detect it". The domain is no longer
+        # required at submission, so the canonical value for an undeclared job
+        # is "" all the way through: the BigQuery row, the duplicate key and
+        # the worker's own `declared_domain` check all read it the same way,
+        # and the worker replaces it with what it detects.
+        declared_domain = request.translation_config.domain
+        if declared_domain is None or not str(declared_domain).strip():
+            domain = ""
+        else:
+            try:
+                domain = normalize_domain(declared_domain)
+            except ValueError as e:
+                raise ValidationError(str(e), field="translation_config.domain") from e
 
         try:
             lang_out = normalize_language(request.translation_config.target_language)

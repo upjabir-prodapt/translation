@@ -9,6 +9,7 @@ import time
 import unicodedata
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Sequence
 from typing import Any
 
 from opentelemetry.trace import SpanKind
@@ -48,12 +49,23 @@ class BaseTranslator(ABC):
     lang_map: dict[str, str] = {}
     provider: str = "base"
 
-    def __init__(self, lang_in: str, lang_out: str, domain: str | None = None):
+    def __init__(
+        self,
+        lang_in: str,
+        lang_out: str,
+        domain: str | None = None,
+        secondary_languages: Sequence[tuple[str, float]] | None = None,
+    ):
         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
         lang_out = self.lang_map.get(lang_out.lower(), lang_out)
         self.lang_in = lang_in
         self.lang_out = lang_out
         self.domain = domain
+        # Minority languages detection found in this document, as
+        # (code, share) pairs. Rendered into the prompt so the model
+        # translates each segment from the language it is actually in
+        # rather than from `lang_in` (see config/language_prompts.py).
+        self.secondary_languages = list(secondary_languages or [])
         self.translate_call_count = 0
 
     def __del__(self):
@@ -180,6 +192,7 @@ class BaseTranslator(ABC):
             lang_out=self.lang_out,
             text=text,
             domain=self.domain,
+            secondary_languages=self.secondary_languages,
         )
 
     def _run_translation_batch(
@@ -193,8 +206,8 @@ class BaseTranslator(ABC):
         build_prompt: bool = True,
     ) -> str:
         # Cache on the *incoming* text, never on `contents`: the prompt
-        # wrapper is a pure function of (text, lang_in, lang_out, domain),
-        # all of which are already part of the key.
+        # wrapper is a pure function of (text, lang_in, lang_out, domain,
+        # secondary_languages), all of which are already part of the key.
         cache_key = self._cache_key_for(text if isinstance(text, str) else None)
         if cache_key is not None:
             cached = get_translation_cache().get(cache_key)

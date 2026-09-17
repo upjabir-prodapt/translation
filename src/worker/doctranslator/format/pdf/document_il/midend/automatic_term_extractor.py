@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
     from src.worker.doctranslator.translator.translator import BaseTranslator
 
+from src.config.glossary_hygiene import evaluate_term_pair
+
 logger = logging.getLogger(__name__)
 
 LLM_PROMPT_TEMPLATE: str = """
@@ -261,6 +263,13 @@ class AutomaticTermExtractor:
             return []
         return result
 
+    def _process_llm_response(self, llm_response_text: str, request_id: str):
+        # Delegates to _store_valid_term so this path cannot drift away from
+        # the hygiene gate the way it already had: it carried no identity
+        # guard at all while _store_valid_term carried a (weak) one.
+        for item in self._parse_terms_json(llm_response_text, request_id):
+            self._store_valid_term(item, request_id)
+
     def _should_skip_paragraph(self, paragraph, pbar) -> bool:
         """Return True and advance pbar if this paragraph should be excluded from extraction."""
         if paragraph.debug_id is None or paragraph.unicode is None:
@@ -389,16 +398,17 @@ class AutomaticTermExtractor:
             return False
         src_term = str(term["src"]).strip()
         tgt_term = str(term["tgt"]).strip()
-        if src_term == tgt_term and len(src_term) < 3:
-            return False
-        if not (src_term and tgt_term and len(src_term) < 100):
-            return False
-        if (
-            self._drop_tracker.resolve(
-                str(term.get("src_lang", "")), source_term=src_term
+        # Single gate, shared with the DOCX extractor and the GCS merge. The
+        # guard this replaces only rejected identity pairs under 3 characters,
+        # which let `der -> der`, `los -> los` and `integrity -> integrity`
+        # through -- the direct cause of the residual source-language words in
+        # the UAT round.
+        verdict = evaluate_term_pair(src_term, tgt_term)
+        if not verdict.accepted:
+            logger.debug(
+                f"Request ID {request_id}: rejected term "
+                f"{src_term!r}->{tgt_term!r} ({verdict.reason})"
             )
-            is None
-        ):
             return False
         self.shared_context.add_raw_extracted_term_pair(src_term, tgt_term)
         return True

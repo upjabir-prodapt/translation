@@ -123,9 +123,9 @@ class TestLanguageDistributionPersistence:
     async def test_detected_languages_persisted_to_bigquery(self, pipeline_mocks):
         """The whole Counter is persisted, not just the winning language.
 
-        A mixed de/en document needs no threshold tweak any more: both
-        languages are supported, so coverage is 1.0 and the job runs to the
-        point where it persists the distribution.
+        The 70/30 split clears the 60% dominance threshold, so the job
+        translates and reaches the persistence step with a genuinely
+        multi-language distribution to persist.
         """
         bigquery, storage, tmp_path = pipeline_mocks
         attempt_result = _attempt_result(tmp_path)
@@ -133,12 +133,10 @@ class TestLanguageDistributionPersistence:
         with _patched_orchestrator(
             bigquery, storage, tmp_path, attempt_result
         ) as orchestrator:
-            with (
-                patch.object(
-                    orchestrator.language_detector,
-                    "detect_with_distribution",
-                    return_value=("de", Counter({"de": 700, "en": 300})),
-                ),
+            with patch.object(
+                orchestrator.language_detector,
+                "detect_with_distribution",
+                return_value=("de", Counter({"de": 700, "en": 300})),
             ):
                 pipeline_span = MagicMock()
                 await orchestrator._execute_pipeline(

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.worker.services.language_detection_core import MixedLanguageError
 from src.worker.services.processor_service import JobProcessor
 from src.worker.services.processor_service import _job_runtime_root
 
@@ -140,25 +141,26 @@ class TestJobProcessorCore:
 
     def test_detect_language_for_text_low_confidence(self, processor):
         """C.1.1: `_detect_language_for_text` now delegates to the shared
-        `language_detection_core.detect_language_for_text`, so the
-        underlying lingua detector is patched there instead of on
-        `processor_service` directly. lingua itself returns None when the
-        top two candidates are within `MIN_RELATIVE_DISTANCE` of each
-        other -- that must propagate as "no confident language"."""
-        mock_detector = MagicMock()
-        mock_detector.detect_language_of.return_value = None
+        `language_detection_core.detect_language_for_text`, so the lingua
+        detector is stubbed there instead of on `processor_service`
+        directly."""
+        from lingua import Language
+
+        mock_candidate = MagicMock()
+        mock_candidate.language = Language.ENGLISH
+        mock_candidate.value = 0.1  # Below default threshold
         with patch(
             "src.worker.services.language_detection_core._get_detector",
-            return_value=mock_detector,
+            return_value=MagicMock(
+                compute_language_confidence_values=lambda _text: [mock_candidate]
+            ),
         ):
             assert processor._detect_language_for_text("some text") is None
 
     def test_detect_language_for_text_exception(self, processor):
-        mock_detector = MagicMock()
-        mock_detector.detect_language_of.side_effect = RuntimeError("boom")
         with patch(
             "src.worker.services.language_detection_core._get_detector",
-            return_value=mock_detector,
+            side_effect=RuntimeError("detector unavailable"),
         ):
             assert processor._detect_language_for_text("some text") is None
 
@@ -176,16 +178,7 @@ class TestJobProcessorCore:
             with pytest.raises(ValueError, match="no extractable text layer"):
                 processor.detect_source_language("dummy.pdf")
 
-    def test_many_distinct_languages_on_a_page_are_accepted(self, processor):
-        """The MAX_DISTINCT_LANGUAGES_PER_PAGE count guard is gone.
-
-        Counting distinct languages measured how noisy per-block detection
-        was, not how multilingual the document was. Twenty one-block
-        "languages" now flow through to the share-based coverage gate, which
-        drops them as sub-noise-share artefacts instead of failing the job.
-        """
-        many_languages = {f"lang{i}": 100 for i in range(20)}
-        many_languages["en"] = 100000
+    def _detect_with_page_counter(self, processor, page_counter: Counter):
         mock_page = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__iter__.return_value = [mock_page]
@@ -197,44 +190,41 @@ class TestJobProcessorCore:
             patch.object(
                 processor,
                 "_detect_page_languages",
-                return_value=(Counter(many_languages), 1000),
+                return_value=(page_counter, sum(page_counter.values())),
             ),
         ):
-            winner, distribution = processor.detect_source_language_with_distribution(
-                "dummy.pdf"
-            )
-        assert winner == "en"
-        assert len(distribution) == 21
+            return processor.detect_source_language("dummy.pdf")
 
-    def test_text_present_but_unclassifiable_is_not_reported_as_scanned(
+    def test_many_incidental_languages_do_not_reject_monolingual_document(
         self, processor
     ):
-        """Task 4: an empty distribution is two different failures.
+        """The distinct-language count no longer decides anything.
 
-        Under lingua's relative-distance floor a text-rich PDF whose blocks
-        are all ambiguous legitimately produces no languages. Telling that
-        user their PDF is "scanned or image-only" would send them to re-scan
-        a perfectly good text PDF.
+        This is the real-world regression: a monolingual English
+        brochure whose pages contain all-caps headings and proper-noun
+        runs registers a dozen residual languages, each a rounding error
+        by character share. It must translate as English, not fail.
         """
-        mock_page = MagicMock()
-        mock_doc = MagicMock()
-        mock_doc.__iter__.return_value = [mock_page]
-        with (
-            patch(
-                "src.worker.services.processor_service.pymupdf.open",
-                return_value=MagicMock(__enter__=lambda _: mock_doc),
-            ),
-            patch.object(
-                processor,
-                "_detect_page_languages",
-                # No languages, but 1000 candidate characters were seen.
-                return_value=(Counter(), 1000),
-            ),
-        ):
-            with pytest.raises(
-                ValueError, match="no passage was long or distinctive enough"
-            ):
-                processor.detect_source_language("dummy.pdf")
+        page_counter = Counter({"en": 5000})
+        page_counter.update({f"lang{i}": 100 for i in range(12)})
+
+        assert self._detect_with_page_counter(processor, page_counter) == "en"
+
+    def test_genuinely_mixed_document_is_rejected(self, processor):
+        """A document actually split between two languages still fails:
+        neither one covers MIN_DOMINANT_LANGUAGE_SHARE of the text, so
+        translating it from a single source language would silently
+        mistranslate roughly half of it."""
+        with pytest.raises(MixedLanguageError, match="mixed-language"):
+            self._detect_with_page_counter(processor, Counter({"en": 5000, "fr": 4500}))
+
+    def test_dominant_language_with_real_minority_content_is_accepted(self, processor):
+        """A clear majority language wins even with a substantial (but
+        minority) second language -- 80/20 translates as `en`."""
+        assert (
+            self._detect_with_page_counter(processor, Counter({"en": 8000, "fr": 2000}))
+            == "en"
+        )
 
     def test_detect_source_language_with_distribution_returns_full_counter(
         self, processor

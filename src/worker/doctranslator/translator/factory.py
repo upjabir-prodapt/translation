@@ -1,5 +1,7 @@
 """Factory helpers for selecting translation engines by model."""
 
+from collections.abc import Sequence
+
 from src.config.constants import settings
 from src.config.translation_routing import ModelRoute
 from src.worker.doctranslator.translator.base import BaseTranslator
@@ -18,6 +20,7 @@ def create_translator(
     qps: int,
     region: str | None = None,
     domain: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> BaseTranslator:
     """Create one translator for the given model_id string.
 
@@ -41,6 +44,7 @@ def create_translator(
             temperature=settings.LLM_TEMPERATURE,
             region=region,
             domain=domain,
+            secondary_languages=secondary_languages,
         )
 
     if provider == LLMProvider.CLAUDE:
@@ -50,6 +54,7 @@ def create_translator(
             model=resolved_model,
             temperature=settings.LLM_TEMPERATURE,
             domain=domain,
+            secondary_languages=secondary_languages,
         )
 
     raise ValueError(f"No translator implementation for provider '{provider}'.")
@@ -63,6 +68,7 @@ def create_translator_from_model_list(
     qps: int,
     model_index: int = 0,
     domain: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> BaseTranslator:
     """Create one translator from an ordered model list.
 
@@ -91,4 +97,5 @@ def create_translator_from_model_list(
         qps=qps,
         region=region,
         domain=domain,
+        secondary_languages=secondary_languages,
     )

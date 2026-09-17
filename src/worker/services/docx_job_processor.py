@@ -105,6 +105,14 @@ class DocxJobProcessor:
         lang_in = config["lang_in"]
         lang_out = config["lang_out"]
         domain = config.get("domain", "")
+        # Minority languages detection found. Carried on the translator
+        # rather than threaded through translate_docx(): the DOCX prompt
+        # builder already reads `domain` off the engine when not given one
+        # explicitly, so this follows the same route.
+        secondary_languages = [
+            (str(code), float(share))
+            for code, share in (config.get("secondary_languages") or [])
+        ]
         model_list: list[ModelRoute] | list[str] = config.get("model_list", [])
         if not model_list:
             raise ValueError("model_list is required for DOCX translation")
@@ -116,10 +124,9 @@ class DocxJobProcessor:
             config.get("enable_dlp", getattr(settings, "GOOGLE_DLP_ENABLED", True))
         )
         auto_extract_glossary = bool(config.get("auto_extract_glossary", True))
-        # Significant detected languages, used only for CJK-aware batch
-        # sizing (see get_token_multiplier). Absent for direct callers/tests,
-        # in which case sizing falls back to the declared language pair.
-        detected_languages = list(config.get("detected_languages") or [])
+        # Curated domain terminology for this language pair. Absent before
+        # this change, which left every .docx job with no terminology control.
+        glossaries = list(config.get("glossaries") or [])
         enable_judge = bool(
             config.get("enable_judge", getattr(settings, "QUALITY_JUDGE_ENABLED", True))
         )
@@ -162,6 +169,7 @@ class DocxJobProcessor:
                     qps=settings.TRANSLATION_MAX_QPS,
                     region=selected_region,
                     domain=domain,
+                    secondary_languages=secondary_languages,
                 )
                 # translate_docx() is fully synchronous and CPU/network bound
                 # (python-docx parsing plus many blocking LLM calls). Calling
@@ -181,6 +189,7 @@ class DocxJobProcessor:
                     domain=domain,
                     enable_dlp=enable_dlp,
                     auto_extract_glossary=auto_extract_glossary,
+                    glossaries=glossaries,
                     extracted_terms=cached_extracted_terms,
                     dlp_result=cached_dlp_result,
                     detected_languages=detected_languages,

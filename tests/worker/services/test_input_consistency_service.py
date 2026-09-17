@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from src.config.constants import settings
+from src.config.translation_routing import SUPPORTED_DOMAINS
 from src.worker.services import input_consistency_service as ics
 from src.worker.services.input_consistency_service import DomainCheckUnavailableError
 from src.worker.services.input_consistency_service import DomainClassification
@@ -315,3 +316,24 @@ class TestSampleBudgetSetting:
         ):
             sample = ics.sample_document_text(tmp_path / "x.pdf", is_docx=False)
         assert len(sample) <= 100
+
+
+class TestPromptComposition:
+    def test_excerpt_is_substituted_verbatim(self):
+        """Substitution must survive a brace anywhere -- prompt or excerpt.
+
+        The prompt is hand-edited prose; under `.format` one brace added to it
+        would raise at classification time instead of in review.
+        """
+        contents = ics._PROMPT.replace(ics._SAMPLE_PLACEHOLDER, "a {braced} sample")
+        assert "a {braced} sample" in contents
+        assert ics._SAMPLE_PLACEHOLDER not in contents
+
+    def test_every_supported_domain_is_described_in_the_prompt(self):
+        """A domain absent from the taxonomy can never be returned for."""
+        lowered = ics._PROMPT.lower()
+        assert all(domain in lowered for domain in SUPPORTED_DOMAINS)
+
+    def test_prompt_never_names_the_declared_domain(self):
+        """Telling the classifier the answer it checks would void the check."""
+        assert "expected" not in ics._PROMPT.lower().split("# the excerpt")[0]

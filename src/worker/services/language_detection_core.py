@@ -10,20 +10,72 @@ single whole-document detection call with no confidence floor at all
 "Information" or "OK" got a confident-looking but unreliable guess
 accepted outright).
 
-Backed by `lingua-language-detector` (previously `langdetect`): lingua's
-`with_minimum_relative_distance()` floor rejects ambiguous short/list-like
-text (bare place-name lists, ALL-CAPS headers) far more reliably than
-langdetect's absolute-probability floor did, which used to false-positive
-"mixed language" on entirely monolingual marketing documents.
+Detector
+--------
+Detection is backed by `lingua` (see `_get_detector`), which replaced
+`langdetect`. The two differ in ways that matter to everything below:
+
+* `lingua` normalizes its confidence values across all the languages it
+  was built with, so `MIN_DETECTION_CONFIDENCE` is a real threshold
+  rather than a formality. `langdetect` returned ~0.99999 for almost any
+  input, including a three-word run of city names, which is why the
+  floor could not filter noise on its own and the shape-based rules
+  below had to exist.
+* `lingua` lowercases internally, so casing no longer changes a verdict
+  (`case_normalize_for_detection` is now a no-op in effect, and is kept
+  only so the pipeline is not sensitive to that detail of the backend).
+* `lingua` is deterministic; `langdetect` needed `DetectorFactory.seed`
+  pinned to stop the same text resolving differently between runs.
+
+Mixed-language decision
+-----------------------
+The original guard rejected a document when the *count* of distinct
+languages on a single page exceeded a fixed limit. That was unusable in
+practice: a wholly monolingual English brochure (all-caps headings plus
+a network map full of city names) registered four "languages" on one
+page. A 26-character run of proper nouns counted exactly as much toward
+the limit as 2,400 characters of real prose.
+
+Detection is now two layers, both defined here so every format shares
+them:
+
+1. Per-unit signal quality (`is_high_signal_unit`,
+   `case_normalize_for_detection`) discards text that carries no
+   reliable language signal -- too short, too few words, or a list of
+   proper nouns -- so noise never enters the distribution in the first
+   place. `lingua` scores that noise low enough for the confidence floor
+   to catch most of it ("Richmond Richmond Richmond" -> en 0.14,
+   "Busan Tokyo Osaka Yokohama" -> ms 0.22), so this layer is now
+   defence in depth rather than the only thing standing between a
+   monolingual brochure and a mixed-language rejection.
+
+2. A char-weighted *share* decision (`dominant_language_and_share`,
+   applied by `resolve_dominant_language`) replaces the
+   distinct-language count. Languages holding a negligible share are
+   treated as incidental and excluded; a document is rejected as
+   genuinely mixed only when no single language dominates the text that
+   remains. This is scale-invariant (a 2-page brochure and a 2,000-page
+   manual are judged the same way) and evaluated once per document
+   rather than per page, so one map page or one page of addresses can no
+   longer fail an otherwise monolingual job.
+
+Layer 2 is the *only* place a document can be failed for its language
+mix. Layer 1 decides what evidence exists, never whether the job runs,
+and `_assert_language_matches` in pipeline_orchestrator.py calls the same
+`dominant_language_and_share` against the same threshold. That matters
+because the guard it replaced rejected a document the moment any second
+language appeared: since detection is per block, one contact list of
+personal names scoring 0.95 in an unrelated language was enough to fail
+an entirely English document.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Iterable
 from functools import lru_cache
 
-from lingua import Language
 from lingua import LanguageDetector
 from lingua import LanguageDetectorBuilder
 
@@ -33,75 +85,110 @@ from src.worker.doctranslator.utils.atomic_integer import AtomicInteger
 
 logger = logging.getLogger(__name__)
 
-# Bounds how many *unexpected* detector errors get a WARNING per process --
-# see detect_language_for_text(). Detection runs concurrently across a
-# ThreadPoolExecutor (DOCX term extraction/translation batches), hence the
-# thread-safe counter rather than a plain module-level int.
-_DETECTOR_ERROR_LOG_LIMIT = 5
-_detector_error_log_count = AtomicInteger(0)
+# Relaxed floor. Only gates which text is *considered* at all, and is
+# also the floor used by the whole-document fallback pass; counting a
+# unit toward the language distribution requires `is_high_signal_unit`.
+MIN_DETECTION_TEXT_LENGTH = 20
+MIN_DETECTION_ALPHA_CHARS = 5
+# lingua spreads its confidence across every language it knows, so this
+# is a meaningful floor: clear prose in a supported language scores
+# >=0.93, while proper-noun runs and stray-word fragments score under
+# 0.25 and are dropped.
+MIN_DETECTION_CONFIDENCE = 0.80
+
+# --- Layer 1: per-unit signal quality --------------------------------
+# Length and shape rules, applied before the detector is consulted at
+# all. Retained from the langdetect era (where they were load-bearing,
+# because the confidence floor could not filter anything) as a cheap
+# first pass that keeps short display text out of the distribution.
+MIN_UNIT_TEXT_LENGTH = settings.LANGUAGE_DETECTION_MIN_UNIT_CHARS
+MIN_UNIT_WORD_COUNT = settings.LANGUAGE_DETECTION_MIN_UNIT_WORDS
+
+# Above this share of cased letters being uppercase, the unit is
+# lowercased before detection. lingua is case-insensitive, so this no
+# longer changes any verdict; it is kept so the pipeline does not depend
+# on that property of the backend.
+UPPERCASE_NORMALIZATION_RATIO = 0.6
+
+# Above this share of words being capitalized, the unit is treated as a
+# list of proper nouns (city labels, person names, job titles) which
+# carries no language signal. Deliberately high: languages that
+# capitalize nouns in ordinary prose (German) sit well under it.
+MAX_CAPITALIZED_WORD_RATIO = 0.7
+
+# --- Layer 2: mixed-language decision --------------------------------
+# A language holding less than this share of detected characters is
+# incidental -- a quoted phrase, an address, a brand name, or residual
+# detector noise -- and is excluded from the dominance denominator so it
+# cannot drag an otherwise monolingual document below the bar.
+NOISE_LANGUAGE_SHARE = settings.LANGUAGE_DETECTION_NOISE_SHARE
+
+# The dominant language must hold at least this share of the
+# non-incidental characters, else the document is genuinely mixed and is
+# rejected rather than translated from a single wrong source language.
+# Exposed as `min_dominant_language_share()` rather than a module
+# constant -- see that function.
+
+# Below this many detected characters there is not enough evidence to
+# call a document "mixed"; accept the dominant language instead of
+# rejecting a short document on the strength of one or two units.
+MIN_MIXED_DECISION_CHARS = settings.LANGUAGE_DETECTION_MIN_MIXED_DECISION_CHARS
+
+# Minimum concatenated length before the whole-document fallback pass
+# will trust a single verdict. Deliberately *not* configurable: it is the
+# EC-09 safety floor that stops "Information Total OK 2026" resolving to
+# a confident-looking wrong language, not a tuning knob.
+MIN_FALLBACK_TEXT_CHARS = 500
+
+# lingua emits clean ISO 639-1 codes (`zh`, `he`), so these aliases are
+# inert for the current backend. Kept because the same normalization is
+# applied to language codes arriving from elsewhere -- language_mapper.json
+# still carries a `zh-cn` key -- and because dropping it would silently
+# change what a caller passing a legacy code resolves to.
+DETECTED_LANGUAGE_ALIASES: dict[str, str] = {
+    "zh-cn": "zh",
+    "zh-tw": "zh",
+    "iw": "he",
+}
 
 
 @lru_cache(maxsize=1)
-def _build_detector(min_relative_distance: float) -> LanguageDetector:
-    """Build the process-wide lingua detector for one confidence threshold.
-
-    This module already requires a full worker `.env` to import: it pulls
-    in `get_language_mapper()` below, which imports `settings` at module
-    scope. There is nothing to protect by deferring the `settings` import
-    used here, so it is a plain top-level import like the rest of this
-    file. (`scripts/lang_detect_benchmark.py`, which does need to run
-    without a worker `.env`, does not import this module at all -- it
-    reimplements the pieces it compares against inline for exactly this
-    reason; see its own docstring.)
-
-    `from_all_languages()` is deliberate. Restricting the detector to the
-    seven translatable languages would be smaller and more accurate, but
-    it would also make it impossible to *recognise* that a document is
-    Russian or Arabic -- which is exactly what the pipeline's
-    supported-language coverage gate and the per-unit
-    SKIP_UNSUPPORTED_LANGUAGE_UNITS check both need to know.
-
-    `with_preloaded_language_models()` is intentionally NOT used. In
-    lingua-language-detector 2.x (the Rust binding) it is a no-op:
-    measured on this codebase, `build()` returns in <10ms and leaves RSS
-    at ~12 MB with or without it, and the models are memory-mapped
-    lazily on first use regardless. Steady-state RSS after touching every
-    script is ~210 MB against the worker's 16Gi limit, so there is
-    nothing to preload away from. Calling it would only imply a guarantee
-    the library does not make.
-
-    Keyed on `min_relative_distance` itself (not called with no arguments)
-    so the cache self-invalidates: with `maxsize=1`, a settings change is
-    a different argument value, which evicts the stale detector and builds
-    a fresh one on the very next call -- no `.cache_clear()` needed, in
-    production or in tests.
-    """
-    return (
-        LanguageDetectorBuilder.from_all_languages()
-        .with_minimum_relative_distance(min_relative_distance)
-        .build()
-    )
-
-
 def _get_detector() -> LanguageDetector:
-    """Return the process-wide lingua detector for the current setting.
+    """Return the process-wide lingua detector, building it once.
 
-    Thin wrapper so call sites and test patches (`patch.object(core,
-    "_get_detector", ...)`) are unaffected by `_build_detector()` now being
-    memoized on its argument rather than on no arguments at all.
+    Built from *all* of lingua's languages rather than only the ones in
+    `get_supported_languages()`: callers rely on detection being able to
+    name an unsupported language so they can skip that text
+    (`paragraph_translator.py`, `il_translator_llm_only.py`,
+    `pipeline_orchestrator.py`). Restricting the detector would force
+    every Dutch or Portuguese block into the nearest supported language
+    instead.
+
+    Language models load lazily on first use and are then cached inside
+    the detector, which is why this is a singleton -- one shared
+    detector across concurrent jobs rather than one per `JobProcessor`.
+    `LanguageDetector` is immutable and safe to share between threads.
     """
-    return _build_detector(float(settings.LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE))
+    return LanguageDetectorBuilder.from_all_languages().build()
+
+
+class MixedLanguageError(ValueError):
+    """Raised when no single language dominates the document's text.
+
+    Subclasses `ValueError` so existing callers and the API exception
+    handler keep treating it as a validation failure, while
+    `TranslationAttemptRunner` can classify it as non-retryable -- no
+    amount of re-running the model chain makes a genuinely
+    mixed-language document translatable from one source language.
+    """
+
+    def __init__(self, message: str, language_shares: dict[str, float] | None = None):
+        super().__init__(message)
+        self.language_shares = language_shares or {}
 
 
 def is_detectable_text(text: str) -> bool:
-    """Return True if `text` has enough signal for the detector to be trusted.
-
-    Reads `settings.MIN_DETECTION_TEXT_LENGTH` /
-    `settings.MIN_DETECTION_ALPHA_CHARS` fresh on every call rather than
-    binding them at import time -- unlike `JobProcessor.MAX_DETECTION_CHARS`
-    (bound at class-definition time, so a settings change after import never
-    takes effect), a settings override here is picked up immediately.
-    """
+    """Return True if `text` has enough signal for detection to be trusted."""
     alpha_count = sum(1 for ch in text if ch.isalpha())
     return (
         len(text) >= settings.MIN_DETECTION_TEXT_LENGTH
@@ -109,23 +196,61 @@ def is_detectable_text(text: str) -> bool:
     )
 
 
-def normalize_detected_language(language: str) -> str:
-    """Map a raw detector code to its `language_mapper.json` canonical
-    code, if known; otherwise pass it through unchanged.
+def case_normalize_for_detection(text: str) -> str:
+    """Lowercase `text` when it is predominantly uppercase.
 
-    Previously used a small hardcoded alias dict (`zh-cn`/`zh-tw` -> `zh`,
-    `iw` -> `he`) that duplicated aliases already present in
-    `language_mapper.json` (`zh-cn`/`zh-tw` both map to `zh` there too) --
-    a second, independent source of truth with nothing keeping the two in
-    sync. Looks up `get_language_mapper()` directly instead.
-
-    Unlike `normalize_language()` (which raises on a miss -- appropriate
-    for a routing input the API already validated), this must never raise:
-    a detected code legitimately falls outside the mapper constantly
-    (Russian, Arabic, ...) and has to pass through unchanged so it still
-    appears in the language distribution as "detected but unsupported"
-    rather than being dropped or mis-mapped.
+    A no-op as far as the verdict goes under lingua, which lowercases
+    input itself: "SUPPORTING YOUR BUSINESS WITH OUR BACKBONE NETWORK
+    TODAY" and its lowercase form both score en 0.899591. It mattered
+    under langdetect, whose profiles were lowercase n-grams, so all-caps
+    English headings -- ubiquitous in brochures, slide decks and
+    marketing PDFs -- matched foreign profiles at near-total confidence.
+    Kept so the pipeline stays correct if the backend changes again;
+    text that is already mixed-case is returned untouched.
     """
+    cased = [ch for ch in text if ch.isalpha()]
+    if not cased:
+        return text
+    uppercase_ratio = sum(1 for ch in cased if ch.isupper()) / len(cased)
+    if uppercase_ratio >= UPPERCASE_NORMALIZATION_RATIO:
+        return text.lower()
+    return text
+
+
+def is_proper_noun_list(text: str) -> bool:
+    """Return True if `text` looks like a run of proper nouns.
+
+    Page furniture such as "Busan Tokyo Osaka Yokohama Nagoya Kyoto
+    Kobe" or "Executive Manager Katsuya Oe (Vice President, Enterprise
+    Sales - Asia)" is long enough to clear every length floor, yet
+    carries no language signal. Names are overwhelmingly capitalized,
+    which is what this detects.
+    """
+    words = [word for word in text.split() if any(ch.isalpha() for ch in word)]
+    if not words:
+        return False
+    capitalized = sum(1 for word in words if word[:1].isupper())
+    return capitalized / len(words) >= MAX_CAPITALIZED_WORD_RATIO
+
+
+def is_high_signal_unit(text: str) -> bool:
+    """Return True if `text` may contribute to the language distribution.
+
+    Stricter than `is_detectable_text`: a unit only votes on the
+    document's language when it is long enough, has enough words, and is
+    not a proper-noun list. Applied *after* case normalization, so
+    all-caps prose is judged on its words rather than its casing.
+    """
+    if len(text) < MIN_UNIT_TEXT_LENGTH:
+        return False
+    words = [word for word in text.split() if any(ch.isalpha() for ch in word)]
+    if len(words) < MIN_UNIT_WORD_COUNT:
+        return False
+    return not is_proper_noun_list(text)
+
+
+def normalize_detected_language(language: str) -> str:
+    """Map a raw detected code to this service's canonical alias, if any."""
     normalized = str(language).strip().lower()
     return get_language_mapper().get(normalized, normalized)
 
@@ -133,42 +258,119 @@ def normalize_detected_language(language: str) -> str:
 def detect_language_for_text(text: str) -> str | None:
     """Detect the language of one chunk of text, or None if not confident.
 
-    Returns `None` (rather than a low-confidence guess) in two distinct
-    cases, logged at two distinct levels:
+    Returns `None` (rather than a low-confidence guess) when the
+    detector fails, returns nothing, or reports a confidence below
+    `MIN_DETECTION_CONFIDENCE` -- the confidence floor that DOCX/TXT
+    detection previously lacked entirely (EC-09). The text is
+    case-normalized first (see `case_normalize_for_detection`).
 
-    - lingua **declines** to name a language because the top two candidates
-      are within `LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE` of each other --
-      the confidence floor that DOCX/TXT detection previously lacked
-      entirely (EC-09). Expected and frequent on short/ambiguous text, so
-      this stays at debug.
-    - lingua **raises unexpectedly** (a real detector-side fault, not a
-      confidence judgement). This is logged at WARNING -- capped at
-      `_DETECTOR_ERROR_LOG_LIMIT` per process so a systemic failure (e.g. a
-      threading issue under concurrent DOCX extraction) is visible in
-      production logs instead of only ever appearing at debug, which is
-      exactly the class of failure that used to surface as a confusing
-      "cannot translate" coverage-gate rejection with no signal pointing at
-      the detector itself.
+    Note that lingua returns a full, zero-valued candidate list for text
+    it cannot read at all rather than an empty one, so the floor -- not
+    the emptiness check -- is what rejects those.
     """
     try:
-        language: Language | None = _get_detector().detect_language_of(text)
+        candidates = _get_detector().compute_language_confidence_values(
+            case_normalize_for_detection(text)
+        )
     except Exception:
-        seen = _detector_error_log_count.inc()
-        if seen <= _DETECTOR_ERROR_LOG_LIMIT:
-            logger.warning(
-                "lingua detect_language_of raised unexpectedly (%d/%d logged "
-                "this process) -- treating this block as undetectable rather "
-                "than failing it outright.",
-                seen,
-                _DETECTOR_ERROR_LOG_LIMIT,
-                exc_info=True,
-            )
-        else:
-            logger.debug("lingua detect_language_of raised", exc_info=True)
+        # Detection is advisory: a backend failure on one text block must
+        # not abort a job that would otherwise translate fine, so this
+        # degrades to "no language" exactly as an unconfident result does.
+        logger.warning("Language detection failed for a text block", exc_info=True)
         return None
     if language is None:
         return None
-    return normalize_detected_language(language.iso_code_639_1.name)
+    best_match = candidates[0]
+    if best_match.value < MIN_DETECTION_CONFIDENCE:
+        return None
+    return normalize_detected_language(best_match.language.iso_code_639_1.name)
+
+
+def count_unit_languages(
+    units: Iterable[str], *, max_chars: int | None = None
+) -> tuple[Counter[str], int]:
+    """Char-weight the languages of `units`, keeping only high-signal ones.
+
+    Returns `(language_counter, considered_chars)`. `considered_chars`
+    counts every unit examined (not just those that produced a
+    language) so callers can enforce a sampling budget consistently with
+    the previous behaviour.
+    """
+    language_counter: Counter[str] = Counter()
+    considered_chars = 0
+    for text in units:
+        considered_chars += len(text)
+        if is_high_signal_unit(text):
+            detected = detect_language_for_text(text)
+            if detected is not None:
+                language_counter[detected] += len(text)
+        if max_chars is not None and considered_chars >= max_chars:
+            break
+    return language_counter, considered_chars
+
+
+def detect_language_of_joined_text(units: Iterable[str]) -> Counter[str]:
+    """Fallback pass: detect one language across all `units` concatenated.
+
+    Documents made entirely of short units -- slide decks, bullet lists,
+    form labels -- can leave the high-signal pass empty even though the
+    document as a whole is unambiguous. Concatenating gives the detector
+    the long text it is most reliable on, so this recovers them without
+    weakening the per-unit floors.
+
+    Deliberately requires substantially more text than a single unit
+    does: a handful of words like "Information Total OK 2026" must still
+    be reported as undetectable rather than resolved to a
+    confident-looking wrong guess (EC-09).
+    """
+    joined = " ".join(units).strip()
+    if len(joined) < MIN_FALLBACK_TEXT_CHARS:
+        return Counter()
+    detected = detect_language_for_text(joined)
+    if detected is None:
+        return Counter()
+    logger.info(
+        "Language detection fell back to whole-document text (%s chars) -> %s",
+        len(joined),
+        detected,
+    )
+    return Counter({detected: len(joined)})
+
+
+def language_shares(language_counter: Counter[str]) -> dict[str, float]:
+    """Return each language's share of detected characters, highest first."""
+    total = sum(language_counter.values())
+    if not total:
+        return {}
+    return {
+        language: chars / total for language, chars in language_counter.most_common()
+    }
+
+
+def significant_languages(language_counter: Counter[str]) -> Counter[str]:
+    """Drop languages holding a negligible share of detected characters.
+
+    Excluding incidental languages from the dominance denominator is
+    what lets a monolingual document survive residual detector noise: a
+    brochure at 89% English plus four sub-5% artefacts is 100% English
+    once the artefacts are removed, instead of being judged on an 89%
+    that a slightly noisier document would fall below. Genuine minority
+    content sits far above this floor and is retained.
+    """
+    total = sum(language_counter.values())
+    if not total:
+        return Counter()
+    significant = Counter(
+        {
+            language: chars
+            for language, chars in language_counter.items()
+            if chars / total >= NOISE_LANGUAGE_SHARE
+        }
+    )
+    # Pathological case: enough languages that every one is individually
+    # below the floor. Judge on the full distribution rather than an
+    # empty one.
+    return significant or language_counter
 
 
 def aggregate_languages(language_counter: Counter[str]) -> str | None:
@@ -179,117 +381,102 @@ def aggregate_languages(language_counter: Counter[str]) -> str | None:
     return detected_language
 
 
-def language_shares(language_counter: Counter[str]) -> dict[str, float]:
-    """Convert a char-weighted Counter into each language's fraction of the total.
+def min_dominant_language_share() -> float:
+    """The one global threshold for the mixed-language decision.
 
-    Returns an empty dict for an empty (or non-positive) counter rather
-    than raising, so callers can log a distribution without first having
-    to special-case the no-evidence document.
+    The dominant language must hold at least this share of the
+    non-incidental characters, else the document is genuinely mixed and
+    is rejected rather than translated from a single wrong source
+    language.
+
+    Read from `settings` on every call rather than bound at import like
+    the constants at the top of this module, because it is the *only*
+    mixed-language threshold in the system: `_assert_language_matches` in
+    pipeline_orchestrator.py applies the same value to the same
+    distribution, and an import-time binding cannot be varied in a test
+    without the two layers silently disagreeing.
     """
-    total = sum(language_counter.values())
-    if total <= 0:
-        return {}
-    return {code: count / total for code, count in language_counter.items()}
+    return float(settings.LANGUAGE_DETECTION_MIN_DOMINANT_SHARE)
 
 
-def significant_languages(language_counter: Counter[str]) -> Counter[str]:
-    """Drop long-tail detection artefacts from a char-weighted distribution.
+def dominant_language_and_share(
+    language_counter: Counter[str],
+) -> tuple[str | None, float, int]:
+    """Return `(dominant_language, its share, non-incidental char count)`.
 
-    Detection runs per text block, and across a long document a handful of
-    blocks will always land on some unrelated language -- the HR Policy
-    Manual fixture produces 30 distinct "languages", 28 of which are a
-    single block each. Judging supported-language coverage on the raw
-    distribution would let one such block drag an entirely English
-    document below the threshold, so anything holding less than
-    `LANGUAGE_DETECTION_NOISE_SHARE` of the detected characters is
-    discarded first.
+    The single implementation of "which language is this document, and by
+    how much" -- shared by `resolve_dominant_language` here and by
+    `_assert_language_matches` in pipeline_orchestrator.py so the two
+    layers cannot reach different verdicts on the same distribution.
 
-    If *every* language falls below the floor (a genuinely fragmented
-    document, or one so short that no single language reaches the share),
-    the full distribution is returned unchanged. Returning an empty
-    Counter there would silently turn "many languages, none dominant"
-    into "no evidence at all", which is a different verdict with a
-    different user-facing message.
+    The share is measured *after* `significant_languages` removes
+    incidental languages, which is what lets a monolingual document
+    survive a long tail of detector noise: 58% English plus fifteen
+    sub-5% artefacts is 100% English once the artefacts are dropped,
+    rather than a 58% that would fail a 60% bar. `(None, 0.0, 0)` for an
+    empty counter.
     """
-    total = sum(language_counter.values())
-    if total <= 0:
-        return Counter()
+    if not language_counter:
+        return None, 0.0, 0
+    significant = significant_languages(language_counter)
+    dominant = aggregate_languages(significant)
+    significant_total = sum(significant.values())
+    return dominant, significant[dominant] / significant_total, significant_total
 
-    noise_share = float(settings.LANGUAGE_DETECTION_NOISE_SHARE)
-    kept = Counter(
-        {
-            code: count
-            for code, count in language_counter.items()
-            if count / total >= noise_share
-        }
+
+def _format_shares(language_counter: Counter[str]) -> str:
+    return ", ".join(
+        f"{language} {share:.0%}"
+        for language, share in language_shares(language_counter).items()
     )
-    return kept or Counter(language_counter)
 
 
-def build_unclassifiable_text_message(
-    *,
-    subject: str,
-    text_noun: str = "readable text",
-    include_prefix: bool = True,
+def resolve_dominant_language(
+    language_counter: Counter[str], *, source_label: str
 ) -> str:
-    """Shared wording for "text was present but nothing could be classified".
+    """Return the language to translate from, or raise if there isn't one.
 
-    Both the PDF (`processor_service.py`) and DOCX/TXT
-    (`language_detection_service.py`) detection paths split "no candidate
-    text at all" from "candidate text present, but every block fell below
-    lingua's confidence floor" into two different user-facing messages --
-    conflating them would misdescribe a text-rich but ambiguous document as
-    empty. This covers only the second case: the first is deliberately
-    NOT unified here, since the PDF path's wording for it must stay
-    byte-identical to `PDFValidator`'s API-side "no extractable text
-    layer" rejection (a different, format-specific concern), while
-    DOCX/TXT's is a generic message.
-
-    `subject`/`text_noun`/`include_prefix` let each caller keep its
-    existing exact wording (so this refactor changes no user-facing text)
-    while sharing the actual message *shape* in one place.
+    Raises `MixedLanguageError` when the document is genuinely
+    multilingual -- no language holds `min_dominant_language_share()` of
+    the non-incidental characters -- and `ValueError` when nothing
+    detectable was found at all.
     """
-    prefix = "Unable to detect a source language: " if include_prefix else ""
-    return (
-        f"{prefix}{subject} contains {text_noun}, but no passage was long "
-        "or distinctive enough to identify its language with confidence. "
-        "Please supply a document with more continuous prose."
+    if not language_counter:
+        raise ValueError(
+            f"Unable to detect a source language: no sufficiently long, "
+            f"confidently detectable text was found in {source_label}. "
+            "Please choose the source language explicitly."
+        )
+
+    significant = significant_languages(language_counter)
+    dominant, dominant_share, significant_total = dominant_language_and_share(
+        language_counter
     )
+    min_share = min_dominant_language_share()
 
+    if dominant_share >= min_share:
+        return dominant
 
-def supported_language_share(language_counter: Counter[str]) -> float:
-    """Fraction of ALL detected characters we can actually translate.
+    # Not enough text sampled to distinguish a genuinely mixed document
+    # from one or two unlucky units -- prefer translating over failing.
+    if significant_total < MIN_MIXED_DECISION_CHARS:
+        logger.info(
+            "Dominant language %s holds only %.0f%% of %s, but only %s chars "
+            "were detected -- accepting rather than rejecting as mixed-language.",
+            dominant,
+            dominant_share * 100,
+            source_label,
+            significant_total,
+        )
+        return dominant
 
-    This is the single number the pipeline's coverage gate is built on. It
-    deliberately says nothing about which language was *declared* -- that
-    comparison (dominant vs. declared) is a separate check the caller makes
-    itself against `significant_languages()`. The only question this
-    answers is whether enough of the document is in a language present in
-    `language_mapper.json`; the rest is passed through untranslated by the
-    per-unit SKIP_UNSUPPORTED_LANGUAGE_UNITS check.
-
-    Deliberately computed on the **raw**, non-noise-filtered distribution:
-    `significant_languages()` exists to stop one-block detection artefacts
-    from dragging a coverage number around, but that same floor would also
-    let genuinely untranslatable content evade the gate entirely if it
-    happens to be split across several sub-floor blocks (e.g. ten different
-    languages at 9% each `sum -- 90%` unsupported, none individually above
-    `LANGUAGE_DETECTION_NOISE_SHARE`). Coverage must count every detected
-    character against the budget; only the *dominant-language* decision
-    (and the CJK/glossary language list) is allowed to use the filtered
-    view.
-
-    Returns 0.0 for an empty distribution. Callers must distinguish "no
-    evidence" from "evidence, all unsupported" *before* reading this
-    value -- both come back as 0.0 and they are not the same failure.
-    """
-    total = sum(language_counter.values())
-    if total <= 0:
-        return 0.0
-    supported = get_supported_languages()
-    return (
-        sum(count for code, count in language_counter.items() if code in supported)
-        / total
+    raise MixedLanguageError(
+        f"This document is mixed-language ({_format_shares(significant)}): no "
+        f"single language covers at least {min_share:.0%} of "
+        f"the text in {source_label}, so it cannot be reliably translated from "
+        "one source language. Please split the document by language, or specify "
+        "the source language explicitly to translate it as-is.",
+        language_shares=language_shares(significant),
     )
 
 

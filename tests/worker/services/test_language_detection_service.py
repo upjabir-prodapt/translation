@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from src.worker.services.language_detection_core import MixedLanguageError
 from src.worker.services.language_detection_service import LanguageDetectionService
 
 
@@ -105,26 +106,37 @@ class TestDetectTxt:
             service.detect(txt_path, is_txt=True)
 
 
-class TestManyDistinctLanguagesAreAccepted:
-    """The MAX_DISTINCT_LANGUAGES_PER_DOCUMENT count guard is gone.
+class TestDetectUnitsMixedLanguage:
+    """DOCX/TXT share the PDF pipeline's char-share dominance rule: a
+    document is rejected only when no single language dominates it, not
+    because several languages were spotted."""
 
-    It measured detection noise, not multilingualism: per-block detection on
-    a long real document routinely yields dozens of one-block "languages".
-    Mixed documents are now translated, and the only remaining rejection is
-    the share-based supported-language coverage gate in
-    `PipelineOrchestrator._assert_language_supported`.
-    """
-
-    def test_five_languages_return_a_full_distribution(self, service):
-        long_texts = [
+    def _english(self, count: int) -> list[str]:
+        return [
             f"This is sentence number {i} written in English for testing purposes only."
-            for i in range(3)
-        ] + [
-            "Ceci est une phrase francaise suffisamment longue pour tester.",
-            "Dies ist ein deutscher Satz der lang genug ist zum Testen heute.",
-            "Questo e un testo abbastanza lungo in italiano per il test.",
-            "Esta es una oracion en espanol suficientemente larga para probar.",
+            for i in range(count)
         ]
-        winner, distribution = service._detect_units(long_texts, source_label="test")
+
+    def test_evenly_split_document_is_rejected(self, service):
+        texts = self._english(8) + [
+            "Ceci est une phrase francaise suffisamment longue pour tester ceci.",
+            "Ceci est une autre phrase francaise assez longue pour la detection.",
+            "Nous ecrivons ici plusieurs phrases francaises pour equilibrer le texte.",
+            "Voici encore une phrase francaise de longueur raisonnable pour tester.",
+            "La derniere phrase francaise ajoutee pour completer cette moitie ici.",
+            "Une phrase francaise supplementaire afin de bien equilibrer les parts.",
+            "Encore une autre phrase francaise pour atteindre la moitie du texte.",
+            "Cette phrase francaise termine la moitie francaise de ce document.",
+        ]
+        with pytest.raises(MixedLanguageError, match="mixed-language"):
+            service._detect_units(texts, source_label="test")
+
+    def test_dominant_language_survives_incidental_other_languages(self, service):
+        """The document-level equivalent of the PDF regression: mostly
+        English, with a couple of stray non-English units, translates as
+        English instead of failing."""
+        texts = self._english(20) + [
+            "Ceci est une phrase francaise suffisamment longue pour tester ceci.",
+        ]
+        winner, _distribution = service._detect_units(texts, source_label="test")
         assert winner == "en"
-        assert len(distribution) >= 4

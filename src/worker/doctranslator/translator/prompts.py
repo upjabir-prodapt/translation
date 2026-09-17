@@ -2,15 +2,104 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from src.config.domain_prompts import get_domain_prompt_block
+from src.config.language_prompts import build_secondary_language_block
 from src.worker.doctranslator.translator.prompt_safety import INJECTION_GUARD_CLAUSE
 from src.worker.doctranslator.translator.prompt_safety import wrap_untrusted_content
 
 
+def build_language_rules_block(lang_out: str) -> str:
+    """Rules every translation path must state, in one place.
+
+    There are three prompt builders in this codebase -- this module's, the PDF
+    IL translator's and the DOCX batch translator's -- and only this one ever
+    carried guidance on coverage, dates or register. The UAT round produced a
+    cluster of findings that are all simply *absent instructions* on the two
+    document paths: "Hi"/"Best"/"Cher"/"Cordialement" left untranslated,
+    "02-abril-2023" and "02-Aprile-2023" left in the source locale, and
+    source-language words left scattered through the output.
+
+    Emitting the same block from all three builders is what stops the next
+    change fixing one path and leaving the other two behind.
+    """
+    return (
+        "# Target language\n"
+        f"- The output must be entirely in {lang_out}. When you finish a segment, check it "
+        f"contains no words left in the source language.\n"
+        f"- If a source word has no {lang_out} equivalent, use the established {lang_out} term "
+        "or the accepted loanword. Never copy the source word through unchanged as a substitute "
+        "for translating it.\n"
+        "- Greetings, salutations, forms of address and sign-offs are content, not formatting: "
+        f"replace them with the conventional {lang_out} equivalent "
+        '(e.g. "Hi", "Dear ...", "Best", "Kind regards", "Cher Client", "Cordialement", '
+        '"Sehr geehrte Damen und Herren", "Cordiali saluti", "Estimado cliente"). '
+        "Never transliterate one or leave it in the source language.\n"
+        '- Exception: the items listed under "What not to translate" below, which are copied '
+        "verbatim by design.\n\n"
+        "# Numbers, dates, and units\n"
+        "- Keep mathematical and identifier numbers exact.\n"
+        f"- Always render dates in the conventional {lang_out} format and always translate month "
+        "names. A source-language or English month name left in the output "
+        '("02-abril-2023", "02-April-2023", "02-Aprile-2023") is an error, as is source-locale '
+        f"date punctuation. Follow {lang_out} conventions for month capitalisation.\n"
+        f"- Localise currencies and units to {lang_out} convention where unambiguous; keep the "
+        "numeric value itself exact.\n"
+    )
+
+
+def build_glossary_block(glossaries, text: str, lang_out: str) -> str:
+    """Render the glossary table for whichever terms occur in `text`.
+
+    Shared by the PDF and DOCX prompt builders. The DOCX path previously had
+    no glossary at all -- it never loaded one and never rendered one -- so
+    every `.docx` job ran with zero terminology control while its term
+    extractor went on writing to the shared glossary for everyone else.
+
+    The closing line matters as much as the table: an entry whose target
+    equals its source should no longer exist (`glossary_hygiene` rejects
+    identity pairs on read and on write), but if an old asset still carries
+    one, this stops it reading as permission to emit a source-language word.
+    """
+    if not glossaries:
+        return ""
+
+    per_glossary: dict[str, list[tuple[str, str]]] = {}
+    for glossary in glossaries:
+        active = glossary.get_active_entries_for_text(text)
+        if active:
+            per_glossary[glossary.name] = sorted(set(active))
+    if not per_glossary:
+        return ""
+
+    lines = [
+        "## Glossary",
+        "",
+        "Use the glossary's **Target Term** for any occurrence of its **Source Term** "
+        "(including inflected forms, inside tags, or broken across lines).",
+        "",
+        "Unlisted terms are translated naturally.",
+        "",
+        f"The output must still be entirely in {lang_out}. Never leave a source-language "
+        "word in place because it appears in this table.",
+        "",
+    ]
+    for name, entries in per_glossary.items():
+        lines.append(f"### Glossary: {name}")
+        lines.append("")
+        lines.append("| Source Term | Target Term |\n|-------------|-------------|")
+        lines.extend(f"| {source} | {target} |" for source, target in entries)
+        lines.append("")
+    return "\n".join(lines)
+
+
 def build_translation_prompt(
     text: str,
+    lang_in: str,
     lang_out: str,
     domain: str | None = None,
+    secondary_languages: Sequence[tuple[str, float]] | None = None,
 ) -> str:
     """Build the standard document translation prompt used across all LLM backends.
 
@@ -20,35 +109,28 @@ def build_translation_prompt(
     delimiters as data to translate, never as instructions -- see
     prompt_safety.py for the full threat model and output-side guard.
 
-    The source language is never named here (nor anywhere else in the
-    codebase's translation prompts -- the three batch templates and
-    `get_domain_role_block()` interpolate `lang_out` only). It used to be
-    stated as a hint ("The source is primarily {lang_in}..."), but even a
-    hedged mention could contradict a mixed-language document and cause the
-    model to refuse or pass a passage through untranslated because it "was
-    not {lang_in}". `source_language` is used purely for routing, the Redis
-    cache key, and glossary/term attribution -- see
-    `PipelineOrchestrator._assert_language_supported`, which is what now
-    guarantees the document actually matches its declared source language
-    before translation ever begins, making an in-prompt hint unnecessary as
-    well as risky.
-
-    The wording is unconditional -- there is no "is this document mixed?"
-    variant -- because `BaseTranslator._run_translation_batch` keys the
-    cache on the raw `text` for this path. A per-job variant would map one
-    cache key to two different prompts and serve whichever ran first.
+    `secondary_languages` are the minority languages detection found in
+    this document. When present they are rendered directly after the Task
+    line -- the one place in the prompt that names a source language --
+    so the instruction to switch source language per segment sits next to
+    the default it overrides. Empty on a monolingual document, which
+    leaves this prompt byte-for-byte as it was.
     """
     domain_block = get_domain_prompt_block(domain)
     domain_section = f"{domain_block}\n\n" if domain_block else ""
+    secondary_block = build_secondary_language_block(
+        secondary_languages or (),
+        primary_language=lang_in,
+        target_language=lang_out,
+    )
+    secondary_section = f"{secondary_block}\n" if secondary_block else ""
 
     return (
         "# Role\n"
         "You are an expert document translator: accurate, idiomatic, and faithful to the source.\n\n"
         "# Task\n"
-        f"Translate the INPUT below into {lang_out}.\n"
-        "The INPUT may contain passages in more than one language; translate "
-        f"all of it into {lang_out} regardless of the language any given "
-        "passage is written in. Never leave a passage untranslated.\n\n"
+        f"Translate the INPUT below from {lang_in} into {lang_out}.\n\n"
+        f"{secondary_section}"
         f"{domain_section}"
         f"{INJECTION_GUARD_CLAUSE}\n"
         "# Output format (plain text only)\n"
@@ -88,10 +170,7 @@ def build_translation_prompt(
         "otherwise follow normal target‑language usage.\n"
         "- If a substring is already correct and natural in the target language (e.g. a lone symbol, "
         "a code, or a no‑translate token), return it unchanged.\n\n"
-        "# Numbers, dates, and units\n"
-        "- Keep mathematical or identifier numbers exact unless the source clearly expects localization.\n"
-        f"- For dates, currencies, and units, use the conventional form for {lang_out} when unambiguous; "
-        "otherwise preserve the source form.\n\n"
+        f"{build_language_rules_block(lang_out)}"
         "# Quality bar\n"
         f"- Even when you rephrase idiomatically for {lang_out}, honor the alignment, coverage, and fidelity rules above.\n"
         "- Preserve negations, conditions, quantities, and legal or technical qualifiers exactly in force; "

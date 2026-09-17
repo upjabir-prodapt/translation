@@ -35,13 +35,12 @@ from src.worker.doctranslator.format.pdf.translation_config import WatermarkOutp
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.translator.factory import create_translator
 from src.worker.loaders.assets import get_doclayout_onnx_model_path
-from src.worker.services.language_detection_core import aggregate_languages
-from src.worker.services.language_detection_core import (
-    build_unclassifiable_text_message,
-)
+from src.worker.services.language_detection_core import count_unit_languages
 from src.worker.services.language_detection_core import detect_language_for_text
+from src.worker.services.language_detection_core import detect_language_of_joined_text
 from src.worker.services.language_detection_core import is_detectable_text
 from src.worker.services.language_detection_core import normalize_detected_language
+from src.worker.services.language_detection_core import resolve_dominant_language
 from src.worker.services.model_attempt_orchestrator import ModelAttemptOrchestrator
 from src.worker.services.task_models import DocTranslatorTranslationConfig
 
@@ -87,23 +86,21 @@ class JobProcessor:
     PROGRESS_FINALIZE = 0.8
     PROGRESS_COMPLETE = 0.9
 
-    # MAX_DISTINCT_LANGUAGES_PER_PAGE (a per-page "more than 10 distinct
-    # languages" rejection) was removed when mixed-language documents
-    # became translatable. Counting distinct languages was never a useful
-    # signal: per-block detection produces a long tail of one-block
-    # artefacts, so the count measured how noisy detection was, not how
-    # multilingual the document was. It is replaced by
-    # `PipelineOrchestrator._assert_language_supported`'s two checks:
-    # supported-language coverage of the raw distribution, and the
-    # declared-vs-dominant (noise-filtered) language comparison.
-
-    @property
-    def MAX_DETECTION_CHARS(self) -> int:  # noqa: N802 (kept upper-case: public, long-standing name)
-        """Read live from settings -- previously bound once at class-
-        definition time (`MAX_DETECTION_CHARS = settings.LANGUAGE_DETECTION_MAX_CHARS`
-        as a class attribute), so a settings override after import never
-        took effect. A property re-reads it on every access instead."""
-        return settings.LANGUAGE_DETECTION_MAX_CHARS
+    # The per-page "more than N distinct languages" guard that used to
+    # live here is gone: counting distinct languages on one page
+    # rejected monolingual documents whose pages contain proper-noun
+    # runs or all-caps display text (see language_detection_core.py).
+    # The mixed-language decision is now char-share based and made once
+    # per document by `resolve_dominant_language()`.
+    MAX_DETECTION_CHARS = settings.LANGUAGE_DETECTION_MAX_CHARS
+    MIN_DETECTION_TEXT_LENGTH = 20
+    MIN_DETECTION_ALPHA_CHARS = 5
+    MIN_DETECTION_CONFIDENCE = 0.80
+    DETECTED_LANGUAGE_ALIASES = {
+        "zh-cn": "zh",
+        "zh-tw": "zh",
+        "iw": "he",
+    }
 
     def __init__(self, progress_tracker: Any):
         self.progress_tracker = progress_tracker
@@ -325,11 +322,19 @@ class JobProcessor:
         """
         document_languages: Counter[str] = Counter()
         processed_chars = 0
+        sampled_pages = 0
         with pymupdf.open(str(input_file)) as doc:
             for page_number, page in enumerate(doc, start=1):
+                # The distinct-language count is no longer judged per
+                # page. A single page of city labels or postal addresses
+                # used to fail an otherwise monolingual document; the
+                # decision now happens once, over the whole document's
+                # char-weighted distribution, in
+                # `resolve_dominant_language()`.
                 page_languages, page_chars = self._detect_page_languages(page)
                 document_languages.update(page_languages)
                 processed_chars += page_chars
+                sampled_pages = page_number
                 if processed_chars >= self.MAX_DETECTION_CHARS:
                     logger.info(
                         "Language detection reached configured character budget (%s) at page %s",
@@ -337,26 +342,30 @@ class JobProcessor:
                         page_number,
                     )
                     break
-        if not document_languages:
-            # Two genuinely different failures used to share one message.
-            # `processed_chars` counts characters that passed
-            # `is_detectable_text` -- i.e. text that was present and long
-            # enough to be worth classifying -- independently of whether a
-            # language came back. Under lingua's relative-distance floor a
-            # text-rich PDF whose blocks are all ambiguous now legitimately
-            # yields an empty distribution, so reporting every empty
-            # distribution as "scanned or image-only" would tell the user
-            # to re-scan a perfectly good text PDF.
-            if processed_chars == 0:
-                # No candidate text at all: the same underlying condition
-                # PDFValidator's API-side text-layer probe rejects, so use
-                # the identical wording (implementation_plan.md Phase
-                # B.3.3).
-                raise ValueError(
-                    "This PDF has no extractable text layer (scanned or "
-                    "image-only). OCR is not supported — please supply a "
-                    "text-based PDF."
+            if not document_languages:
+                # Every unit was filtered as low-signal (short labels,
+                # proper nouns, all-caps fragments). Before declaring the
+                # document undetectable, try the whole-document
+                # concatenation -- long text is where detection is most
+                # reliable, and this recovers slide-style PDFs made
+                # entirely of short blocks.
+                document_languages = detect_language_of_joined_text(
+                    self._iter_document_text_chunks(doc, sampled_pages)
                 )
+        if not document_languages and processed_chars == 0:
+            # No page yielded *any* candidate text -- the same underlying
+            # condition PDFValidator's API-side text-layer probe rejects.
+            # Use the identical user-facing wording
+            # (implementation_plan.md Phase B.3.3) instead of the internal
+            # "Unable to detect source language from PDF text", since a
+            # scanned/image-only PDF is the far more common cause than a
+            # genuinely undetectable (but present) language.
+            #
+            # `processed_chars > 0` with no language is a different
+            # failure -- there is text, it just isn't attributable to one
+            # language -- and is left to `resolve_dominant_language()`,
+            # which asks the caller to name the source language instead
+            # of wrongly blaming a missing text layer.
             raise ValueError(
                 build_unclassifiable_text_message(
                     subject="This PDF",
@@ -364,20 +373,28 @@ class JobProcessor:
                     include_prefix=False,
                 )
             )
-        detected_language = aggregate_languages(document_languages)
-        logger.info(f"Detected source language {detected_language} from {input_file}")
+        detected_language = resolve_dominant_language(
+            document_languages, source_label="this PDF"
+        )
+        logger.info(
+            "Detected source language %s from %s (distribution: %s)",
+            detected_language,
+            input_file,
+            dict(document_languages),
+        )
         return detected_language, document_languages
 
     def _detect_page_languages(self, page: Any) -> tuple[Counter[str], int]:
-        page_languages: Counter[str] = Counter()
-        page_chars = 0
-        for chunk in self._iter_page_text_chunks(page):
-            page_chars += len(chunk)
-            detected_language = self._detect_language_for_text(chunk)
-            if detected_language is None:
-                continue
-            page_languages[detected_language] += len(chunk)
-        return page_languages, page_chars
+        # Counting is delegated to the shared core so the PDF, DOCX and
+        # TXT paths apply identical per-unit signal-quality rules
+        # (`is_high_signal_unit`): long enough, enough words, and not a
+        # run of proper nouns.
+        return count_unit_languages(self._iter_page_text_chunks(page))
+
+    def _iter_document_text_chunks(self, doc: Any, page_count: int) -> Iterator[str]:
+        """Yield candidate text chunks across the pages already sampled."""
+        for page_index in range(page_count):
+            yield from self._iter_page_text_chunks(doc[page_index])
 
     def _iter_page_text_chunks(self, page: Any) -> Iterator[str]:
         # Use PyMuPDF page blocks for robust text extraction without pdfminer internals.
@@ -438,6 +455,14 @@ class JobProcessor:
         )
         selected_model = str(config.get("selected_model", "")).strip()
         domain = config.get("domain")
+        # Minority languages detection found, threaded in the same way
+        # `domain` is: once into the translator (for the raw-text prompt in
+        # translator/prompts.py) and once into TranslationConfig (for the
+        # two PDF batch templates). Both paths render the same block.
+        secondary_languages = [
+            (str(code), float(share))
+            for code, share in (config.get("secondary_languages") or [])
+        ]
         # "selected_model_region" is threaded in by TranslationAttemptRunner
         # from the matching ModelRoute (docs/plan.md Section 3.3) so
         # gemini-3.5-flash's europe-west3 pinning survives the trip from
@@ -450,6 +475,7 @@ class JobProcessor:
             qps=base_config.qps,
             region=selected_region,
             domain=domain,
+            secondary_languages=secondary_languages,
         )
         glossaries = config.get("glossaries")
 
@@ -465,6 +491,7 @@ class JobProcessor:
             lang_in=base_config.lang_in,
             lang_out=base_config.lang_out,
             domain=domain,
+            secondary_languages=secondary_languages,
             doc_layout_model=doc_layout_model,
             table_model=None,
             working_dir=working_dir,
