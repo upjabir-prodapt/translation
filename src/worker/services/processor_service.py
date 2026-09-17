@@ -367,9 +367,11 @@ class JobProcessor:
             # which asks the caller to name the source language instead
             # of wrongly blaming a missing text layer.
             raise ValueError(
-                "This PDF has no extractable text layer (scanned or "
-                "image-only). OCR is not supported — please supply a "
-                "text-based PDF."
+                build_unclassifiable_text_message(
+                    subject="This PDF",
+                    text_noun="extractable text",
+                    include_prefix=False,
+                )
             )
         detected_language = resolve_dominant_language(
             document_languages, source_label="this PDF"
@@ -518,6 +520,13 @@ class JobProcessor:
                 dlp_post_translation=bool(config.get("dlp_post_translation", False)),
             ),
             shared_context_cross_split_part=shared_context,
+            # Threaded from PipelineOrchestrator so batch sizing follows the
+            # document's real language mix, not just the declared pair -- a
+            # mixed en->de document that is a third Japanese needs the CJK
+            # multiplier or its batches overrun the model context. Absent
+            # (direct JobProcessor callers, tests) it falls back to the
+            # declared-pair behaviour.
+            detected_languages=list(config.get("detected_languages") or []),
         )
 
     async def _handle_translation_event(

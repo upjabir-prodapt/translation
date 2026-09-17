@@ -374,8 +374,9 @@ class Settings(BaseSettings):
     LLM_MAX_INFLIGHT_CALLS: int = 16
 
     # Skip (pass through unchanged, never send to the LLM) any DOCX/PDF
-    # unit confidently (>= language_detection_core.MIN_DETECTION_CONFIDENCE)
-    # detected in a language outside the configured set
+    # unit confidently detected (per
+    # LANGUAGE_DETECTION_MIN_RELATIVE_DISTANCE) in a language outside
+    # the configured set
     # (language_mapper.json), or already confidently in the target
     # language (implementation_plan.md Phase C.4). Default True; can be
     # turned off without a redeploy if it ever needs to be disabled.

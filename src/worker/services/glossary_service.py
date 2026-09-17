@@ -21,6 +21,7 @@ from src.config.glossary_hygiene import sanitize_term_pairs
 from src.config.translation_routing import get_language_display_name
 from src.config.translation_routing import normalize_language
 from src.repository import get_storage_client
+from src.worker.doctranslator.glossary import ExtractedGlossaryTerm
 from src.worker.doctranslator.glossary import Glossary
 from src.worker.doctranslator.glossary import GlossaryEntry
 from src.worker.loaders.utils.path_helpers import get_cache_file_path
@@ -30,6 +31,48 @@ logger = logging.getLogger(__name__)
 # Bounded retry count for the optimistic-concurrency read-modify-write loop
 # against the domain glossary JSON in GCS (see merge_new_terms_into_domain_glossary).
 _MERGE_MAX_RETRIES = 5
+
+
+def _normalize_glossary_language_key(raw: str) -> str | None:
+    """Normalize a glossary JSON language key to a canonical ISO code.
+
+    Glossary buckets and per-term `translations` keys are not guaranteed to
+    use the same shape: terms this service writes itself use canonical
+    codes (`ExtractedGlossaryTerm.source_language` is produced by
+    `normalize_language()` upstream), but shipped/seeded glossary assets use
+    display names (`"English"`, `"French"`). `normalize_language()` accepts
+    both -- `language_mapper.json`'s alias table maps display names, ISO
+    codes, and common variants all to the same canonical code -- so routing
+    every language key through it here makes bucket and translation lookups
+    tolerant of either shape instead of only ever matching one. Returns
+    `None` (rather than raising) for a key that matches neither, so callers
+    can skip it instead of crashing on unrelated/malformed data.
+    """
+    try:
+        return normalize_language(str(raw))
+    except ValueError:
+        return None
+
+
+def _lookup_translation(
+    translations: dict[str, Any], target_language_name: str
+) -> str | None:
+    """Find a term's translation for the target language.
+
+    Tries an exact key match first (the common case: both sides already
+    canonical codes), then falls back to comparing normalized forms so a
+    canonical-code `target_language_name` still finds a translation stored
+    under a legacy display-name key, and vice versa.
+    """
+    if target_language_name in translations:
+        return translations[target_language_name]
+    target_norm = _normalize_glossary_language_key(target_language_name)
+    if target_norm is None:
+        return None
+    for raw_key, value in translations.items():
+        if _normalize_glossary_language_key(raw_key) == target_norm:
+            return value
+    return None
 
 
 class GlossaryService:
@@ -290,15 +333,22 @@ class GlossaryService:
         self,
         data: dict[str, Any],
         *,
-        source_language: str,
         target_language_name: str,
-        new_terms: list[tuple[str, str]],
+        new_terms: list[ExtractedGlossaryTerm],
     ) -> tuple[dict[str, Any], int]:
-        """Merge (source_term, target_term) pairs into the glossary JSON structure.
+        """Merge extracted terms into the glossary JSON structure.
+
+        Each term is bucketed under its own `source_language`, not a single
+        language for the whole call -- a single extraction batch over a
+        mixed-language document can (and should) contribute terms to
+        several buckets. See `ExtractedGlossaryTerm` and
+        `load_domain_glossary`'s `source_languages` filter for why the
+        bucket a term lands in matters at read time.
 
         Returns (updated_data, added_count). Skips any source_term that
-        already has a translation for target_language_name (first-writer-wins
-        per term, including terms added by a concurrent job since this read).
+        already has a translation for target_language_name in its own
+        bucket (first-writer-wins per term, including terms added by a
+        concurrent job since this read).
         """
         # Canonicalise the section key so a job routed as "es" and one routed
         # as "Spanish" write to the same section instead of forking the file.
@@ -345,11 +395,33 @@ class GlossaryService:
         lang_payload = glossary_map.setdefault(section_key, {"terms": []})
         terms_list = lang_payload.setdefault("terms", [])
 
-        existing_by_source = {
-            str(term.get("source_term", "")).strip().lower(): term
-            for term in terms_list
-            if term.get("source_term")
-        }
+        terms_by_bucket: dict[str, list[ExtractedGlossaryTerm]] = {}
+        for term in new_terms:
+            if not isinstance(term, ExtractedGlossaryTerm):
+                # Defensive: the type hint promises `ExtractedGlossaryTerm`
+                # (a NamedTuple with `.source_language`), but a caller
+                # passing a plain `(source, target)` tuple -- the old shape,
+                # before per-term language attribution existed -- would
+                # otherwise hit `AttributeError` on the `.source_language`
+                # access below instead of a clear, recoverable log line.
+                logger.warning(
+                    "Dropping extracted term of unexpected type %s (expected "
+                    "ExtractedGlossaryTerm): %r",
+                    type(term).__name__,
+                    term,
+                )
+                continue
+            if not term.source_language:
+                # Should not happen -- callers are expected to drop terms
+                # whose reported language didn't normalize before they ever
+                # reach here (see term_extractor.py / automatic_term_extractor.py)
+                # -- but an ungrouped, un-bucketable term is worse than a
+                # skipped one, so fail closed rather than guess a bucket.
+                logger.warning(
+                    "Dropping extracted term with no source_language: %r", term
+                )
+                continue
+            terms_by_bucket.setdefault(term.source_language, []).append(term)
 
         added = 0
         for source_term, target_term in new_terms:
@@ -380,9 +452,8 @@ class GlossaryService:
         self,
         *,
         domain: str,
-        source_language: str,
         target_language_name: str,
-        new_terms: list[tuple[str, str]],
+        new_terms: list[ExtractedGlossaryTerm],
     ) -> bool:
         """Persist newly auto-extracted terms into the domain glossary JSON in GCS.
 
@@ -444,7 +515,6 @@ class GlossaryService:
 
             merged_data, added_count = self._merge_terms_into_json(
                 data,
-                source_language=source_language,
                 target_language_name=target_language_name,
                 new_terms=new_terms,
             )

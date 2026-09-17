@@ -1,12 +1,27 @@
 """Tests for the two pre-translation input-consistency guards in
 `PipelineOrchestrator._execute_pipeline`:
 
-  * the declared source language vs. the language actually detected, plus the
-    rejection of mixed-language documents;
+  * language: (1) the document's dominant detected language must match the
+    declared `source_language`, and (2) enough of the document overall must
+    be in a language this service can translate at all;
   * the declared domain vs. the domain an LLM reads the document as.
 
 Both guards are fail-closed: a document that cannot be verified is failed
 rather than translated unchecked.
+
+The language guard's history: it originally rejected both "mixed-language"
+documents and "declared language doesn't match detection" outright. Both
+rejections were removed (mixed documents translated as-is, source_language
+treated as routing-only) in favour of a share-based coverage-only check.
+That coverage-only design left a gap -- a document confidently mismatched
+against its declared language, or one whose untranslatable content was
+merely *fragmented* across several individually-small unsupported
+languages, could both slip through -- so the declared-vs-dominant
+comparison was reinstated, and coverage is now computed on the raw
+(non-noise-filtered) distribution instead of the noise-filtered one. Mixed
+documents where every language present is *supported* still translate as
+-is; only a genuinely wrong declared language or an untranslatable majority
+fails the job.
 
 Structured to match tests/worker/services/test_pipeline_language_distribution.py,
 which covers the neighbouring Phase C.5 guards.
@@ -182,14 +197,24 @@ def _classifier(verdict=None, *, raises=None):
 
 
 # ---------------------------------------------------------------------------
-# Guard 1 -- source language
+# Guard 1 -- supported-language coverage
 # ---------------------------------------------------------------------------
 
 
-class TestSourceLanguageMismatchGuard:
-    """The document must be written in the declared language."""
+class TestDeclaredLanguageIsAGate:
+    """The document's dominant detected language must match the declared
+    `source_language` -- users select exactly one source language per job,
+    and a document confidently dominated by a different one was very
+    likely submitted under the wrong declaration."""
 
-    async def test_wrong_language_fails_job(self, pipeline_mocks):
+    async def test_wrong_declared_language_now_fails_job(self, pipeline_mocks):
+        """A German document declared `en` fails, naming both languages.
+
+        `de` is itself a supported language (coverage is 1.0, so the
+        coverage check alone would pass it), but the dominant detected
+        language doesn't match what was declared, which is exactly the
+        scenario this check exists to catch.
+        """
         bigquery, storage, tmp_path = pipeline_mocks
         with _patched_orchestrator(
             bigquery, storage, tmp_path, _attempt_result(tmp_path)
@@ -207,6 +232,31 @@ class TestSourceLanguageMismatchGuard:
         message = _error_message(bigquery)
         assert "English" in message
         assert "German" in message
+        assert _status_calls(bigquery, "completed") == []
+
+    async def test_unknown_declared_language_still_fails(self, pipeline_mocks):
+        """Not a detection comparison -- an unroutable value fails on its own.
+
+        The API validates `source_language` against language_mapper.json, so
+        this is only reachable by a direct-to-worker submission. Left
+        unchecked it would fall silently through `select_model_list` to the
+        default model.
+        """
+        bigquery, storage, tmp_path = pipeline_mocks
+        with _patched_orchestrator(
+            bigquery, storage, tmp_path, _attempt_result(tmp_path)
+        ) as orchestrator:
+            with (
+                _detector(orchestrator, ("en", Counter({"en": 900}))),
+                _classifier(_verdict("legal", 0.95)),
+            ):
+                await _run(
+                    orchestrator,
+                    "job-lang-unknown",
+                    _job_data("job-lang-unknown", source_language="klingon"),
+                )
+
+        assert "Unsupported source language 'klingon'" in _error_message(bigquery)
 
     async def test_detection_runs_even_when_language_is_declared(self, pipeline_mocks):
         """The old gate skipped detection entirely for explicit languages."""
@@ -264,7 +314,7 @@ class TestSourceLanguageMismatchGuard:
         assert _status_calls(bigquery, "failed") == []
 
     async def test_guard_can_be_disabled(self, pipeline_mocks, caplog):
-        """The kill switch lets a mismatched job through, but still logs it.
+        """The kill switch lets an unsupported job through, but still logs it.
 
         Logging while disabled is what makes a shadow rollout possible: the
         real rejection rate can be measured before anyone's job is failed.
@@ -275,7 +325,7 @@ class TestSourceLanguageMismatchGuard:
         ) as orchestrator:
             with (
                 patch.object(settings, "LANGUAGE_MISMATCH_CHECK_ENABLED", False),
-                _detector(orchestrator, ("de", Counter({"de": 900}))),
+                _detector(orchestrator, ("ru", Counter({"ru": 900}))),
                 _classifier(_verdict("legal", 0.99)),
                 caplog.at_level("WARNING"),
             ):
@@ -288,13 +338,16 @@ class TestSourceLanguageMismatchGuard:
         assert _status_calls(bigquery, "failed") == []
         assert len(_status_calls(bigquery, "completed")) == 1
         assert any(
-            "source language mismatch (guard disabled)" in record.message
+            "below threshold" in record.message and "(guard disabled)" in record.message
             for record in caplog.records
         )
 
-    async def test_disabled_guard_still_logs_mixed_language(
-        self, pipeline_mocks, caplog
-    ):
+    async def test_coverage_is_logged_on_success(self, pipeline_mocks, caplog):
+        """Pass or fail, the distribution and coverage are logged.
+
+        This is the data the rollout tunes `LANGUAGE_SUPPORTED_MIN_COVERAGE`
+        from, so it must not be emitted only on rejection.
+        """
         bigquery, storage, tmp_path = pipeline_mocks
         with _patched_orchestrator(
             bigquery, storage, tmp_path, _attempt_result(tmp_path)
@@ -303,17 +356,17 @@ class TestSourceLanguageMismatchGuard:
                 patch.object(settings, "LANGUAGE_MISMATCH_CHECK_ENABLED", False),
                 _detector(orchestrator, ("en", Counter({"en": 550, "de": 450}))),
                 _classifier(_verdict("legal", 0.99)),
-                caplog.at_level("WARNING"),
+                caplog.at_level("INFO"),
             ):
                 await _run(
                     orchestrator,
-                    "job-mixed-disabled",
-                    _job_data("job-mixed-disabled", source_language="en"),
+                    "job-coverage-log",
+                    _job_data("job-coverage-log", source_language="en"),
                 )
 
         assert _status_calls(bigquery, "failed") == []
         assert any(
-            "mixed-language document detected (guard disabled)" in record.message
+            "supported-language coverage 1.000" in record.getMessage()
             for record in caplog.records
         )
 
@@ -357,7 +410,7 @@ class TestMixedLanguageGuard:
             bigquery, storage, tmp_path, _attempt_result(tmp_path)
         ) as orchestrator:
             with (
-                _detector(orchestrator, ("en", Counter({"en": 900, "de": 100}))),
+                _detector(orchestrator, ("en", Counter({"en": 500, "fr": 500}))),
                 _classifier(_verdict("legal", 0.99)),
             ):
                 await _run(
@@ -481,13 +534,13 @@ class TestMixedLanguageGuard:
             bigquery, storage, tmp_path, _attempt_result(tmp_path)
         ) as orchestrator:
             with (
-                _detector(orchestrator, ("de", Counter({"de": 550, "en": 450}))),
+                _detector(orchestrator, ("ru", Counter({"ru": 1000}))),
                 _classifier(_verdict("legal", 0.99)),
             ):
                 await _run(
                     orchestrator,
-                    "job-mixed-and-wrong",
-                    _job_data("job-mixed-and-wrong", source_language="en"),
+                    "job-unsupported",
+                    _job_data("job-unsupported", source_language="en"),
                 )
 
         message = _error_message(bigquery)
@@ -561,7 +614,9 @@ class TestUnverifiableLanguage:
                     _job_data("job-empty-dist", source_language="en"),
                 )
 
-        assert "Unable to detect a source language" in _error_message(bigquery)
+        assert "long or distinctive enough to identify its language" in _error_message(
+            bigquery
+        )
 
 
 # ---------------------------------------------------------------------------

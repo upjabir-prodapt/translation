@@ -13,6 +13,10 @@ web/dist-ssr
 web/*.local
 
 .clinerules
+
+# Personal Claude Code memory tool (nested repo + conversation logs - not for the shared repo)
+claude-memory-compiler/
+.claude/settings.local.json
 memory-bank
 
 memray*

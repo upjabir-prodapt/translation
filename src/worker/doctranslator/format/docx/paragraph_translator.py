@@ -44,7 +44,6 @@ from src.worker.doctranslator.translator.translation_cache import build_cache_ke
 from src.worker.doctranslator.translator.translation_cache import get_translation_cache
 from src.worker.doctranslator.translator.translator import BaseTranslator
 from src.worker.doctranslator.translator.translator import BatchTranslationResponse
-from src.worker.services.language_detection_core import MIN_DETECTION_TEXT_LENGTH
 from src.worker.services.language_detection_core import detect_language_for_text
 from src.worker.services.language_detection_core import get_supported_languages
 
@@ -260,8 +259,14 @@ class DocxParagraphTranslator:
         # pairs -- tiktoken's gpt-4o encoding under-counts CJK tokens
         # relative to what Gemini/Claude actually consume, so a flat
         # paragraph cap risks oversized CJK batches without this scaling.
+        # `detected_languages` widens the multiplier to CJK when the
+        # document actually contains CJK even though neither declared
+        # language does -- reachable only now that mixed-language documents
+        # are translated instead of rejected. See get_token_multiplier().
         lang_in = str(getattr(translate_engine, "lang_in", "") or "")
-        self._token_multiplier = max(get_token_multiplier(lang_in, lang_out), 0.1)
+        self._token_multiplier = max(
+            get_token_multiplier(lang_in, lang_out, detected_languages), 0.1
+        )
 
         # implementation_plan.md Phase C.4: normalized target language
         # code, used to detect units that are already confidently in the
@@ -348,11 +353,11 @@ class DocxParagraphTranslator:
 
     def _is_unsupported_or_already_target_language(self, text: str) -> bool:
         """C.4.1/C.4.2/C.4.5: language-based skip, applied only above
-        `MIN_DETECTION_TEXT_LENGTH` -- never let a 3-word cell be skipped
-        on a coin-flip single-unit detection."""
+        `settings.MIN_DETECTION_TEXT_LENGTH` -- never let a 3-word cell be
+        skipped on a coin-flip single-unit detection."""
         if not settings.SKIP_UNSUPPORTED_LANGUAGE_UNITS:
             return False
-        if len(text) < MIN_DETECTION_TEXT_LENGTH:
+        if len(text) < settings.MIN_DETECTION_TEXT_LENGTH:
             return False
         detected = detect_language_for_text(text)
         if detected is None:
@@ -724,15 +729,7 @@ class DocxParagraphTranslator:
         cache_key = self._unit_cache_key(unit)
         if cache_key is None or not translated_text.strip():
             return
-        engine = self.translate_engine
-        get_translation_cache().set(
-            cache_key,
-            translated_text,
-            provider=str(engine.provider),
-            model=str(getattr(engine, "model", "")),
-            lang_in=str(getattr(engine, "lang_in", "")),
-            lang_out=self.lang_out,
-        )
+        get_translation_cache().set(cache_key, translated_text)
 
     def _expand_oversized_units(
         self, units: list[TranslatableUnit]

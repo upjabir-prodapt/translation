@@ -42,7 +42,9 @@ class TestGeminiExtractText:
 
     def test_term_extraction_response_uses_parsed(self):
         translator = _make_translator()
-        parsed = TermExtractionResponse(terms=[ExtractedTerm(src="cat", tgt="Katze")])
+        parsed = TermExtractionResponse(
+            terms=[ExtractedTerm(src="cat", tgt="Katze", src_lang="en")]
+        )
         response = SimpleNamespace(parsed=parsed, text="")
         out = translator.extract_text(response)
         assert "Katze" in out

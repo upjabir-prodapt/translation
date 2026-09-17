@@ -2,13 +2,16 @@ import csv
 import io
 import logging
 import re
+import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import chardet
 import hyperscan
 import regex
 
+from src.config.translation_routing import normalize_language
 from src.worker.doctranslator.utils.common import batched
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,119 @@ class GlossaryEntry:
 
     def __repr__(self):
         return f"GlossaryEntry(source='{self.source}', target='{self.target}', target_language='{self.target_language}')"
+
+
+class ExtractedGlossaryTerm(NamedTuple):
+    """One (source_term, target_term) pair from automatic term extraction,
+    plus the language the source term was actually extracted from.
+
+    `source_language` is reported by the extraction LLM itself (see
+    `schemas.ExtractedTerm.src_lang`), not assumed from the job's declared
+    `source_language` -- the extraction prompt now allows pulling terms
+    from any language in `language_mapper.json`, so a mixed-language
+    document can contribute terms in more than one language from a single
+    extraction pass, each correctly attributed.
+
+    This is the field `GlossaryService` buckets on when merging into the
+    shared GCS domain glossary (`merge_new_terms_into_domain_glossary`) and
+    filters on when loading it back for a later job
+    (`load_domain_glossary`'s `source_languages` argument) -- see those
+    docstrings for why per-term attribution, not a single value for the
+    whole extraction batch, is what makes that filtering meaningful.
+    Callers that only have a (source, target) pair and no reliable
+    per-term language (e.g. a term whose reported language did not
+    normalize to a supported code) should not construct one of these --
+    drop the term instead of guessing.
+    """
+
+    source: str
+    target: str
+    source_language: str
+
+
+# Above this fraction of a batch's candidate terms being dropped for an
+# unrecognized `src_lang`, `TermLanguageDropTracker.warn_if_high_drop_rate`
+# escalates from per-term debug logging to a batch-level WARNING -- see its
+# docstring.
+_HIGH_SRC_LANG_DROP_RATE = 0.5
+
+
+class TermLanguageDropTracker:
+    """Shared validate-and-drop + drop-rate tracking for extracted terms.
+
+    Both the DOCX (`format/docx/term_extractor.py`) and PDF
+    (`format/pdf/document_il/midend/automatic_term_extractor.py`) extractors
+    ask the LLM to self-report each term's source language (`src_lang`) and
+    must drop any term whose reported value doesn't normalize to a
+    `language_mapper.json` code -- previously this validate-and-drop block
+    was hand-duplicated in both files with only per-term debug logging, so a
+    systemic regression (the model silently no longer following the
+    `src_lang` instruction, e.g. after a prompt or structured-output change)
+    had no operator-visible signal: extraction volume could collapse toward
+    zero across many jobs with nothing above debug level to notice it.
+
+    One instance is meant to live for the lifetime of one extraction call
+    (a document/job, not a single batch) so the drop rate reflects the whole
+    extraction pass, not one batch's sampling noise. Both extractors run
+    their batches concurrently across a `ThreadPoolExecutor`, so `resolve()`
+    is internally lock-protected.
+    """
+
+    def __init__(self, *, high_drop_rate: float = _HIGH_SRC_LANG_DROP_RATE) -> None:
+        self.candidate_count = 0
+        self.dropped_count = 0
+        self._high_drop_rate = high_drop_rate
+        self._lock = threading.Lock()
+
+    def resolve(self, raw_src_lang: str, *, source_term: str) -> str | None:
+        """Normalize one term's reported `src_lang`, or None to drop it.
+
+        `normalize_language` only ever returns a value in
+        `get_supported_languages()` by construction, so a `ValueError` here
+        means the model didn't follow the extraction prompt's `src_lang`
+        rule, not that a rarer supported language was reported.
+        """
+        try:
+            normalized = normalize_language(str(raw_src_lang))
+        except ValueError:
+            with self._lock:
+                self.candidate_count += 1
+                self.dropped_count += 1
+            logger.debug(
+                "Dropping extracted term %r: src_lang %r is not one of the "
+                "supported languages",
+                source_term,
+                raw_src_lang,
+            )
+            return None
+        with self._lock:
+            self.candidate_count += 1
+        return normalized
+
+    def warn_if_high_drop_rate(self, *, extractor_name: str) -> None:
+        """Escalate to WARNING once dropped terms are the majority of a pass.
+
+        Call once after all of an extraction call's batches have been
+        resolved. A handful of drops per document is normal (an occasional
+        hallucinated code); the whole pass losing its majority to
+        unrecognized codes is not, and is worth a signal above debug.
+        """
+        if not self.candidate_count or not self.dropped_count:
+            return
+        rate = self.dropped_count / self.candidate_count
+        if rate < self._high_drop_rate:
+            return
+        logger.warning(
+            "%s: dropped %d/%d candidate terms (%.0f%%) for an unrecognized "
+            "src_lang -- if this persists across documents it likely means "
+            "the model has stopped following the src_lang instruction (a "
+            "prompt or structured-output regression), not that unusual "
+            "languages were encountered.",
+            extractor_name,
+            self.dropped_count,
+            self.candidate_count,
+            rate * 100,
+        )
 
 
 TERM_NORM_PATTERN = re.compile(r"\s+", regex.UNICODE)

@@ -26,6 +26,20 @@ class BatchTranslationResponse(BaseModel):
 class ExtractedTerm(BaseModel):
     src: str = Field(description="Source language term.")
     tgt: str = Field(description="Translated term in the target language.")
+    # Required (no default) so structured-output enforcement (Gemini
+    # `response_schema`, Claude tool-schema) forces the model to report it
+    # for every single extracted term, not just the ones it happens to
+    # remember to tag. The extraction prompt lists the exact set of
+    # allowed codes; callers normalize and drop anything that doesn't
+    # resolve to one of them rather than trusting the model's string
+    # verbatim -- see term_extractor.py / automatic_term_extractor.py.
+    src_lang: str = Field(
+        description=(
+            "ISO 639-1 code of the language the source term's passage was "
+            "actually written in, chosen from the language list given in "
+            "the prompt."
+        )
+    )
 
 
 class TermExtractionResponse(BaseModel):

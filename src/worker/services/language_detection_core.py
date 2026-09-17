@@ -81,6 +81,7 @@ from lingua import LanguageDetectorBuilder
 
 from src.config.constants import settings
 from src.config.translation_routing import get_language_mapper
+from src.worker.doctranslator.utils.atomic_integer import AtomicInteger
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +191,8 @@ def is_detectable_text(text: str) -> bool:
     """Return True if `text` has enough signal for detection to be trusted."""
     alpha_count = sum(1 for ch in text if ch.isalpha())
     return (
-        len(text) >= MIN_DETECTION_TEXT_LENGTH
-        and alpha_count >= MIN_DETECTION_ALPHA_CHARS
+        len(text) >= settings.MIN_DETECTION_TEXT_LENGTH
+        and alpha_count >= settings.MIN_DETECTION_ALPHA_CHARS
     )
 
 
@@ -251,7 +252,7 @@ def is_high_signal_unit(text: str) -> bool:
 def normalize_detected_language(language: str) -> str:
     """Map a raw detected code to this service's canonical alias, if any."""
     normalized = str(language).strip().lower()
-    return DETECTED_LANGUAGE_ALIASES.get(normalized, normalized)
+    return get_language_mapper().get(normalized, normalized)
 
 
 def detect_language_for_text(text: str) -> str | None:
@@ -277,7 +278,7 @@ def detect_language_for_text(text: str) -> str | None:
         # degrades to "no language" exactly as an unconfident result does.
         logger.warning("Language detection failed for a text block", exc_info=True)
         return None
-    if not candidates:
+    if language is None:
         return None
     best_match = candidates[0]
     if best_match.value < MIN_DETECTION_CONFIDENCE:

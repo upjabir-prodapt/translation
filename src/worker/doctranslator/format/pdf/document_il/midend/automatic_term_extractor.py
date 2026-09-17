@@ -24,10 +24,12 @@ from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper impo
 from src.worker.doctranslator.format.pdf.document_il.utils.paragraph_helper import (
     is_pure_numeric_paragraph,
 )
+from src.worker.doctranslator.glossary import TermLanguageDropTracker
 from src.worker.doctranslator.translator.translator import TermExtractionResponse
 from src.worker.doctranslator.utils.priority_thread_pool_executor import (
     PriorityThreadPoolExecutor,
 )
+from src.worker.services.language_detection_core import get_supported_languages
 
 if TYPE_CHECKING:
     from src.worker.doctranslator.format.pdf.translation_config import TranslationConfig
@@ -46,6 +48,8 @@ You are an expert multilingual terminologist. Extract key terms from the text an
 3. Use minimal noun phrases (≤5 words unless a named entity). No generic academic nouns (e.g., model, case, property) unless part of a standard term.
 4. No mathematical items: variables (X1, a, ε), symbols (=, +, →, ⊥⊥, ∈), subscripts/superscripts, formula fragments, mappings (T: H1→H2), etc. Keep only natural-language concepts.
 5. Extract each term once. Keep order of first appearance.
+6. The input may contain passages in more than one language. Extract terms from passages written in any of these languages: {supported_languages}. Ignore passages written in any other language -- extract nothing from them.
+7. For each extracted term, set "src_lang" to the ISO 639-1 code (from the list in rule 6) of the language its source passage was actually written in.
 
 ### Translation Rules
 1. Translate each term into {target_language}.
@@ -57,7 +61,7 @@ You are an expert multilingual terminologist. Extract key terms from the text an
 
 ### Output Format
 - Return ONLY a valid JSON array.
-- Each element: {{"src": "...", "tgt": "..."}}.
+- Each element: {{"src": "...", "tgt": "...", "src_lang": "..."}}.
 - No comments, no backticks, no extra text.
 - If no terms: [].
 
@@ -151,6 +155,16 @@ class AutomaticTermExtractor:
         self.translation_config = translation_config
         self.shared_context = translation_config.shared_context_cross_split_part
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
+        # Static for the process (get_supported_languages() is itself
+        # lru_cache'd) -- computed once per extractor instance instead of
+        # being rebuilt on every batch inside extract_terms_from_paragraphs.
+        self._supported_languages_str = ", ".join(sorted(get_supported_languages()))
+        # Also reset at the start of `procress()`: one tracker must cover
+        # exactly one document's extraction pass so its drop-rate reflects
+        # that document. Set here too so `_store_valid_term()` remains
+        # independently callable/testable without going through
+        # `procress()` first (mirrors the DOCX extractor's equivalent).
+        self._drop_tracker = TermLanguageDropTracker()
 
         # Check if the translate_engine has llm_translate capability
         if not hasattr(self.translate_engine, "llm_translate") or not callable(
@@ -361,7 +375,22 @@ class AutomaticTermExtractor:
         return section
 
     def _store_valid_term(self, term: dict, request_id: str) -> bool:
-        """Validate and store a single extracted term pair. Returns True if stored."""
+        """Validate and store a single extracted term pair. Returns True if stored.
+
+        Extraction spans every supported language (see the prompt's rule
+        6/7), so the model self-reports which language each term came from
+        instead of it being assumed from the job's declared lang_in. A
+        `src_lang` that doesn't normalize to a supported code is dropped
+        via the shared `TermLanguageDropTracker` -- see its docstring and
+        the DOCX extractor's equivalent use, which this mirrors. The PDF
+        path only ever builds a per-job glossary (unlike DOCX, which
+        persists into the shared GCS domain glossary), so the resolved
+        language itself is not threaded further into
+        `add_raw_extracted_term_pair` -- there is no cross-job bucket to
+        attribute it to -- but the term must still be validated the same
+        way, or an unrecognized `src_lang` silently contributes noise terms
+        from content the pipeline considers untranslatable.
+        """
         if not (isinstance(term, dict) and "src" in term and "tgt" in term):
             logger.warning(
                 f"Request ID {request_id}: Skipping malformed term item: {term}",
@@ -405,13 +434,22 @@ class AutomaticTermExtractor:
 
             reference_glossary_section = self._build_reference_glossary_section(inputs)
 
+            # Extraction covers every language in language_mapper.json, not
+            # just this job's declared lang_in -- mirrors the DOCX
+            # extractor (see its module docstring) so the two prompts do
+            # not silently drift. The PDF path only ever builds a per-job
+            # glossary (unlike DOCX, which persists into the shared GCS
+            # domain glossary), so there is no cross-job pollution risk
+            # here either way; broadening scope only means more of this
+            # same document's genuine terminology gets captured.
             prompt = LLM_PROMPT_TEMPLATE.format(
                 target_language=self.translation_config.lang_out,
+                supported_languages=self._supported_languages_str,
                 text_to_process="\n\n".join(inputs),
                 reference_glossary_section=reference_glossary_section,
                 example_output="""[
-  {"src": "LLM", "tgt": "大语言模型"},
-  {"src": "GPT", "tgt": "GPT"}
+  {"src": "LLM", "tgt": "大语言模型", "src_lang": "en"},
+  {"src": "GPT", "tgt": "GPT", "src_lang": "en"}
 ]""",
             )
             tracker.set_input(prompt)
@@ -448,6 +486,7 @@ class AutomaticTermExtractor:
 
     def procress(self, doc_il: ILDocument):
         logger.info(f"{self.stage_name}: Starting term extraction for document.")
+        self._drop_tracker = TermLanguageDropTracker()
         start_total, start_prompt, start_completion, start_cache_hit_prompt = (
             self._snapshot_token_usage()
         )
@@ -470,6 +509,7 @@ class AutomaticTermExtractor:
                         page, executor, pbar, tracker.new_page()
                     )
 
+        self._drop_tracker.warn_if_high_drop_rate(extractor_name="PDF term extraction")
         self.shared_context.finalize_auto_extracted_glossary()
         end_total, end_prompt, end_completion, end_cache_hit_prompt = (
             self._snapshot_token_usage()
